@@ -666,7 +666,7 @@ test("close-check：dirty、執行中、主 checkout 擋下；零 commit、已 p
 test("await-start：已開工與未開工（trust 對話框、逾時）", () => {
   const ok = run("console.mjs", ["await-start", "--path", wt("proj-101-login"), "--expect", "PROJ-101 實作"]);
   assert.deepEqual([ok.code, ok.out], [0, "[PROJ-101] 已開工"]);
-  const dg = run("console.mjs", ["await-start", "--path", wt("chris-proj-102-question"), "--expect", "PROJ-102", "--define-goal"]);
+  const dg = run("console.mjs", ["await-start", "--path", wt("chris-proj-102-question"), "--expect", "PROJ-102", "--interview"]);
   assert.equal(dg.out, "[PROJ-102(question)] 已開工");
   const trust = run("console.mjs", ["await-start", "--path", wt("proj-103-idle"), "--expect", "PROJ-103", "--timeout", "0"]);
   assert.deepEqual([trust.code, trust.out], [1, "[PROJ-103] 未開工：卡在 trust 對話框"]);
@@ -714,7 +714,7 @@ function writeFile(dir, rel, text) {
 
 const plan = (status) => `---\nstatus: ${status}\n---\n\n# plan\n`;
 
-test("階段：沒改動、沒 commit、沒目標檔、沒 run folder、沒 define-goal 標記 → 未開工", () => {
+test("階段：沒改動、沒 commit、沒目標檔、沒 run folder、沒需求訪談標記 → 未開工", () => {
   withWorktree("chris/proj-7200-untouched", (dir) => {
     const facts = stageFacts(dir, null, "chris/proj-7200-untouched");
     assert.deepEqual([facts.dirty, facts.ahead, facts.runFolder, facts.planApproved], [false, 0, false, false]);
@@ -723,11 +723,12 @@ test("階段：沒改動、沒 commit、沒目標檔、沒 run folder、沒 defi
   });
 });
 
-test("階段（define-goal）：有開工標記或目標檔、實作方案還沒交棒 → 規劃中；交棒字樣出現 → 實作中", () => {
+test("階段（需求訪談）：有開工標記（含舊的 define-goal）或目標檔、實作方案還沒交棒 → 規劃中；交棒字樣出現 → 實作中", () => {
   const goals = path.join(app(), ".goals");
   withWorktree("chris/proj-7201-goal", (dir) => {
     const at = (opts) => stageAt(dir, "chris/proj-7201-goal", { id: "PROJ-7201", ...opts });
     assert.equal(at({ comment: "define-goal" }), "規劃中");
+    assert.equal(at({ comment: "interview" }), "規劃中");
     fs.writeFileSync(path.join(goals, "proj-7201.md"), "## 目標：x\n\n**實作方案**：（未定）\n");
     try {
       assert.equal(at(), "規劃中");
@@ -822,7 +823,7 @@ test("階段：看板讀得到 branch 的 run folder（PROJ-6923 dev-flow trial�
   }
 });
 
-test("階段：worktree comment 含 define-goal 且沒有改動 → 規劃中", () => {
+test("階段：worktree comment 含舊的 define-goal 標記且沒有改動 → 規劃中", () => {
   const dir = fake({
     mutateList: (list) => {
       list.result.worktrees.find((w) => w.path.endsWith("release-2026-10")).comment = "define-goal";
@@ -1067,16 +1068,13 @@ test("摘要、最後動態截短後以…結尾，且是原文開頭；放得�
 
 test("還在確認要不要開 session 的票：--aligning 階段為未開工，補在啟動 repo 表格最後一列，摘要同樣截短；帶 <repo>/ 前綴時補在該 repo 的表格", () => {
   const long = "把報表匯出頁改成可以依照產業別、時間區間與情境自由組合篩選";
-  const config = path.join(tmp, "claude-config-define-goal");
-  fs.mkdirSync(path.join(config, "skills", "define-goal"), { recursive: true });
-  fs.writeFileSync(path.join(config, "skills", "define-goal", "SKILL.md"), "---\nname: define-goal\n---\n");
-  const out = run("console.mjs", ["board", "--repo", app(), "--aligning", `PROJ-7001=${long}`, "--aligning", "api/PROJ-7002=後端匯出"], { env: { CLAUDE_CONFIG_DIR: config } }).out;
+  const out = run("console.mjs", ["board", "--repo", app(), "--aligning", `PROJ-7001=${long}`, "--aligning", "api/PROJ-7002=後端匯出"], { env: { WORKTREE_CONSOLE_HOME: path.join(tmp, "home-no-config") } }).out;
   const t = table(out);
   const last = t.tables[0].rows.at(-1);
   assert.deepEqual([last[0], last[1], last[3]], ["💬 等待回應", "PROJ-7001", "未開工"]);
   assert.ok(last[2].endsWith("…"));
   assertClipped(last[2], long);
-  assertClipped(last[4], "要不要先跑 define-goal？");
+  assertClipped(last[4], "要不要預設先做需求訪談？");
   assert.deepEqual(t.tables[1].rows.at(-1).slice(0, 4), ["💬 等待回應", "PROJ-7002", "後端匯出", "未開工"]);
   for (const line of tableLines(out.split("\n"))) assert.ok(displayWidth(line) <= BOARD_WIDTH, line);
 });

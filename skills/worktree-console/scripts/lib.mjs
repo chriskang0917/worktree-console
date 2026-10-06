@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { clip, isConsoleSession, readEvents, transcriptFor, writeManaged } from "./log.mjs";
 import { CACHE_HANDOFF_TEXT, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../../../hooks/auto-handoff.mjs";
 import { habitCell, habitFor, itemScene, memoryContext, memoryNotes, proposalLines, unreadableNotes } from "./memory.mjs";
@@ -884,7 +885,7 @@ export function deriveStage({ facts, goal = null, comment = "" }) {
   const pushed = facts.hasBase === false ? facts.upstream && facts.unpushed === 0 : facts.ahead > 0 && facts.unpushed === 0;
   if (pushed) return STAGE.pushed;
   if (facts.ahead > 0 || facts.planApproved || goal?.handedOff) return STAGE.implementing;
-  if (facts.runFolder || goal || /define-goal/i.test(comment || "")) return STAGE.planning;
+  if (facts.runFolder || goal || /define-goal|interview/i.test(comment || "")) return STAGE.planning;
   return STAGE.idle;
 }
 
@@ -1128,48 +1129,35 @@ export function recycledMark(session, text) {
 }
 
 // A ticket still being aligned in the console conversation, shown as the last row of its repo's table.
-export function aligningRow(ticket, title, repo, askDefineGoal = true) {
-  return { repo, tag: ticket, title: title || "—", stage: STAGE.idle, kind: "waiting", state: LABEL.waiting, activity: askDefineGoal ? "要不要先跑 define-goal？" : "等你確認開工" };
+export function aligningRow(ticket, title, repo, askInterview = false) {
+  return { repo, tag: ticket, title: title || "—", stage: STAGE.idle, kind: "waiting", state: LABEL.waiting, activity: askInterview ? "要不要預設先做需求訪談？" : "等你確認開工" };
 }
 
-// Whether kickoff runs define-goal by default (`defineGoal` in config.json); null until you choose once.
-export function defineGoalDefault() {
+// Whether kickoff starts with the 需求訪談 by default (`interview` in config.json); null until you choose once.
+export function interviewDefault() {
   try {
-    const value = JSON.parse(fs.readFileSync(path.join(consoleHome(), "config.json"), "utf8")).defineGoal;
+    const value = JSON.parse(fs.readFileSync(path.join(consoleHome(), "config.json"), "utf8")).interview;
     return typeof value === "boolean" ? value : null;
   } catch {
     return null;
   }
 }
 
-export function setDefineGoalDefault(on) {
+export function setInterviewDefault(on) {
   const file = path.join(consoleHome(), "config.json");
   let config = {};
   try {
     config = JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {}
   fs.mkdirSync(consoleHome(), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ ...config, defineGoal: on }, null, 2) + "\n");
+  fs.writeFileSync(file, JSON.stringify({ ...config, interview: on }, null, 2) + "\n");
 }
 
-// define-goal ships in another plugin (agent-skills:define-goal) or as a user skill; null when neither is installed.
-export function defineGoalInstall() {
-  const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-  const found = (dir) => fs.existsSync(path.join(dir, "SKILL.md"));
-  let plugins = {};
-  try {
-    plugins = JSON.parse(fs.readFileSync(path.join(base, "plugins", "installed_plugins.json"), "utf8")).plugins ?? {};
-  } catch {}
-  for (const [key, installs] of Object.entries(plugins)) {
-    for (const install of Array.isArray(installs) ? installs : []) {
-      if (install?.scope && install.scope !== "user") continue;
-      if (typeof install?.installPath !== "string") continue;
-      const dir = path.join(install.installPath, "skills", "define-goal");
-      if (found(dir)) return { command: `/${key.split("@")[0]}:define-goal`, dir };
-    }
-  }
-  const dir = path.join(base, "skills", "define-goal");
-  return found(dir) ? { command: "/define-goal", dir } : null;
+// The prompt the console reads when it loads: your own copy in the console home wins over the one shipped here.
+export function promptFile() {
+  const custom = path.join(consoleHome(), "prompt.md");
+  if (fs.existsSync(custom)) return { file: custom, custom: true };
+  return { file: fileURLToPath(new URL("../references/prompt.md", import.meta.url)), custom: false };
 }
 
 // Splits the columns left after state/tag/stage between summary and last activity, so every row fits `width`.

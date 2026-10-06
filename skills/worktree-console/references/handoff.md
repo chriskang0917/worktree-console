@@ -1,12 +1,19 @@
-# 交棒（define-goal 定稿後）
+# 交棒（需求訪談定稿後）
 
-`<base>` 是 worktree-console 的 base directory，`<define-goal>` 是 `console.mjs define-goal` 印的 `目錄：` 那個路徑（define-goal 實際安裝的位置，不是 `<base>` 旁邊）。
+`<base>` 是 worktree-console 的 base directory。
 
 | 指令 | 用途 |
 | --- | --- |
-| `console.mjs handoff --path P --from <訪談 handle> --file <暫存檔>` | define-goal 定稿後交棒執行（見〈開工〉）：`[票號] 已交棒執行`，或 `[票號] 交棒失敗：<步驟與原因>` 加 `/goal` 原文並 exit 1 |
+| `console.mjs handoff --path P --from <訪談 handle> --file <暫存檔>` | 需求訪談定稿後交棒執行（見〈開工〉）：`[票號] 已交棒執行`，或 `[票號] 交棒失敗：<步驟與原因>` 加 `/goal` 原文並 exit 1 |
 
 收到「定稿完成」後改由新分頁執行，訪談 session 不再送任何指令：
 
-1. 照 `<define-goal>/SKILL.md`〈交棒〉選「執行」的規格組 `/goal`，錨點檔＝主 checkout 的 `.goals/<slug>.md`（絕對路徑）：開頭一句照該節固定句，後接 `<define-goal>/references/handoff.md` 的工作目錄句與 commit／不 push 句，再接 2–4 條證據句（🔧 與 ⚠️ 不入）與結尾句；整段單一一行、連同 `/goal ` ≤800 字元（超過會被 Claude Code 收成貼上內容而不執行，依據與精簡順序見 `<define-goal>/references/handoff.md`〈`/goal` 條件的共用規格〉）。送出前把目標檔 `**實作方案**` 那行改成「直接實作（`/goal` 錨在本檔，<YYYY-MM-DD>）」。
-2. `/goal` 原文先用 Write 寫進暫存檔，照 `<define-goal>/references/handoff.md` 第 4 步量長度確認 ≤800，再跑 `console.mjs handoff --path <path> --from <訪談 handle> --file <暫存檔>`，輸出逐字轉貼。腳本在同一個 worktree 開新分頁、等就緒、送出，看到 `Goal set` 才關訪談分頁；失敗時訪談分頁保留並印出 `/goal` 原文，不自行重試；失敗原因是「被當成貼上內容收起」時提醒使用者先清空新分頁的輸入框再貼。
+1. 組 `/goal`，錨點檔＝子 session 回報的目標檔（主 checkout 的 `.goals/<slug>.md`，絕對路徑）。整段恰好三塊、寫成**單一一行**：
+   - 開頭：`本次任務依 <目標檔絕對路徑> 執行：先完整讀過該檔（含 Non-goals、關鍵假設、已知限制／素材、決策紀錄），逐條滿足其中全部驗收準則。下列證據只是收工門檻，不是任務範圍。改動一律做在本 session 啟動時所在的 worktree，不要動主 checkout 的檔案。目標檔有要求 commit 才 commit、沒要求就不 commit，一律不 push。`
+   - 證據：`完成前必須在對話中展示以下全部證據：` 接 2–4 條編號證據句（`1.`、`2.` 串在同一行），從驗收準則挑，標 🔧 與 ⚠️ 的不入；每條寫成「已執行 `<指令>` 並貼出輸出：<該看到什麼>」，讓只讀逐字稿的評審核對得了。挑不出 2 條時照樣交棒，但先印一行「可驗證的證據句不足 2 條」。
+   - 結尾：`未展示者一律視為未完成。`
+   - 連同開頭的 `/goal ` 總長 ≤800 字元（中文一字算 1）：Claude Code 收到超過 800 字元的輸入會收成貼上內容（`[Pasted text #N]`），不會當成 `/goal` 執行。超過時先精簡證據句措辭，開頭、結尾不刪；仍超過就減為 2 條；再不行就不送，回報「`/goal` 超過 800 字元」並停下。
+
+   送出前把目標檔 `**實作方案**` 那行改成「直接實作（`/goal` 錨在本檔，<YYYY-MM-DD>）」。
+2. `/goal` 原文先用 Write 寫進暫存檔（不用 `echo`，反引號會被 shell 展開），用 `node -e 'console.log(require("fs").readFileSync(process.argv[1],"utf8").trimEnd().length)' <暫存檔>` 量長度確認 ≤800，再跑 `console.mjs handoff --path <path> --from <訪談 handle> --file <暫存檔>`，輸出逐字轉貼。腳本在同一個 worktree 開新分頁、等就緒、送出，看到 `Goal set` 才關訪談分頁；失敗時訪談分頁保留並印出 `/goal` 原文，不自行重試；失敗原因是「被當成貼上內容收起」時提醒使用者先清空新分頁的輸入框再貼。
+3. 印出目標檔裡標 ⚠️ 的驗收準則（沒有就不印），提醒使用者這幾條要自己驗。

@@ -78,7 +78,7 @@ export function repoByName(name) {
   return knownRepos().find((r) => r.name.toLowerCase() === want)?.main ?? null;
 }
 
-// What the console wrote down when it started a ticket: worktree path → { ticket, displayName, defineGoal }.
+// What the console wrote down when it started a ticket: worktree path → { ticket, displayName, interview }.
 export function worktreeRecords() {
   const value = readJson(WORKTREES, {});
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -335,7 +335,7 @@ export const herdrTerminals = {
           repoId: r.main,
           linkedLinearIssue: rec.ticket ?? null,
           displayName: rec.displayName ?? w.branch,
-          comment: rec.defineGoal ? "define-goal" : "",
+          comment: rec.interview || rec.defineGoal ? "interview" : "",
           baseRef: rec.baseRef ?? null,
         };
       }),

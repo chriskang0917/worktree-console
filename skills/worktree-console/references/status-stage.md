@@ -10,5 +10,5 @@
 1. 工作區有未 commit 的改動 → 實作中。
 2. 已 push：有 base branch 時＝相對 base 有 commit 且 `git rev-list HEAD --not --remotes` 沒有 commit；找不到 base 時＝branch 有 upstream 且 `git rev-list HEAD --not --remotes` 沒有 commit。
 3. 相對 base 有 commit、run folder 的 `plan.md` 檔頭是 `status: approved`、或目標檔 `**實作方案**` 那行含「直接實作」或 `-spec.md` → 實作中。
-4. 有 run folder、有目標檔、或 worktree comment 含 `define-goal` → 規劃中。
+4. 有 run folder、有目標檔、或 worktree comment 含 `interview`（舊 worktree 的 `define-goal` 也算） → 規劃中。
 5. 其餘 → 未開工。

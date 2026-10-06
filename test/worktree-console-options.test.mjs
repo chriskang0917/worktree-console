@@ -55,7 +55,7 @@ test("粗體 A./B./C. 方案後面附「原因有三個：1. 2. 3.」時，選�
   assert.equal(childAnswer(it, "b"), "B");
 });
 
-test("define-goal 固定骨架：選擇題、是非題、有建議的開放題、複選題都截到 a、b、c，送出原樣", () => {
+test("需求訪談出題格式：選擇題、是非題、有建議的開放題、複選題都截到 a、b、c，送出原樣", () => {
   const choice = item("**第 1 題：放哪裡？**\n\n背景說明。\n\n- **a.** 主檔：每次都讀\n- **b.** reference：用到才讀\n\n建議：b，主檔太大。");
   assert.equal(choice.entries[0].options, "a 主檔／b reference");
   assert.equal(choice.entries[0].suggest, "b");
@@ -75,7 +75,7 @@ test("define-goal 固定骨架：選擇題、是非題、有建議的開放題�
   assert.equal(childAnswer(multi, "b、c"), "b、c");
 });
 
-test("define-goal 固定骨架：完全沒有建議的開放題，選項欄與建議欄都是「—」", () => {
+test("需求訪談出題格式：完全沒有建議的開放題，選項欄與建議欄都是「—」", () => {
   const it = item("**第 5 題：你想怎麼規劃這張票？**\n\n先說背景：目前有三個子任務還沒排順序。");
   assert.equal(it.entries[0].options, "—");
   assert.equal(it.entries[0].suggest, "—");

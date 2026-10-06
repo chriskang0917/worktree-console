@@ -9,7 +9,7 @@
 | 啟動檢查 | `herdr status`：`server` 段的 `status: running` 才繼續，否則停下回報 |
 | 代號 | 子 session 的 handle 是 herdr 的 pane id（例如 `w2:p3`），`send --terminal`、`--from` 都用它 |
 | repo 名單 | herdr 目前開著的工作區所在的 repo，加上中控台記住的 repo（開工或掃描時遇到就記，存在 `~/.config/worktree-console/herdr-repos.json`）；工作區關掉後該 repo 的票照樣在。第一次用主 checkout 完整路徑帶 `--repo`，之後可以只寫 repo 名稱 |
-| 票號 | 開工時中控台自記 worktree 路徑↔票號、暱稱、是否標 define-goal（`herdr-worktrees.json`）；沒記到的照 branch 名稱推 |
+| 票號 | 開工時中控台自記 worktree 路徑↔票號、暱稱、是否做需求訪談（`herdr-worktrees.json`）；沒記到的照 branch 名稱推 |
 | Linear | 一律用 `<base>/scripts/linear.mjs`（直接呼叫 Linear API，Orca 關著也能用），不用 `orca linear` |
 | 新 worktree 的位置 | herdr 設定檔 `[worktrees] directory`，沒設就是 `~/.herdr/worktrees/<repo>/<資料夾名稱>` |
 | 狀態 | 多一種 **⚠️ session 異常，需手動排程**（見下） |
@@ -18,7 +18,7 @@
 
 | 指令 | 用途 |
 | --- | --- |
-| `console.mjs start --repo R --branch B --dir <資料夾名稱> [--ticket KEY-n \| --name <暱稱>] [--define-goal] -- <首則指令>` | herdr 模式的開工：建 worktree（預定 repo 已有 worktree 用著 B 就沿用、不改自記紀錄）、自記票號、在該 repo 的工作區開分頁啟動 claude、送首則指令。印 `worktree: <path>` 與 `terminal: <pane id>`；失敗印 `[票號] 未開工：<原因>` 並 exit 1 |
+| `console.mjs start --repo R --branch B --dir <資料夾名稱> [--ticket KEY-n \| --name <暱稱>] [--interview] -- <首則指令>` | herdr 模式的開工：建 worktree（預定 repo 已有 worktree 用著 B 就沿用、不改自記紀錄）、自記票號、在該 repo 的工作區開分頁啟動 claude、送首則指令。印 `worktree: <path>` 與 `terminal: <pane id>`；失敗印 `[票號] 未開工：<原因>` 並 exit 1 |
 | `console.mjs open --path P [--continue]` | 在沒有 claude 分頁的 worktree 開一個（`--continue` 接續上次對話），印 `terminal: <pane id>` |
 | `console.mjs misjudge --repo R <代號>[#n] <實際狀態>` | 使用者說「<代號> 狀態錯了，其實是 X」時跑：記一筆人工誤判（看板當下顯示、herdr 原始狀態、使用者說的實際狀態），輸出逐字轉貼 |
 | `console.mjs herdr-report [--since 7d] [--out <檔案>] [--notes <試跑筆記.md>]` | 試跑評估報告（HTML），印報告路徑與結論段，原樣轉貼；`--notes` 把筆記裡每個 `- ` 開頭的行列成「試跑中發現的問題與處理」 |
@@ -30,7 +30,7 @@
 
 1. 讀票：`node <base>/scripts/linear.mjs issue <KEY-n>`。回傳已含母票（`母票：…`）與母票的 branch，不必另外反查；其餘對齊步驟照 `kickoff.md`。
 2. 鑰匙圈沒有 Linear key 時，`linear.mjs` 會報錯並把設定指令複製到剪貼簿：原樣轉貼它的輸出，請使用者自己在終端機貼上執行。**不要請使用者把 key 貼進對話，也不要自己跑 `security add-generic-password`。**
-3. 開工：`console.mjs start --repo "$TARGET" --branch <預定 branch> --dir <資料夾名稱> [--ticket <母票號或 KEY-n> | --name <暱稱>] [--define-goal] -- "<首則指令>"`，再照 `kickoff.md` 第 3 步跑 `await-start`。`--ticket` 照 `kickoff.md` 第 1 步的規則：有母票（對齊時確認過）就帶母票號，否則帶這張票本身；首則指令也照第 4 步的母票寫法。`未開工：新分頁沒就緒` 時用 `herdr pane read` 看畫面，trust／onboarding 對話框用 `herdr pane send-keys` 回應後再送首則指令。
+3. 開工：`console.mjs start --repo "$TARGET" --branch <預定 branch> --dir <資料夾名稱> [--ticket <母票號或 KEY-n> | --name <暱稱>] [--interview] -- "<首則指令>"`，再照 `kickoff.md` 第 3 步跑 `await-start`。`--ticket` 照 `kickoff.md` 第 1 步的規則：有母票（對齊時確認過）就帶母票號，否則帶這張票本身；首則指令也照第 4 步的母票寫法。`未開工：新分頁沒就緒` 時用 `herdr pane read` 看畫面，trust／onboarding 對話框用 `herdr pane send-keys` 回應後再送首則指令。
 
 ## 狀態怎麼判斷
 

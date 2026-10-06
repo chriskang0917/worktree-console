@@ -6,9 +6,9 @@ import {
   LABELS,
   afterSendLines,
   aligningRow,
-  defineGoalDefault,
-  defineGoalInstall,
-  setDefineGoalDefault,
+  interviewDefault,
+  promptFile,
+  setInterviewDefault,
   archivedLines,
   boardLines,
   childAnswer,
@@ -80,7 +80,7 @@ const { values, positionals } = parseArgs({
     repo: { type: "string" },
     path: { type: "string" },
     expect: { type: "string" },
-    "define-goal": { type: "boolean", default: false },
+    interview: { type: "boolean", default: false },
     timeout: { type: "string", default: "60" },
     aligning: { type: "string", multiple: true, default: [] },
     terminal: { type: "string" },
@@ -144,14 +144,14 @@ function screenHint(handle) {
 
 // `[<repo>/]<票號>=<票名>`; without a repo the row goes to the launch repo's table.
 function aligning(data) {
-  const askDefineGoal = values.aligning.length > 0 && defineGoalInstall() !== null && defineGoalDefault() === null;
+  const askInterview = values.aligning.length > 0 && interviewDefault() === null;
   return values.aligning.map((v) => {
     const i = v.indexOf("=");
     const head = (i < 0 ? v : v.slice(0, i)).trim();
     const title = i < 0 ? "" : v.slice(i + 1).trim();
     const slash = head.lastIndexOf("/");
     const repo = slash > 0 ? head.slice(0, slash) : data.launchRepo;
-    return aligningRow(head.slice(slash + 1), title, repo, askDefineGoal);
+    return aligningRow(head.slice(slash + 1), title, repo, askInterview);
   });
 }
 
@@ -432,17 +432,18 @@ function close() {
 
 const TRUST = /trust (the files|this folder)|Do you trust/i;
 const ONBOARDING = /Choose the text style|Select login method|Let's get started|Welcome to Claude Code/i;
-const DEFINE_GOAL_LOADED = /Skill\([^)]*define-goal|(Successfully )?loaded skill[^\n]*define-goal/i;
+// The child read the console prompt (its 需求訪談 section) before anything else.
+const PROMPT_READ = /Read\([^)]*prompt\.md|Read \d+ files?/;
 
 async function awaitStart() {
   if (!values.path || !values.expect) fail("缺少 --path 或 --expect");
   const target = realpath(values.path);
-  const { ok, label, repo, reason } = await waitStart(target, values.expect, values["define-goal"]);
-  logEvent("start", { repo, ticket: label, path: target, ok, reason: ok ? null : reason, defineGoal: values["define-goal"] });
+  const { ok, label, repo, reason } = await waitStart(target, values.expect, values.interview);
+  logEvent("start", { repo, ticket: label, path: target, ok, reason: ok ? null : reason, interview: values.interview });
   print(ok ? `[${label}] 已開工` : `[${label}] 未開工：${reason}`, ok ? 0 : 1);
 }
 
-async function waitStart(target, expect, defineGoal = false) {
+async function waitStart(target, expect, interview = false) {
   const deadline = Date.now() + Number(values.timeout) * 1000;
   const interval = Number(process.env.AWAIT_INTERVAL_MS || 2000);
   let label = target;
@@ -466,12 +467,12 @@ async function waitStart(target, expect, defineGoal = false) {
     if (!started && TRUST.test(screen)) reason = "卡在 trust 對話框";
     else if (!started && ONBOARDING.test(screen)) reason = "卡在 onboarding 對話框";
     if (row) repo = row.repo;
-    if (started && !defineGoal) return { ok: true, label, repo, reason: null };
-    if (started && defineGoal) {
+    if (started && !interview) return { ok: true, label, repo, reason: null };
+    if (started && interview) {
       const asked = agent.state === "done" && /[?？]/.test(agent.lastAssistantMessage || "");
-      if (DEFINE_GOAL_LOADED.test(screen) || asked) return { ok: true, label, repo, reason: null };
+      if (PROMPT_READ.test(screen) || asked) return { ok: true, label, repo, reason: null };
       if (agent.state === "done") {
-        reason = "define-goal 未啟動";
+        reason = "需求訪談未啟動";
         break;
       }
     }
@@ -815,7 +816,7 @@ function sendRaw(item, text) {
 const GOAL_SET = /Goal set/;
 const PASTED_GOAL = /Pasted text|paste again to expand/;
 
-// define-goal → execution: open a new tab in the worktree, send the /goal text, and close the interview tab once it took.
+// 需求訪談 → execution: open a new tab in the worktree, send the /goal text, and close the interview tab once it took.
 async function handoff() {
   if (!values.path || !values.from || !values.file) fail("用法：console.mjs handoff --path <worktree> --from <訪談 handle> --file <\/goal 暫存檔>");
   const target = realpath(values.path);
@@ -832,7 +833,7 @@ async function handoff() {
       repo: row?.repo ?? path.basename(mainCheckout(target)),
       ticket: label,
       path: target,
-      kind: "define-goal",
+      kind: "interview",
       ok,
       reason,
       oldHandle: values.from,
@@ -946,7 +947,7 @@ function open() {
 function start() {
   const text = positionals.join(" ").trim();
   if (!values.repo || !values.branch || !values.dir || !text) {
-    fail("用法：console.mjs start --repo R --branch B --dir <資料夾名稱> [--ticket KEY-n | --name <暱稱>] [--define-goal] [--path P] -- <首則指令>");
+    fail("用法：console.mjs start --repo R --branch B --dir <資料夾名稱> [--ticket KEY-n | --name <暱稱>] [--interview] [--path P] -- <首則指令>");
   }
   const m = manager();
   if (m.name !== "herdr") fail("Orca 模式照 kickoff.md 用 orca worktree create 開工");
@@ -961,7 +962,7 @@ function start() {
     const add = git(main, ["worktree", "add", ...(has ? [want, values.branch] : ["-b", values.branch, want])]);
     if (!add.ok) fail(`[${label}] 未開工：建 worktree 失敗：${add.err}`);
     target = realpath(want);
-    recordWorktree(target, { ticket: values.ticket?.toUpperCase() ?? null, displayName: values.name ?? null, defineGoal: values["define-goal"], repo: path.basename(main) });
+    recordWorktree(target, { ticket: values.ticket?.toUpperCase() ?? null, displayName: values.name ?? null, interview: values.interview, repo: path.basename(main) });
   }
   const opened = m.create(target, { label });
   if (!opened.ok) fail(`[${label}] 未開工：開分頁失敗（${opened.code}）`);
@@ -1008,18 +1009,19 @@ function misjudge() {
 
 const ON_OFF = { on: true, off: false };
 
-function defineGoalCommand() {
+function promptCommand() {
+  const { file, custom } = promptFile();
+  console.log(`檔案：${file}`);
+  console.log(`來源：${custom ? "自訂" : "內建"}`);
+}
+
+function interviewCommand() {
   if (values.set !== undefined) {
-    if (!(values.set in ON_OFF)) fail("用法：console.mjs define-goal [--set on|off]");
-    setDefineGoalDefault(ON_OFF[values.set]);
-    return console.log(`define-goal 預設：${ON_OFF[values.set] ? "開" : "關"}`);
+    if (!(values.set in ON_OFF)) fail("用法：console.mjs interview [--set on|off]");
+    setInterviewDefault(ON_OFF[values.set]);
   }
-  const found = defineGoalInstall();
-  if (!found) return console.log("define-goal 未安裝");
-  const on = defineGoalDefault();
-  console.log(`指令：${found.command}`);
-  console.log(`目錄：${found.dir}`);
-  console.log(`預設：${on === null ? "未設定" : on ? "開" : "關"}`);
+  const on = interviewDefault();
+  console.log(`需求訪談預設：${on === null ? "未設定" : on ? "開" : "關"}`);
 }
 
 function herdrReportCommand() {
@@ -1045,7 +1047,8 @@ const commands = {
   "close-check": closeCheck,
   close,
   "await-start": awaitStart,
-  "define-goal": defineGoalCommand,
+  prompt: promptCommand,
+  interview: interviewCommand,
   handoff,
   report,
   archive,
@@ -1067,7 +1070,7 @@ const commands = {
   "ask-tab": askTab,
   nickname,
 };
-const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "define-goal"]);
+const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt", "interview"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);
 if (!OFFLINE.has(command)) manager();
 await commands[command]();

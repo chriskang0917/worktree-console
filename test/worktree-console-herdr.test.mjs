@@ -250,18 +250,18 @@ test("repo 名單＝herdr 開著的工作區＋中控台記住的；工作區關
   assert.match(w.run(["board", "--repo", "nope"]).out, /找不到 repo「nope」/);
 });
 
-test("開工：建 worktree、自記票號與 define-goal 標記、開分頁啟動 claude 並送首則指令；看板據此顯示", () => {
+test("開工：建 worktree、自記票號與需求訪談標記、開分頁啟動 claude 並送首則指令；看板據此顯示", () => {
   const w = world([]);
   const target = path.join(tmp, "herdr-wt", "app", "proj-301");
-  const res = w.run(["start", "--repo", app(), "--branch", "feat/odd-name", "--dir", "proj-301", "--ticket", "proj-301", "--define-goal", "--path", target, "--", "/agent-skills:define-goal PROJ-301：試"]);
+  const res = w.run(["start", "--repo", app(), "--branch", "feat/odd-name", "--dir", "proj-301", "--ticket", "proj-301", "--interview", "--path", target, "--", "PROJ-301：試；slug 用 proj-301"]);
   assert.equal(res.code, 0, res.out + res.err);
   assert.match(res.out, new RegExp(`worktree: ${target}\\nterminal: w1:p\\d+`));
   assert.equal(sh(target, "branch", "--show-current"), "feat/odd-name");
   const calls = w.calls().map((c) => c.slice(0, 2).join(" "));
   assert.deepEqual(calls.filter((c) => c !== "api snapshot"), ["tab create", "agent start", "agent prompt"]);
-  assert.equal(w.sends().at(-1).text, "/agent-skills:define-goal PROJ-301：試");
+  assert.equal(w.sends().at(-1).text, "PROJ-301：試；slug 用 proj-301");
   const record = JSON.parse(fs.readFileSync(path.join(w.home, "herdr-worktrees.json"), "utf8"))[fs.realpathSync(target)];
-  assert.deepEqual([record.ticket, record.defineGoal], ["PROJ-301", true]);
+  assert.deepEqual([record.ticket, record.interview], ["PROJ-301", true]);
   const board = w.run(["board", "--repo", app()]).out;
   assert.match(board, /\| PROJ-301 \| feat\/odd-name \| 規劃中 \|/, "branch 名稱推不出票號，靠自記的對應顯示");
   const nick = w.run(["start", "--repo", "app", "--branch", "feat/nick-task", "--dir", "x", "--name", "login", "--", "login 做登入"]);

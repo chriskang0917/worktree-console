@@ -15,7 +15,7 @@ description: 在單一 Claude Code session 透過 orca CLI 或 herdr 當中控�
 
 1. `command -v orca` 與 `orca status --json | jq -c 'if .ok then {ok, reachable: .result.runtime.reachable} else {ok, error: .error.code} end'`（成功只印 `ok` 與 `reachable`，`ok:false` 時另帶 `error.code`）：找不到指令、`ok:false` 或 `reachable` 不是 true → 停，回報原因。
 2. 取啟動 repo：`REPO=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")`（主 checkout 絕對路徑）。`console.mjs` 一律帶 `--repo "$REPO"`；它只決定開票的預設 repo，看板、指揮、關閉涵蓋 Orca 所有 repo（`orca repo list --json` 有每個 repo 的 `path` 與 `displayName`）。
-3. 腳本一律用本 skill 載入時給的 base directory 組絕對路徑：`node <base>/scripts/console.mjs …`、`node <base>/scripts/watch.mjs …`，不要依賴 cwd。orca 執行檔可用 `ORCA_BIN` 覆寫。
+3. 腳本一律用本 skill 載入時給的 base directory 組絕對路徑：`node <base>/scripts/console.mjs …`、`node <base>/scripts/watch.mjs …`，不要依賴 cwd。orca 執行檔可用 `ORCA_BIN` 覆寫。接著跑 `console.mjs prompt`，用 Read 完整讀它印的 `檔案：` 那份中控台 prompt，照其中〈中控台〉一段做；**每次啟動都要讀，不可略過**（使用者的自訂版本放在中控台設定目錄的 `prompt.md`，有就取代內建版本）。
 4. 清殘留：`pgrep -f "worktree-console/scripts/watch.mjs"` 找到的程序中，`ps -o ppid= -p <pid>` 為 1 的（孤兒）直接 `kill`。
 5. 跑 `console.mjs board --repo "$REPO"`，再跑 `console.mjs archived --repo "$REPO"`，兩段輸出依序原樣貼給使用者（`archived` 沒輸出就不貼）。
 6. 掛 watcher（見〈主動回報〉），第一次掛不帶 `--baseline`，watcher 會以第一輪輪詢為基準。印 `[watch] already-running` 表示另一個中控台（或舊版帶 `--repo` 的 watcher）正在監看：問「已有另一個中控台在監看，要不要由這裡接手？」，回要就加 `--takeover` 重掛（會先停掉舊的），回不要就不掛，之後只在使用者開口時看板。中控台是被自動交棒開起來的（接手指令會寫明）時直接加 `--takeover`，不問。
@@ -93,8 +93,8 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 
 | 時機 | 讀哪份 |
 | --- | --- |
-| 丟票、選了待開工的票、同意開 session（〈開票（對齊）〉、〈沒有票〉、〈開工〉）、「define-goal 預設開／關」 | `kickoff.md` |
-| define-goal 訪談 session 回報「定稿完成」（交棒） | `handoff.md` |
+| 丟票、選了待開工的票、同意開 session（〈開票（對齊）〉、〈沒有票〉、〈開工〉）、「需求訪談預設開／關」 | `kickoff.md` |
+| 需求訪談的子 session 回報「定稿完成」（交棒） | `handoff.md` |
 | 「關掉 <票號>」（〈關閉〉） | `close.md` |
 | 「報表」「最近卡在哪」等要看紀錄、打「已蒸餾」（〈過程紀錄〉） | `process-log.md` |
 | `todo` 印 `skip:no-config`（待開工提醒的設定與篩選規則） | `todo-config.md` |
@@ -131,7 +131,7 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 
 ## 看板與詳情
 
-- 「現在狀況」→ 跑 `board` 原樣貼出（含附在後面的待回覆清單）；對話中還在對齊、尚未建 worktree 的票，每張帶一個 `--aligning "<票號>=<票名>"`（預定 repo 不是啟動 repo 時寫成 `<repo>/<票號>=<票名>`），腳本會在該 repo 表格最後補一列 `| 💬 等待回應 | <票號> | <摘要> | 未開工 | 要不要先跑 define-goal？ |`（沒裝 define-goal、或已設定開工預設跑不跑時，最後一欄是「等你確認開工」）、套用同樣的截短規則。不要自己手寫這一列。
+- 「現在狀況」→ 跑 `board` 原樣貼出（含附在後面的待回覆清單）；對話中還在對齊、尚未建 worktree 的票，每張帶一個 `--aligning "<票號>=<票名>"`（預定 repo 不是啟動 repo 時寫成 `<repo>/<票號>=<票名>`），腳本會在該 repo 表格最後補一列 `| 💬 等待回應 | <票號> | <摘要> | 未開工 | 等你確認開工 |`（需求訪談預設還沒設定時，最後一欄是「要不要預設先做需求訪談？」）、套用同樣的截短規則。不要自己手寫這一列。
 - 「<票號> 詳情」→ 跑 `detail` 原樣貼出（回報段格式見〈主動回報〉）。
 - 詳情建議：貼出 `detail` 後，對其中每段回報（待你處理的 session）由中控台另起一段建議；沒有回報段就不寫。**只有「詳情」這個入口准中控台補建議**，watcher 回報與待回覆清單仍不自己補建議。
   - 一個 session 一段：`[代號]` 開頭、一句現況、具體做法（多題逐題編號，各一行）、一句問句收尾，例如：
@@ -155,4 +155,4 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 - Linear 只讀。herdr 模式的 Linear API key 只放在 macOS 鑰匙圈，由使用者自己在終端機設定；key 不進對話、指令參數或任何輸出。
 - 同一時間只留一個中控台。
 - 不走 Orca orchestration 的一次性任務模式（Run／Dispatch／worker_done）。
-- 除了開工時的 `--comment define-goal` 標記，不把階段寫進 worktree comment（子 session 的 orca-cli skill 會覆寫它）。
+- 除了開工時的 `--comment interview` 標記，不把階段寫進 worktree comment（子 session 的 orca-cli skill 會覆寫它）。

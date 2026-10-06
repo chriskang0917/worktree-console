@@ -21,7 +21,8 @@ worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https
 - **Direct, close and archive from one place.** Send instructions to any session by ticket, close a worktree when its branch is merged, or archive sessions you want out of sight.
 - **Automatic handoff.** When a session's context fills past a threshold, or its prompt cache is about to expire while you are away, it writes a handoff note and a fresh session takes over in a new tab. `/worktree-console:handoff` does it on demand.
 - **A log of how you work.** Every console and session event is recorded under `~/.worktree-console/`, so you can look back at what was started, asked and answered.
-- **Works with define-goal when you have it.** If the `define-goal` skill (from [agent-skills](https://github.com/chriskang0917/agent-skills)) is installed, kickoff can run a goal interview first and hand the result to an executing session. You choose once whether that is the default; the console remembers it. Without define-goal, kickoff goes straight to work.
+- **Ask first, then build.** Before a session starts coding, it can interview you one question at a time until the goal and acceptance criteria are written down, then the console hands that goal to a fresh session to execute. You decide once whether kickoff does this by default.
+- **Make it yours.** On startup the console reads a prompt file. Copy it to `~/.config/worktree-console/prompt.md` and edit it to add your own console rules or change how the interview asks questions; plugin updates never overwrite your copy.
 
 ## Install
 
@@ -56,7 +57,7 @@ Open Claude Code in an Orca or herdr tab inside one of your repos, then:
 | `關掉 <ticket>` | Checks the worktree is safe to remove, then closes it |
 | `/worktree-console:handoff` | Hands the current session over to a fresh one |
 
-State lives in `~/.config/worktree-console/` (console registry, focus state, archive), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
+State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
 
 ## Development
 

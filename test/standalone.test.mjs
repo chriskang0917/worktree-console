@@ -8,8 +8,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { aligningRow } = await import("../skills/worktree-console/scripts/lib.mjs");
+const { agentStatus, aligningRow, pendingItems } = await import("../skills/worktree-console/scripts/lib.mjs");
 const consoleScript = path.join(root, "skills", "worktree-console", "scripts", "console.mjs");
+const builtinPrompt = path.join(root, "skills", "worktree-console", "references", "prompt.md");
 const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
 const json = (rel) => JSON.parse(read(rel));
 
@@ -18,125 +19,105 @@ function tracked() {
   return res.stdout.split("\n").filter(Boolean).filter((f) => fs.existsSync(path.join(root, f)));
 }
 
-function configDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "wtc-claude-config-"));
-}
+const consoleHome = () => fs.mkdtempSync(path.join(os.tmpdir(), "wtc-home-"));
 
-function skill(dir) {
-  fs.mkdirSync(path.join(dir, "references"), { recursive: true });
-  fs.writeFileSync(path.join(dir, "SKILL.md"), "---\nname: define-goal\n---\n");
-  fs.writeFileSync(path.join(dir, "references", "handoff.md"), "# 交棒\n");
-}
-
-function installedPlugins(config, plugins) {
-  fs.mkdirSync(path.join(config, "plugins"), { recursive: true });
-  fs.writeFileSync(path.join(config, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins }));
-}
-
-function defineGoal(config, args = [], home = path.join(config, "console")) {
-  const res = spawnSync(process.execPath, [consoleScript, "define-goal", ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_CONFIG_DIR: config, WORKTREE_CONSOLE_HOME: home } });
+function cli(home, args, extra = {}) {
+  const res = spawnSync(process.execPath, [consoleScript, ...args], { encoding: "utf8", env: { ...process.env, WORKTREE_CONSOLE_HOME: home, ...extra } });
   return { code: res.status, out: res.stdout.trim() };
 }
 
-function userSkillConfig() {
-  const config = configDir();
-  skill(path.join(config, "skills", "define-goal"));
-  return config;
-}
-
-test("define-goal 沒裝：印「define-goal 未安裝」", () => {
-  assert.deepEqual(defineGoal(configDir()), { code: 0, out: "define-goal 未安裝" });
+test("中控台 prompt：沒有自訂檔時用內建的 references/prompt.md", () => {
+  assert.deepEqual(cli(consoleHome(), ["prompt"]), { code: 0, out: `檔案：${builtinPrompt}\n來源：內建` });
 });
 
-test("define-goal 由某個 plugin 安裝：印那個 plugin 的斜線指令、它實際的安裝目錄與預設", () => {
-  const config = configDir();
-  const install = path.join(config, "plugins", "cache", "someone", "agent-skills", "9.9.9");
-  skill(path.join(install, "skills", "define-goal"));
-  installedPlugins(config, {
-    "other@market": [{ scope: "user", installPath: path.join(config, "plugins", "cache", "market", "other", "1.0.0") }],
-    "agent-skills@someone": [{ scope: "user", installPath: install }],
-  });
-  const { code, out } = defineGoal(config);
-  assert.equal(code, 0);
-  assert.equal(out, `指令：/agent-skills:define-goal\n目錄：${path.join(install, "skills", "define-goal")}\n預設：未設定`);
-  const dir = out.split("\n")[1].replace("目錄：", "");
-  assert.ok(fs.existsSync(path.join(dir, "references", "handoff.md")), "交棒規格從實際安裝位置讀得到");
+test("中控台 prompt：設定目錄有 prompt.md 時改用它，內建檔不動", () => {
+  const home = consoleHome();
+  fs.writeFileSync(path.join(home, "prompt.md"), "# 我的中控台 prompt\n");
+  assert.deepEqual(cli(home, ["prompt"]), { code: 0, out: `檔案：${path.join(home, "prompt.md")}\n來源：自訂` });
 });
 
-test("define-goal 只裝在某個專案的 plugin 不算；裝成使用者 skill 時指令是 /define-goal", () => {
-  const config = configDir();
-  const install = path.join(config, "plugins", "cache", "x", "agent-skills", "1.0.0");
-  skill(path.join(install, "skills", "define-goal"));
-  installedPlugins(config, { "agent-skills@x": [{ scope: "project", projectPath: "/somewhere", installPath: install }] });
-  assert.equal(defineGoal(config).out, "define-goal 未安裝");
-  skill(path.join(config, "skills", "define-goal"));
-  assert.equal(defineGoal(config).out, `指令：/define-goal\n目錄：${path.join(config, "skills", "define-goal")}\n預設：未設定`);
+test("主說明：啟動時一定要讀 console.mjs prompt 印的檔案", () => {
+  const skill = read("skills/worktree-console/SKILL.md");
+  const start = skill.slice(skill.indexOf("## 硬需求與啟動"), skill.indexOf("## 腳本一覽"));
+  assert.match(start, /`console\.mjs prompt`/);
+  assert.match(start, /每次啟動都要讀，不可略過/);
 });
 
-test("開工預設：第一次未設定，--set on/off 記進 config.json 且保留其他設定，之後照設定印出", () => {
-  const config = userSkillConfig();
-  const home = path.join(config, "console");
-  fs.mkdirSync(home, { recursive: true });
+test("內建 prompt：有〈中控台〉與〈需求訪談〉兩段，說明怎麼自訂，出題範例截得出 a、b 與建議", () => {
+  const prompt = read("skills/worktree-console/references/prompt.md");
+  assert.match(prompt, /^## 中控台$/m);
+  assert.match(prompt, /^## 需求訪談$/m);
+  assert.match(prompt, /~\/\.config\/worktree-console\/prompt\.md/);
+  const sample = prompt.match(/```text\n([\s\S]*?)```/)[1].replace("<問題>", "放哪裡").replace("<字母>", "b").replace(/<[^>]+>/g, "說明");
+  const session = { n: null, handle: "h", agent: { state: "done" }, status: agentStatus({ state: "done", lastAssistantMessage: sample }) };
+  const [item] = pendingItems([{ repo: "app", label: "PROJ-1", ticket: "PROJ-1", branch: "proj-1", title: "x", stage: "規劃中", sessions: [session] }]);
+  assert.deepEqual(item.choices, ["a", "b"]);
+  assert.match(item.entries[0].suggest, /^b/);
+});
+
+test("需求訪談預設：第一次未設定，--set on/off 記進 config.json 且保留其他設定", () => {
+  const home = consoleHome();
   fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ titlePrefixes: ["[FE]"] }));
-  assert.match(defineGoal(config).out, /\n預設：未設定$/);
-  assert.deepEqual(defineGoal(config, ["--set", "on"]), { code: 0, out: "define-goal 預設：開" });
-  assert.match(defineGoal(config).out, /\n預設：開$/);
-  assert.deepEqual(defineGoal(config, ["--set", "off"]), { code: 0, out: "define-goal 預設：關" });
-  assert.match(defineGoal(config).out, /\n預設：關$/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8")), { titlePrefixes: ["[FE]"], defineGoal: false });
-  assert.equal(defineGoal(config, ["--set", "maybe"]).code, 1);
+  assert.deepEqual(cli(home, ["interview"]), { code: 0, out: "需求訪談預設：未設定" });
+  assert.deepEqual(cli(home, ["interview", "--set", "on"]), { code: 0, out: "需求訪談預設：開" });
+  assert.deepEqual(cli(home, ["interview"]), { code: 0, out: "需求訪談預設：開" });
+  assert.deepEqual(cli(home, ["interview", "--set", "off"]), { code: 0, out: "需求訪談預設：關" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8")), { titlePrefixes: ["[FE]"], interview: false });
+  assert.equal(cli(home, ["interview", "--set", "maybe"]).code, 1);
 });
 
-test("開工預設：沒有 config.json 時 --set 會建立它", () => {
-  const config = userSkillConfig();
-  const home = path.join(config, "fresh-console");
-  assert.deepEqual(defineGoal(config, ["--set", "on"], home), { code: 0, out: "define-goal 預設：開" });
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8")), { defineGoal: true });
+test("需求訪談預設：沒有 config.json 時 --set 會建立它", () => {
+  const home = path.join(consoleHome(), "fresh");
+  assert.deepEqual(cli(home, ["interview", "--set", "on"]), { code: 0, out: "需求訪談預設：開" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8")), { interview: true });
 });
 
-test("看板對齊列：有裝且預設未設定才問要不要跑 define-goal；設定過或沒裝都是「等你確認開工」", () => {
-  const board = (config, home) => {
-    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-board-"));
-    spawnSync("git", ["init", "-q", repo]);
-    const res = spawnSync(process.execPath, [consoleScript, "board", "--repo", repo, "--aligning", "PROJ-9=新票"], {
-      encoding: "utf8",
-      env: { ...process.env, CLAUDE_CONFIG_DIR: config, WORKTREE_CONSOLE_HOME: home, ORCA_BIN: path.join(root, "test", "fixtures", "worktree-console", "fake-orca.mjs"), FAKE_ORCA_DIR: orcaDir(), ORCA_TERMINAL_HANDLE: "term_self", WORKTREE_CONSOLE_LOG_DIR: path.join(home, "log"), CLAUDE_PROJECTS_DIR: path.join(home, "projects") },
-    });
-    return res.stdout.split("\n").find((l) => l.includes("PROJ-9")) ?? res.stdout + res.stderr;
-  };
+test("看板對齊列：需求訪談預設未設定才問，設定過就是「等你確認開工」", () => {
   const orcaDir = () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-orca-"));
     fs.cpSync(path.join(root, "test", "fixtures", "worktree-console"), dir, { recursive: true });
     return dir;
   };
-  const config = userSkillConfig();
-  const home = path.join(config, "console");
-  assert.match(board(config, home), /要不要先跑 define-goal？/);
-  defineGoal(config, ["--set", "off"]);
-  assert.match(board(config, home), /等你確認開工/);
-  assert.match(board(configDir(), path.join(configDir(), "console")), /等你確認開工/);
+  const board = (home) => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-board-"));
+    spawnSync("git", ["init", "-q", repo]);
+    const out = cli(home, ["board", "--repo", repo, "--aligning", "PROJ-9=新票"], {
+      ORCA_BIN: path.join(root, "test", "fixtures", "worktree-console", "fake-orca.mjs"),
+      FAKE_ORCA_DIR: orcaDir(),
+      ORCA_TERMINAL_HANDLE: "term_self",
+      WORKTREE_CONSOLE_LOG_DIR: path.join(home, "log"),
+      CLAUDE_PROJECTS_DIR: path.join(home, "projects"),
+    }).out;
+    return out.split("\n").find((l) => l.includes("PROJ-9")) ?? out;
+  };
+  const home = consoleHome();
+  assert.match(board(home), /要不要預設先做需求訪談？/);
+  cli(home, ["interview", "--set", "off"]);
+  assert.match(board(home), /等你確認開工/);
+  assert.equal(aligningRow("PROJ-1", "x", "app").activity, "等你確認開工");
 });
 
-test("沒裝 define-goal：對齊中的票最後動態是「等你確認開工」，不問要不要跑 define-goal", () => {
-  assert.equal(aligningRow("PROJ-1", "x", "app", false).activity, "等你確認開工");
-  assert.equal(aligningRow("PROJ-1", "x", "app", true).activity, "要不要先跑 define-goal？");
-});
-
-test("開工與交棒說明：先查 define-goal 有沒有裝、沒裝不提供跑它的選項、有裝從實際安裝位置讀交棒規格；預設只問一次", () => {
+test("開工與交棒說明：需求訪談照中控台 prompt 做、預設只問一次；/goal 規則寫在中控台自己的交棒說明", () => {
   const kickoff = read("skills/worktree-console/references/kickoff.md");
   const handoff = read("skills/worktree-console/references/handoff.md");
-  assert.match(kickoff, /`console\.mjs define-goal`/);
-  assert.match(kickoff, /沒裝時整個流程都不提 define-goal/);
-  assert.match(kickoff, /`<base>\/references\/branch-naming\.md`/);
-  assert.doesNotMatch(kickoff, /`\/agent-skills:define-goal </);
-  assert.match(handoff, /`<define-goal>\/references\/handoff\.md`/);
-  assert.match(kickoff, /`console\.mjs define-goal --set on`/);
-  assert.match(kickoff, /之後開票預設要先跑 define-goal 嗎？/);
-  for (const file of tracked()) assert.ok(!read(file).includes(["orca", "handoff"].join("-")), file);
-  assert.ok(fs.existsSync(path.join(root, "skills", "worktree-console", "references", "branch-naming.md")));
+  assert.match(kickoff, /`console\.mjs interview --set on`/);
+  assert.match(kickoff, /之後開票預設要先做需求訪談嗎？/);
+  assert.match(kickoff, /先完整讀 <`console\.mjs prompt` 印的檔案絕對路徑>，照其中〈需求訪談〉一段做/);
+  assert.match(handoff, /未展示者一律視為未完成。/);
+  assert.match(handoff, /≤800 字元/);
 });
 
-test("repo 自給自足：沒有 import 或路徑指到 repo 外，也不用相對路徑找 define-goal", () => {
+test("不依賴任何 define-goal skill：說明與程式只在認舊標記時提到 define-goal", () => {
+  const hits = [];
+  for (const file of tracked().filter((f) => !f.startsWith("test/") && f !== "CHANGELOG.md")) {
+    read(file).split("\n").forEach((line, i) => {
+      if (/define-goal/i.test(line) && !/舊|rec\.defineGoal|define-goal\|interview/.test(line)) hits.push(`${file}:${i + 1}: ${line.trim().slice(0, 80)}`);
+    });
+  }
+  assert.deepEqual(hits, []);
+});
+
+test("repo 自給自足：沒有 import 或路徑指到 repo 外", () => {
   const offenders = [];
   for (const file of tracked().filter((f) => /\.(mjs|tsx|md|json)$/.test(f) && !f.startsWith("test/fixtures/"))) {
     const text = read(file);
@@ -149,10 +130,10 @@ test("repo 自給自足：沒有 import 或路徑指到 repo 外，也不用相�
   assert.deepEqual(offenders, []);
 });
 
-test("「agent-skills:」只出現在偵測 define-goal 的地方與 README", () => {
+test("「agent-skills:」只出現在 README 與舊對話紀錄的測試資料", () => {
   const hits = [];
-  for (const file of tracked().filter((f) => f !== "README.md" && !f.startsWith("test/fixtures/"))) {
-    for (const line of read(file).split("\n")) if (line.includes("agent-skills:") && !line.includes("define-goal")) hits.push(`${file}: ${line.trim().slice(0, 80)}`);
+  for (const file of tracked().filter((f) => f !== "README.md" && !f.startsWith("test/"))) {
+    for (const line of read(file).split("\n")) if (line.includes("agent-skills:")) hits.push(`${file}: ${line.trim().slice(0, 80)}`);
   }
   assert.deepEqual(hits, []);
 });
