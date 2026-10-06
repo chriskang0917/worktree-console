@@ -100,7 +100,7 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 | `todo` 印 `skip:no-config`（待開工提醒的設定與篩選規則） | `todo-config.md` |
 | 使用者問為什麼是這個狀態或階段，或寫詳情建議需要判斷階段時 | `status-stage.md` |
 | 「封存 <代號>」（〈封存〉） | `archive.md` |
-| 中控台在 herdr 分頁裡（`HERDR_ENV=1`）：啟動前；使用者說「<票號> 狀態錯了，其實是 X」；要看 herdr 試跑評估 | `herdr.md` |
+| 中控台在 herdr 分頁裡（`HERDR_ENV=1`）：啟動前；使用者說「<票號> 狀態錯了，其實是 X」；「把 <票號> 搬到 <工作區>」；要看 herdr 試跑評估 | `herdr.md` |
 | 「問 <repo>：<問題>」、「<代號> 問：<問題>」，或開頭那個字像 repo 名稱（3 個字元以上）且不是中控台指令（〈問問題〉） | `ask.md` |
 | 對話出現 `/focus-show` 的輸出，或 `after-send` 印出 `等 <代號> 回應中…`（〈專注模式〉） | `focus.md` |
 | 使用者回「記住 <字母>」「不記 <字母>」、問「你通常會回」怎麼來的、要重播回覆習慣 | `memory.md` |

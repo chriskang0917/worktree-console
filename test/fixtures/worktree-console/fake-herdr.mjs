@@ -87,6 +87,7 @@ if (cmd === "tab create") {
 if (cmd === "workspace create") {
   state.seq += 1;
   const ws = `w${state.seq}`;
+  (state.workspaces ??= []).push({ workspace_id: ws, label: opt("--label") });
   const pane = newPane(ws, opt("--cwd"), opt("--label"));
   save(state);
   ok({ type: "workspace_created", workspace: { workspace_id: ws }, root_pane: pane });
@@ -95,7 +96,9 @@ if (cmd === "agent start") {
   const pane = opt("--pane");
   if (process.env.FAKE_HERDR_START_FAIL) error("agent_not_ready");
   const p = state.panes.find((x) => x.pane_id === pane);
-  const agent = { agent: "claude", name: args[2], pane_id: pane, cwd: p?.cwd, agent_status: "idle", agent_session: { kind: "id", value: `sess-${pane.replace(/:/g, "-")}` }, argv: args.slice(args.indexOf("--") + 1) };
+  const argv = args.includes("--") ? args.slice(args.indexOf("--") + 1) : [];
+  const resumed = argv[0] === "--resume" && !process.env.FAKE_HERDR_RESUME_LOST ? argv[1] : null;
+  const agent = { agent: "claude", name: args[2], pane_id: pane, cwd: p?.cwd, agent_status: "idle", agent_session: { kind: "id", value: resumed ?? `sess-${pane.replace(/:/g, "-")}` }, argv };
   state.agents.push(agent);
   save(state);
   ok({ type: "agent_started", agent });

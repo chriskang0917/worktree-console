@@ -97,6 +97,7 @@ const { values, positionals } = parseArgs({
     target: { type: "string" },
     nickname: { type: "string" },
     title: { type: "string" },
+    to: { type: "string" },
   },
 });
 
@@ -969,6 +970,56 @@ function start() {
   if (!sent.ok) fail(`[${label}] 未開工：送首則指令失敗（${sent.code}）`);
 }
 
+const UNMOVABLE = { working: "正在執行", blocked: "在等你回應或授權", anomaly: "session 異常" };
+
+// 「把 <代號> 搬到 <工作區>」: the same conversation resumed in a tab of the target workspace, then the old tab closed.
+async function move() {
+  const query = positionals[0];
+  if (!query) fail("用法：console.mjs move --repo R <代號>[#n] [--to <工作區名稱>]");
+  const m = manager();
+  if (m.name !== "herdr") fail("只有 herdr 模式能搬 session");
+  const { rows } = load({ withStage: false }, { repoOptional: true });
+  const hits = matchSessions(rows, query).filter((h) => h.session?.handle);
+  if (hits.length !== 1) fail(`[${query}] ${hits.length === 0 ? "找不到對應的 session" : `對應到 ${hits.length} 個 session，請加 #n`}`);
+  const { row, session } = hits[0];
+  const tag = sessionTag(row, session);
+  const state = session.agent?.state;
+  if (state !== "done" && state !== "idle") fail(`[${tag}] 未搬：${UNMOVABLE[state] ?? "狀態不明"}，等它停下來再搬`);
+  const transcript = session.agent.transcript;
+  if (!transcript) fail(`[${tag}] 未搬：讀不到對話紀錄`);
+  const sessionId = path.basename(transcript, ".jsonl");
+  const dest = m.moveTarget(session.handle, row.path, values.to ?? null);
+  if (!dest.ok) fail(`[${tag}] 未搬：${dest.code === "no-workspace" ? `沒有叫「${dest.name}」的工作區` : dest.code}`);
+  if (dest.already) return print(`[${tag}] 已在工作區「${dest.name}」，不用搬`, 0);
+  const old = session.handle;
+  const created = m.create(row.path, { args: ["--resume", sessionId], label: tag, workspace: dest.workspace });
+  if (!created.ok) fail(`[${tag}] 未搬：開新分頁失敗（${created.code}），舊分頁保留`);
+  const handle = created.handle;
+  const abort = (why) => {
+    m.closeTab(handle);
+    fail(`[${tag}] 未搬：${why}，舊分頁保留`);
+  };
+  if (!created.ready) abort(`新分頁沒就緒（${created.code}）`);
+  const ready = m.waitReady(handle, 60000);
+  if (!ready.ok) abort(`新分頁沒就緒（${ready.code}）`);
+  let attached = false;
+  for (let i = 0; i < Number(process.env.MOVE_CHECK_TRIES || 15); i++) {
+    if (m.sessionOf(handle) === sessionId || sessionFor(handle) === sessionId) {
+      attached = true;
+      break;
+    }
+    await sleep(Number(process.env.MOVE_CHECK_MS ?? 1000));
+  }
+  if (!attached) abort("新分頁沒接上原對話");
+  logEvent("session", { repo: row.repo, ticket: tag, handle, paneKey: handle, sessionId, role: "child", source: "move", transcript, path: row.path, cwd: row.path });
+  const task = readTasks()[session.paneKey];
+  if (task) saveTask(paneOf(handle), task.title, handle);
+  const closed = m.closeTab(old);
+  logEvent("move", { repo: row.repo, ticket: tag, path: row.path, sessionId, oldHandle: old, newHandle: handle, workspace: dest.name, ok: closed.ok });
+  if (!closed.ok) fail(`[${tag}] 已在工作區「${dest.name}」接上（${handle}），但關舊分頁 ${old} 失敗（${closed.code}）`);
+  console.log(`[${tag}] 已搬到工作區「${dest.name}」：新分頁 ${handle}，舊分頁 ${old} 已關`);
+}
+
 const ACTUAL = [
   [/授權|允許|permission/i, "permission"],
   [/選單|回應|回答|問|waiting/i, "waiting"],
@@ -1047,6 +1098,7 @@ const commands = {
   distilled,
   open,
   start,
+  move,
   misjudge,
   "herdr-report": herdrReportCommand,
   title,

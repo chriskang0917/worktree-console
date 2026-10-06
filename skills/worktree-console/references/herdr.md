@@ -12,6 +12,7 @@
 | 票號 | 開工時中控台自記 worktree 路徑↔票號、暱稱、是否做需求訪談（`herdr-worktrees.json`）；沒記到的照 branch 名稱推 |
 | Linear | 一律用 `<base>/scripts/linear.mjs`（直接呼叫 Linear API，Orca 關著也能用），不用 `orca linear` |
 | 新 worktree 的位置 | herdr 設定檔 `[worktrees] directory`，沒設就是 `~/.herdr/worktrees/<repo>/<資料夾名稱>` |
+| 新分頁放哪個工作區 | 只看工作區名稱：放進名稱等於 repo 資料夾名的工作區（同名的有多個就選編號最小的），沒有就新開一個以 repo 名命名的工作區；分頁目前在哪個資料夾（cd 過）不影響 |
 | 狀態 | 多一種 **⚠️ session 異常，需手動排程**（見下） |
 
 ## 指令
@@ -20,6 +21,7 @@
 | --- | --- |
 | `console.mjs start --repo R --branch B --dir <資料夾名稱> [--ticket KEY-n \| --name <暱稱>] [--interview] -- <首則指令>` | herdr 模式的開工：建 worktree（預定 repo 已有 worktree 用著 B 就沿用、不改自記紀錄）、自記票號、在該 repo 的工作區開分頁啟動 claude、送首則指令。印 `worktree: <path>` 與 `terminal: <pane id>`；失敗印 `[票號] 未開工：<原因>` 並 exit 1 |
 | `console.mjs open --path P [--continue]` | 在沒有 claude 分頁的 worktree 開一個（`--continue` 接續上次對話），印 `terminal: <pane id>` |
+| `console.mjs move --repo R <代號>[#n] [--to <工作區名稱>]` | 使用者說「把 <代號> 搬到 <工作區>」或「把 <代號> 搬回去」時跑：在目標工作區開新分頁、`--resume` 接續同一段對話、登記到原對話檔與票號，接上後才關舊分頁。不帶 `--to` 搬回 repo 名的工作區（沒有就新開）；`--to` 的工作區不存在就拒絕、不新開；已在目的地就回一句不用搬。只搬停下來的 session（⏸、💬、💤），執行中、等授權、異常一律拒絕。輸出逐字轉貼；失敗時舊分頁保留 |
 | `console.mjs misjudge --repo R <代號>[#n] <實際狀態>` | 使用者說「<代號> 狀態錯了，其實是 X」時跑：記一筆人工誤判（看板當下顯示、herdr 原始狀態、使用者說的實際狀態），輸出逐字轉貼 |
 | `console.mjs herdr-report [--since 7d] [--out <檔案>] [--notes <試跑筆記.md>]` | 試跑評估報告（HTML），印報告路徑與結論段，原樣轉貼；`--notes` 把筆記裡每個 `- ` 開頭的行列成「試跑中發現的問題與處理」 |
 | `linear.mjs issue <票號>`、`linear.mjs todo` | 讀票（含母票與子票）、列待開工的票；加 `--json` 給程式讀 |

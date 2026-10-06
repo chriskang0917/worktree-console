@@ -299,11 +299,16 @@ function panesIn(snap, worktreePath) {
   return (snap.panes ?? []).filter((p) => inside(paneCwd(p), worktreePath));
 }
 
-// The workspace that already holds this repo, or a new one opened on the worktree.
-function workspaceFor(snap, worktreePath) {
-  const main = repoMain(worktreePath);
-  const here = panesIn(snap, worktreePath)[0] ?? (snap.panes ?? []).find((p) => main && repoMain(paneCwd(p)) === main);
-  return here?.workspace_id ?? null;
+const repoName = (worktreePath) => path.basename(repoMain(worktreePath) ?? worktreePath);
+const workspaceOrder = (id) => {
+  const n = parseInt(String(id).replace(/^w/, ""), 36);
+  return Number.isNaN(n) ? Number.POSITIVE_INFINITY : n;
+};
+
+// Only the name counts: a pane's folder follows every cd, a workspace's label doesn't.
+export function workspaceNamed(snap, name) {
+  const ids = (snap.workspaces ?? []).filter((w) => w.label === name).map((w) => w.workspace_id);
+  return ids.sort((a, b) => workspaceOrder(a) - workspaceOrder(b))[0] ?? null;
 }
 
 const agentName = (pane) => `c-${pane.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 32);
@@ -414,21 +419,43 @@ export const herdrTerminals = {
   key(handle, key) {
     return ok(runHerdr(["pane", "send-keys", handle, key]));
   },
-  create(worktreePath, { args = [], label = null, timeoutMs = 60000 } = {}) {
+  create(worktreePath, { args = [], label = null, workspace = null, timeoutMs = 60000 } = {}) {
     let snap;
     try {
       snap = herdrSnapshot();
     } catch (error) {
       return { ok: false, code: error.message };
     }
-    const ws = workspaceFor(snap, worktreePath);
+    const ws = workspace ?? workspaceNamed(snap, repoName(worktreePath));
     const opened = ws
       ? runHerdr(["tab", "create", "--workspace", ws, "--cwd", worktreePath, ...(label ? ["--label", label] : []), "--no-focus"])
-      : runHerdr(["workspace", "create", "--cwd", worktreePath, "--label", path.basename(repoMain(worktreePath) ?? worktreePath), "--no-focus"]);
+      : runHerdr(["workspace", "create", "--cwd", worktreePath, "--label", repoName(worktreePath), "--no-focus"]);
     const pane = opened.ok ? opened.result?.root_pane?.pane_id : null;
     if (!pane) return { ok: false, code: opened.error?.code ?? "沒有 pane" };
     const started = runHerdr(["agent", "start", agentName(pane), "--kind", "claude", "--pane", pane, "--timeout", String(timeoutMs), ...(args.length ? ["--", ...args] : [])]);
     return { ok: true, handle: pane, ready: started.ok, code: started.ok ? null : started.error?.code ?? "unknown" };
+  },
+  // A named workspace must already exist; without a name the repo's own one, null when it still has to be opened.
+  moveTarget(handle, worktreePath, to = null) {
+    let snap;
+    try {
+      snap = herdrSnapshot();
+    } catch (error) {
+      return { ok: false, code: error.message };
+    }
+    const name = to ?? repoName(worktreePath);
+    const workspace = workspaceNamed(snap, name);
+    if (to && !workspace) return { ok: false, code: "no-workspace", name };
+    const here = (snap.panes ?? []).find((p) => p.pane_id === handle)?.workspace_id ?? null;
+    return { ok: true, name, workspace, already: !!workspace && workspace === here };
+  },
+  sessionOf(handle) {
+    try {
+      const a = (herdrSnapshot().agents ?? []).find((x) => x.pane_id === handle);
+      return a?.agent_session?.kind === "id" ? a.agent_session.value : null;
+    } catch {
+      return null;
+    }
   },
   waitReady(handle, ms = 60000) {
     return ok(runHerdr(["agent", "wait", handle, "--until", "idle", "--until", "done", "--timeout", String(ms)]));

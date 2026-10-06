@@ -55,7 +55,7 @@ const call = (id, name, input, n = 1) => ({ type: "assistant", timestamp: ts(n),
 const result = (id, n = 2) => ({ type: "user", timestamp: ts(n), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
 
 // A fresh herdr world: a console pane in w1 plus one claude pane per entry of `agents`.
-function world(agents, { transcripts = {}, screens = {}, extraPanes = [] } = {}) {
+function world(agents, { transcripts = {}, screens = {}, extraPanes = [], workspaces = [{ workspace_id: "w1", label: "app" }] } = {}) {
   const dir = fs.mkdtempSync(path.join(tmp, "fake-"));
   const home = path.join(dir, "home");
   const projects = path.join(dir, "projects");
@@ -67,7 +67,7 @@ function world(agents, { transcripts = {}, screens = {}, extraPanes = [] } = {})
     panes.push({ pane_id: pane, tab_id: `${ws}:t${i + 2}`, workspace_id: ws, cwd: a.cwd, foreground_cwd: a.cwd, agent: "claude", agent_status: a.status });
     list.push({ agent: "claude", name: `a${i}`, pane_id: pane, cwd: a.cwd, agent_status: a.status, ...(a.session ? { agent_session: { kind: "id", value: a.session } } : {}) });
   });
-  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ panes, agents: list, workspaces: [{ workspace_id: "w1" }] }));
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ panes, agents: list, workspaces }));
   const env = { CLAUDE_PROJECTS_DIR: projects };
   for (const [session, { cwd, entries, raw }] of Object.entries(transcripts)) {
     const prev = process.env.CLAUDE_PROJECTS_DIR;
@@ -330,6 +330,113 @@ test("open --continue 在沒有分頁的 worktree 開 claude 並帶參數", () =
   assert.equal(res.code, 0, res.out);
   assert.match(res.out, /^terminal: w1:p\d+$/);
   assert.deepEqual(w.state().agents.at(-1).argv, ["--continue"]);
+});
+
+const opens = (w) => w.calls().filter((c) => (c[0] === "tab" || c[0] === "workspace") && c[1] === "create");
+const closes = (w) => w.calls().filter((c) => c[0] === "pane" && c[1] === "close").map((c) => c[2]);
+
+test("工作區選擇：只看名稱等於 repo 資料夾名的工作區，pane cd 到該 repo 不影響；沒有同名工作區就新開一個", () => {
+  const strayPane = [{ pane_id: "w1:p8", tab_id: "w1:t8", workspace_id: "w1", cwd: app(), foreground_cwd: wt("proj-201-menu") }];
+  const named = world([], { extraPanes: strayPane, workspaces: [{ workspace_id: "w1", label: "worktree-console" }, { workspace_id: "w9", label: "app" }] });
+  const res = named.run(["open", "--path", wt("proj-205-idle")], { HERDR_WORKSPACE_ID: "w1" });
+  assert.equal(res.code, 0, res.out);
+  assert.match(res.out, /^terminal: w9:p\d+$/);
+  assert.deepEqual(opens(named).map((c) => c.slice(0, 4)), [["tab", "create", "--workspace", "w9"]]);
+
+  const none = world([], { extraPanes: strayPane, workspaces: [{ workspace_id: "w1", label: "worktree-console" }] });
+  const fresh = none.run(["open", "--path", wt("proj-205-idle")]);
+  assert.equal(fresh.code, 0, fresh.out);
+  const [made] = opens(none);
+  assert.deepEqual([made[0], made[1], made[made.indexOf("--label") + 1]], ["workspace", "create", "app"]);
+  const ws = none.state().workspaces.find((x) => x.label === "app").workspace_id;
+  assert.equal(none.state().panes.find((p) => p.pane_id === fresh.out.replace("terminal: ", "")).workspace_id, ws);
+});
+
+test("工作區選擇：同名工作區有多個時選編號最小的", () => {
+  const w = world([], { workspaces: [{ workspace_id: "wB", label: "app" }, { workspace_id: "w10", label: "app" }, { workspace_id: "w9", label: "app" }, { workspace_id: "w2", label: "apps" }] });
+  assert.equal(w.run(["open", "--path", wt("proj-205-idle")]).code, 0);
+  assert.deepEqual(opens(w).map((c) => c.slice(0, 4)), [["tab", "create", "--workspace", "w9"]]);
+});
+
+const DONE = { cwd: wt("proj-205-idle"), entries: [user("跑測試"), said("測試全過，搬家前最後一則。", 3)] };
+const stray = (status = "done", pane = "w1:p2", workspaces = [{ workspace_id: "w1", label: "worktree-console" }, { workspace_id: "w9", label: "app" }]) =>
+  world([{ cwd: wt("proj-205-idle"), status, session: "s-done", pane }], { transcripts: { "s-done": DONE }, workspaces });
+
+test("搬 session：目標工作區開新分頁 --resume 原對話、登記到原對話檔與票號、接上後關舊分頁，看板同一張卡讀得到最後回覆", () => {
+  const w = stray();
+  w.run(["title", "--terminal", "w1:p2", "--", "跑測試任務"]);
+  const res = w.run(["move", "--repo", app(), "PROJ-205"], { MOVE_CHECK_MS: "0" });
+  assert.equal(res.code, 0, res.out + res.err);
+  const fresh = w.state().agents.find((a) => a.pane_id !== "w1:p2" && a.cwd === wt("proj-205-idle"));
+  assert.equal(res.out, `[PROJ-205] 已搬到工作區「app」：新分頁 ${fresh.pane_id}，舊分頁 w1:p2 已關`);
+  assert.equal(fresh.pane_id.split(":")[0], "w9");
+  assert.deepEqual(fresh.argv, ["--resume", "s-done"]);
+  assert.equal(w.state().panes.some((p) => p.pane_id === "w1:p2"), false, "舊分頁已關");
+  const log = path.join(w.dir, "log");
+  const events = fs.readdirSync(log).filter((f) => f.endsWith(".jsonl")).flatMap((f) => fs.readFileSync(path.join(log, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)));
+  const reg = events.find((e) => e.event === "session" && e.handle === fresh.pane_id);
+  assert.deepEqual([reg.sessionId, reg.ticket, reg.source, path.basename(reg.transcript)], ["s-done", "PROJ-205", "move", "s-done.jsonl"]);
+  const tasks = JSON.parse(fs.readFileSync(path.join(w.home, fs.readdirSync(w.home).find((f) => /task/.test(f))), "utf8"));
+  assert.equal(tasks[fresh.pane_id]?.title, "跑測試任務", "專注卡的任務標題跟著新分頁");
+  const board = w.run(["board", "--repo", app()]).out;
+  assert.match(board, /\| ⏸ 回覆完畢 \| PROJ-205 \|[^\n]*測試全過/);
+  assert.doesNotMatch(board, /session 異常/);
+
+  const home = stray("done", "w1:p2", [{ workspace_id: "w1", label: "worktree-console" }]);
+  const opened = home.run(["move", "--repo", app(), "PROJ-205"], { MOVE_CHECK_MS: "0" });
+  assert.equal(opened.code, 0, opened.out);
+  assert.deepEqual(opens(home).map((c) => [c[0], c[c.indexOf("--label") + 1]]), [["workspace", "app"]], "沒有 repo 名的工作區就新開一個");
+});
+
+test("搬 session：--to 指定已存在的工作區；名稱不存在就拒絕不新開；已在目的地就不動任何分頁", () => {
+  const to = stray("done", "w9:p2");
+  const res = to.run(["move", "--repo", app(), "PROJ-205", "--to", "worktree-console"], { MOVE_CHECK_MS: "0" });
+  assert.equal(res.code, 0, res.out);
+  assert.deepEqual(opens(to).map((c) => c.slice(0, 4)), [["tab", "create", "--workspace", "w1"]]);
+
+  const typo = stray();
+  const bad = typo.run(["move", "--repo", app(), "PROJ-205", "--to", "ap"]);
+  assert.equal(bad.code, 1);
+  assert.equal(bad.out, "[PROJ-205] 未搬：沒有叫「ap」的工作區");
+  assert.deepEqual([opens(typo), closes(typo)], [[], []]);
+
+  const there = stray("done", "w9:p2");
+  const same = there.run(["move", "--repo", app(), "PROJ-205"]);
+  assert.equal(same.code, 0);
+  assert.equal(same.out, "[PROJ-205] 已在工作區「app」，不用搬");
+  assert.deepEqual([opens(there), closes(there)], [[], []]);
+});
+
+test("搬 session：新分頁沒開起來或沒接上原對話就不關舊分頁並回報原因", () => {
+  const lost = stray();
+  const res = lost.run(["move", "--repo", app(), "PROJ-205"], { FAKE_HERDR_RESUME_LOST: "1", MOVE_CHECK_TRIES: "2", MOVE_CHECK_MS: "0" });
+  assert.equal(res.code, 1);
+  assert.equal(res.out, "[PROJ-205] 未搬：新分頁沒接上原對話，舊分頁保留");
+  assert.ok(lost.state().panes.some((p) => p.pane_id === "w1:p2"), "舊分頁保留");
+  assert.deepEqual(closes(lost).includes("w1:p2"), false);
+
+  const dead = stray();
+  const failed = dead.run(["move", "--repo", app(), "PROJ-205"], { FAKE_HERDR_START_FAIL: "1" });
+  assert.equal(failed.code, 1);
+  assert.match(failed.out, /^\[PROJ-205\] 未搬：新分頁沒就緒（agent_not_ready），舊分頁保留$/);
+  assert.ok(dead.state().panes.some((p) => p.pane_id === "w1:p2"));
+});
+
+test("搬 session：working、blocked、異常一律拒絕並說原因，不開也不關任何分頁", () => {
+  for (const [status, why] of [["working", "正在執行"], ["blocked", "session 異常"], ["unknown", "session 異常"]]) {
+    const w = world([{ cwd: wt("proj-205-idle"), status, pane: "w1:p2" }], { workspaces: [{ workspace_id: "w1", label: "worktree-console" }, { workspace_id: "w9", label: "app" }] });
+    const res = w.run(["move", "--repo", app(), "PROJ-205"]);
+    assert.equal(res.code, 1, status);
+    assert.equal(res.out, `[PROJ-205] 未搬：${why}，等它停下來再搬`);
+    assert.deepEqual([opens(w), closes(w)], [[], []], status);
+  }
+  const asking = world([{ cwd: wt("proj-201-menu"), status: "blocked", session: "s-menu", pane: "w1:p2" }], {
+    transcripts: { "s-menu": { cwd: wt("proj-201-menu"), entries: [user("挑顏色"), call("t1", "AskUserQuestion", { questions: MENU })] } },
+    workspaces: [{ workspace_id: "w1", label: "worktree-console" }, { workspace_id: "w9", label: "app" }],
+  });
+  const res = asking.run(["move", "--repo", app(), "PROJ-201"]);
+  assert.equal(res.out, "[PROJ-201] 未搬：在等你回應或授權，等它停下來再搬");
+  assert.deepEqual([opens(asking), closes(asking)], [[], []]);
 });
 
 test("console-log hook 在 herdr 用 HERDR_PANE_ID 登記分頁與 session", () => {
