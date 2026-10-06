@@ -1,0 +1,511 @@
+import type { EngineInterface, Register } from 'claude-code'
+
+type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
+
+type Session = {
+  key: string
+  tag: string
+  repo: string
+  status: Status
+  stage: string
+  summary: string
+  question: string
+  options: string[]
+  archived: boolean
+  pending: boolean
+  report: string
+}
+
+type Focus = {
+  active: boolean
+  home?: string
+  current?: string | null
+  announce?: string | null
+  announceKey?: string | null
+  waiting?: { tag: string | null; seconds: number } | null
+  queue?: { key: string; isNew: boolean }[]
+  unreadable?: string | null
+  sessions?: Session[]
+}
+
+type Tab = 'pending' | 'all' | 'hidden' | 'idle'
+
+const POLL_MS = 5_000
+const IDLE_EVERY = 3
+const PANE = 'worktree-console-pending'
+const PANE_TITLE = '中控台'
+const QUEUE_MAX = 5
+const TOAST_MAX = 30
+const SUMMARY_MAX = 20
+const CORNER_GAP = 2
+const REPO_MIN = 4
+const SENT_MAX = 50
+const MISS_TOAST = 3
+const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+const LETTERS = 'abcdefghijklmnopqrstuvwxyz'
+const FOOTER = 'qwer 切分頁　1-9,0/↑↓ 選卡片'
+// Rows of the pane above the cards: the tab row and its gap.
+const CHROME = 2
+// The keys line after the last card and the gap above it, drawn only once the cards are scrolled to the end.
+const FOOT = 2
+
+const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean }[] = [
+  { id: 'pending', key: 'q', label: '待回覆', pick: s => s.pending },
+  { id: 'all', key: 'w', label: '全部', pick: s => !s.archived && s.status !== '閒置' },
+  { id: 'hidden', key: 'e', label: '封存', pick: s => s.archived },
+  { id: 'idle', key: 'r', label: '閒置', pick: s => s.status === '閒置' },
+]
+
+const STATUS_BG: Record<Status, string> = { 等待回應: '#3b3624', 等待授權: '#3e2a2a', 回覆完畢: '#26323f', 執行中: '#263a2d', 閒置: '#303030' }
+const STAGE_BG: Record<string, string> = { 未開工: '#303030', 規劃中: '#352c40', 實作中: '#24363a', '已 push': '#28382c' }
+const TAG_FG = '#c8c8c8'
+const EMPTY = '目前沒有符合條件的 session'
+const EMPTY_BORDER = '#4a4a4a'
+
+const width = (t: string) => [...t].reduce((n, c) => n + (c.codePointAt(0)! > 0x2e80 ? 2 : 1), 0)
+
+function cut(text: string, max: number): string {
+  if (width(text) <= max) return text
+  let out = ''
+  for (const c of text) {
+    if (width(out + c) > max - 1) break
+    out += c
+  }
+  return `${out}…`
+}
+
+function lineCount(text: string, w: number): number {
+  return text.split('\n').reduce((n, para) => {
+    let lines = 1
+    let used = 0
+    for (const tok of para.match(/[\u2e80-\uffff]|[^\s\u2e80-\uffff]+|\s+/g) ?? []) {
+      const tw = width(tok)
+      if (used + tw <= w) used += tw
+      else if (/^\s/.test(tok)) (lines += 1), (used = 0)
+      else if (tw <= w) (lines += 1), (used = tw)
+      else {
+        if (used > 0) lines += 1
+        lines += Math.ceil(tw / w) - 1
+        used = tw % w || w
+      }
+    }
+    return n + lines
+  }, 0)
+}
+
+let focus: Focus = { active: false }
+let tab: Tab = 'pending'
+let sel: string | null = null
+let top = 0
+let follow = true
+let frame: { cols: number; avail: number } | null = null
+let ring: string[] = []
+let held: number | null = null
+let known: Set<string> | null = null
+let tick = 0
+let sessionId = ''
+const sent: string[] = []
+const misses = new Map<string, number>()
+
+const sessions = () => focus.sessions ?? []
+const byKey = (key: string | null | undefined) => sessions().find(s => s.key === key) ?? null
+const queueOf = () => (focus.queue ?? []).flatMap(q => (byKey(q.key) ? [{ ...byKey(q.key)!, isNew: q.isNew }] : []))
+
+// 待回覆 always follows the band: the question on screen first, then the queue in order.
+function rowsOf(t: Tab): Session[] {
+  if (t !== 'pending') return sessions().filter(TABS.find(x => x.id === t)!.pick)
+  return [byKey(focus.current), ...queueOf()].filter((s): s is Session => !!s)
+}
+
+const optionsText = (s: Session) => s.options.map((o, j) => `${LETTERS[j]}. ${o}`).join('　')
+const chosenOf = (rows: Session[]) => (rows.some(r => r.key === sel) ? sel : (rows[0]?.key ?? null))
+
+// 待回覆 numbers the queue as the band does (the question on screen gets none); the other tabs number by place.
+function numberOf(t: Tab, i: number): string | undefined {
+  if (t !== 'pending') return DIGITS[i]
+  const n = byKey(focus.current) ? i - 1 : i
+  return n < 0 ? undefined : DIGITS[n]
+}
+
+// A card's rows as drawn: frame, header, gap, question, options, gap, corner line; plus its repo rule outside 待回覆.
+function blockRows(rows: Session[], i: number, first: number, cols: number): number {
+  const r = rows[i]!
+  const inner = Math.max(1, cols - 6)
+  const card = 6 + lineCount(r.question, inner) + (r.options.length > 0 ? lineCount(optionsText(r), inner) : 0)
+  const rule = tab !== 'pending' && (i === first || r.repo !== rows[i - 1]!.repo) ? (i === first ? 1 : 2) : 0
+  return card + rule
+}
+
+function fits(rows: Session[], from: number, to: number, cols: number, avail: number, extra = 0): boolean {
+  let used = extra
+  for (let i = from; i <= to; i++) used += blockRows(rows, i, from, cols)
+  return used <= avail
+}
+
+function endOf(rows: Session[], from: number): number {
+  if (!frame) return rows.length
+  let end = Math.min(rows.length, from + 1)
+  while (end < rows.length && fits(rows, from, end, frame.cols, frame.avail)) end += 1
+  return end
+}
+
+// The first card when scrolled to the end, where the last cards and the keys line under them fit.
+function lastTop(rows: Session[]): number {
+  if (!frame) return 0
+  let last = Math.max(0, rows.length - 1)
+  while (last > 0 && fits(rows, last - 1, rows.length - 1, frame.cols, frame.avail, FOOT)) last -= 1
+  return last
+}
+
+function clampTop(rows: Session[]) {
+  top = Math.max(0, Math.min(top, lastTop(rows)))
+}
+
+function reveal(rows: Session[], i: number) {
+  if (!frame || i < 0) return
+  if (i < top) top = i
+  while (top < i && !fits(rows, top, i, frame.cols, frame.avail)) top += 1
+  if (i === rows.length - 1) top = Math.max(top, lastTop(rows))
+}
+
+function run($: EngineInterface, args: string[]) {
+  return $.process.run(['node', `${$.plugin.root}/skills/worktree-console/scripts/console.mjs`, ...args], { timeoutMs: 60_000 })
+}
+
+// Must match stopId in mods/focus-show: names one stop so /focus-show can tell it is still on the band when it finally runs.
+const stopId = (key: string) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36)
+
+// Prints one question's full report through the focus-show mod, never through the model. A stop counts as printed only when
+// /focus-show answered with its report; anything else is sent again on the next poll, with a toast after 3 misses in a row.
+async function show($: EngineInterface, tag: string, key: string | null = null) {
+  const s = sessions().find(x => x.tag === tag)
+  if (!s || !focus.home) return
+  await $.fs.write(`${focus.home}/show/${encodeURIComponent(tag)}.md`, s.report)
+  const id = key && stopId(key)
+  if (id) await $.fs.write(`${focus.home}/show/${encodeURIComponent(tag)}@${id}.md`, s.report)
+  const res = await $.command.run({ command: 'focus-show', args: id ? `${tag} ${id}` : tag }).catch(() => null)
+  if (!key) {
+    if (!res) $.ui.toast('印不出題目：需要另外安裝 focus-show')
+    return
+  }
+  if (res?.text === s.report) {
+    misses.delete(key)
+    await run($, ['focus-shown', key]).catch(() => {})
+    return
+  }
+  if (res?.text) return
+  const i = sent.indexOf(key)
+  if (i >= 0) sent.splice(i, 1)
+  const n = (misses.get(key) ?? 0) + 1
+  misses.set(key, n)
+  if (n !== MISS_TOAST) return
+  const installed = res || (await $.command.list().catch(() => [])).some(c => c.name === 'focus-show')
+  $.ui.toast(installed ? `[${tag}] 題目沒印出，按 Enter 印` : '印不出題目：需要另外安裝 focus-show')
+}
+
+// A poll repeats an announce until `focus-shown` lands, which can wait on the console's turn; a press always prints.
+async function announce($: EngineInterface, next: Focus, pressed: boolean) {
+  const key = next.announceKey ?? null
+  if (!next.announce || (key && !pressed && sent.includes(key))) return
+  if (key && !sent.includes(key)) {
+    sent.push(key)
+    if (sent.length > SENT_MAX) sent.shift()
+  }
+  void show($, next.announce, key)
+}
+
+async function apply($: EngineInterface, next: Focus, pressed = false) {
+  if (next.active) {
+    const live = [next.current, ...(next.queue ?? []).map(q => q.key)].filter((k): k is string => !!k)
+    for (const q of next.queue ?? []) {
+      const s = next.sessions?.find(x => x.key === q.key)
+      if (known && s && !known.has(q.key)) $.ui.toast(`${s.tag} 進排隊：${cut(s.question.replace(/\s+/g, ' '), TOAST_MAX)}`)
+    }
+    known = new Set(live)
+    // A stop that left the band before /focus-show ran was not printed; the console announces it again once it is back.
+    for (let i = sent.length - 1; i >= 0; i--) if (sent[i] !== next.current) sent.splice(i, 1)
+    for (const k of misses.keys()) if (k !== next.current) misses.delete(k)
+  }
+  focus = next
+  if (next.active) await announce($, next, pressed)
+  $.ui.invalidate('ui.render')
+}
+
+async function poll($: EngineInterface) {
+  let next: Focus = { active: false }
+  try {
+    next = JSON.parse((await run($, ['focus', ...(sessionId ? ['--session', sessionId] : [])])).stdout)
+  } catch {}
+  await apply($, next)
+}
+
+async function act($: EngineInterface, args: string[]) {
+  try {
+    await apply($, JSON.parse((await run($, args)).stdout), true)
+  } catch {}
+}
+
+function showTab(t: Tab) {
+  tab = t
+  sel = t === 'pending' ? (focus.current ?? null) : (rowsOf(t)[0]?.key ?? null)
+  top = 0
+  follow = true
+}
+
+const focusSel = ($: EngineInterface) => sel && void $.ui.focus({ requestId: PANE, key: `name:${sel}` }).catch(() => {})
+
+async function openPane($: EngineInterface, t: Tab = 'pending') {
+  showTab(t)
+  return $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
+}
+
+// A card's number only chooses it: on a card waiting on you that switches the band to it (and the switch prints it).
+async function pickCard($: EngineInterface, s: Session) {
+  sel = s.key
+  follow = true
+  if (s.pending && s.key !== focus.current) await act($, ['focus-pick', s.key])
+  $.ui.invalidate('ui.render')
+  void $.ui.focus({ requestId: PANE, key: `name:${s.key}` }).catch(() => {})
+}
+
+// Enter on a card, or a click on its nickname, prints the question; on a card waiting on you that is not on the band, it switches first.
+async function printCard($: EngineInterface, s: Session) {
+  sel = s.key
+  if (s.pending && s.key !== focus.current) await act($, ['focus-pick', s.key])
+  else void show($, s.tag, s.key === focus.current ? s.key : null)
+  $.ui.invalidate('ui.render')
+}
+
+// The 封存 tab's button: runs `console.mjs unarchive` straight from the mod, so nothing reaches the conversation.
+async function unarchiveCard($: EngineInterface, s: Session) {
+  try {
+    await run($, ['unarchive', s.tag])
+  } catch {}
+  await poll($)
+}
+
+const countsText = () => {
+  const count = (s: Status) => sessions().filter(x => !x.archived && x.status === s).length
+  return `執行中 ${count('執行中')}  回覆完畢 ${count('回覆完畢')}`
+}
+
+// The worktree-console focus band: polls `console.mjs focus`, draws the question on screen, the queue, the side pane and the counts.
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || (await $.env.get('HERDR_ENV')) === '1') {
+      sessionId = await $.session.id().catch(() => '')
+      void poll($)
+      $.clock.every(POLL_MS, () => {
+        tick += 1
+        if (focus.active || tick % IDLE_EVERY === 0) void poll($)
+      })
+    }
+    return next(e)
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (!focus.active || e.text.trim() !== '狀態') return next(e)
+    const opened = await openPane($, 'all')
+    if (!opened.isPlaced) return next(e)
+    if (focus.unreadable) $.ui.toast(focus.unreadable)
+    return { drop: '狀態已開在側邊面板' }
+  })
+
+  // The engine walks ↑↓ one Button back or forth through the pane, keeping its place by index: a step from where it held is one card up or down.
+  on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const m = /^(num|name):(.+)$/.exec(e.element ?? '')
+    const rows = rowsOf(tab)
+    const chosen = chosenOf(rows)
+    const n = ring.length
+    const to = ring.indexOf(e.element ?? '')
+    const from = held !== null && held < n ? held : null
+    const dir =
+      e.origin.kind !== 'person' || to < 0 ? 0 : from === null ? (to === 0 ? 1 : to === n - 1 ? -1 : 0) : to === (from + 1) % n ? 1 : to === (from - 1 + n) % n ? -1 : 0
+    const i = rows.findIndex(r => r.key === chosen)
+    const target = dir !== 0 && i >= 0 ? rows[Math.max(0, Math.min(rows.length - 1, i + dir))] : rows.find(r => r.key === m?.[2])
+    if (!target) {
+      const res = await next(e)
+      if (!res.deny) held = to < 0 ? null : to
+      return res
+    }
+    sel = target.key
+    reveal(rows, rows.indexOf(target))
+    $.ui.invalidate('ui.render')
+    const want = `name:${target.key}`
+    const res = await next({ ...e, element: want })
+    if (!res.deny) held = ring.indexOf(want)
+    return res
+  })
+
+  // The pane keeps its own window over the cards, the keys line riding after the last one: the wheel moves a card, a page key a screenful.
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    if (!focus.active || !frame) return next(e)
+    const rows = rowsOf(tab)
+    const page = !e.pointer && Math.abs(e.by) >= e.bodyRows
+    top += Math.sign(e.by) * (page ? Math.max(1, endOf(rows, top) - top) : 1)
+    clampTop(rows)
+    $.ui.invalidate('ui.render')
+    return {}
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    if (!focus.active) return <Text dimColor>中控台沒有在專注模式</Text>
+    const cols = e.props.bodyColumns
+    const dock = e.props.placement === 'dock'
+    const rows = rowsOf(tab)
+    const chosen = chosenOf(rows)
+    frame = dock ? { cols, avail: Math.max(1, e.props.scroll.bodyRows - CHROME) } : null
+    if (chosen !== sel) (sel = chosen), (follow = true)
+    if (follow) reveal(rows, rows.findIndex(r => r.key === chosen))
+    follow = false
+    clampTop(rows)
+    const end = endOf(rows, top)
+    ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
+    const tabs = (
+      <Box key="tabs" flexDirection="row" columnGap={2} marginBottom={1}>
+        {TABS.map(x => (
+          <Button
+            key={`tab:${x.id}`}
+            hotkey={x.key}
+            label={`${x.label} ${rowsOf(x.id).length}`}
+            plain
+            dimColor={x.id !== tab}
+            onPress={() => {
+              showTab(x.id)
+              $.ui.invalidate('ui.render')
+              focusSel($)
+            }}
+          />
+        ))}
+      </Box>
+    )
+    const hidden = tab === 'hidden'
+    const press = (r: Session) => (hidden ? unarchiveCard($, r) : printCard($, r))
+    const inner = Math.max(1, cols - 6)
+    const card = (r: Session, i: number) => {
+      const isSel = r.key === chosen
+      const num = numberOf(tab, i)
+      const tagRoom = inner - width(` ${r.status} `) - width(` ${r.stage} `) - 3 - (hidden ? width('取消封存') + 2 : 0)
+      const tag = cut(r.tag, Math.max(1, tagRoom))
+      const summary = cut(r.summary, Math.min(SUMMARY_MAX, inner))
+      const room = inner - width(summary) - CORNER_GAP
+      const repo = tab === 'pending' && room >= REPO_MIN ? cut(r.repo, room) : ''
+      return (
+        <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} borderStyle={isSel ? 'double' : 'round'} borderColor={isSel ? 'cyanBright' : '#7a7a7a'} paddingX={2}>
+          <Box flexDirection="row" justifyContent="space-between">
+            <Box flexDirection="row">
+              {num && <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} />}
+              {hidden && <Text>{`${tag}  `}</Text>}
+              <Button key={`name:${r.key}`} label={hidden ? '取消封存' : tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} />
+              <Text>  </Text>
+              <Text backgroundColor={STATUS_BG[r.status]} color={TAG_FG} wrap="truncate-end">{` ${r.status} `}</Text>
+            </Box>
+            <Text backgroundColor={STAGE_BG[r.stage] ?? '#303030'} color={TAG_FG} wrap="truncate-end">{` ${r.stage} `}</Text>
+          </Box>
+          <Box marginTop={1}>
+            <Text wrap="wrap" bold={isSel}>{r.question}</Text>
+          </Box>
+          {r.options.length > 0 && <Text wrap="wrap">{optionsText(r)}</Text>}
+          <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
+            <Box key={`corner:${r.key}`}>
+              <Text dimColor wrap="truncate-end">{repo || ' '}</Text>
+            </Box>
+            <Box key={`summary:${r.key}`}>
+              <Text dimColor wrap="truncate-end">{summary}</Text>
+            </Box>
+          </Box>
+        </Box>
+      )
+    }
+    const empty = (
+      <Box key="empty" width={cols} borderStyle="round" borderColor={EMPTY_BORDER} paddingY={1}>
+        <Text dimColor>{`${' '.repeat(Math.max(0, Math.floor((cols - 2 - width(EMPTY)) / 2)))}${EMPTY}`}</Text>
+      </Box>
+    )
+    const body = rows.slice(top, end).flatMap((r, j) => {
+      const i = top + j
+      const out = []
+      if (tab !== 'pending' && (j === 0 || r.repo !== rows[i - 1]!.repo)) {
+        const tail = ` 共 ${sessions().filter(x => x.repo === r.repo).length} 個`
+        out.push(
+          <Box key={`repo:${r.repo}`} flexShrink={0} marginTop={j === 0 ? 0 : 1}>
+            <Text dimColor wrap="truncate-end">{`── ${r.repo} ${'─'.repeat(Math.max(2, cols - width(r.repo) - width(tail) - 4))}${tail}`}</Text>
+          </Box>,
+        )
+      }
+      out.push(card(r, i))
+      return out
+    })
+    // Cards scrolled out of the window keep their buttons, in order and zero rows tall, so their numbers work and the ring keeps its places.
+    const offscreen = (key: string, part: Session[], from: number) => (
+      <Box key={key} height={0} flexShrink={0} overflow="hidden">
+        {part.flatMap((r, j) => {
+          const num = numberOf(tab, from + j)
+          return [
+            ...(num ? [<Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} />] : []),
+            <Button key={`name:${r.key}`} label="" plain onPress={() => press(r)} />,
+          ]
+        })}
+      </Box>
+    )
+    return (
+      <Box flexDirection="column" height={dock ? e.props.scroll.bodyRows : undefined}>
+        {tabs}
+        <Box key="cards" flexDirection="column" flexShrink={1} overflow="hidden">
+          {offscreen('above', rows.slice(0, top), 0)}
+          {rows.length === 0 ? empty : body}
+          {offscreen('below', rows.slice(end), end)}
+        </Box>
+        {top >= lastTop(rows) && (
+          <Box key="footer" flexShrink={0} marginTop={1} paddingLeft={1}>
+            <Text dimColor>{FOOTER}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+  })
+
+  // The console's counts sit after 「auto mode on」 under the prompt box; any other session keeps the engine's hint.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    if (!focus.active) return next(e)
+    return next({ ...e, props: { ...e.props, tail: countsText() } })
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (!focus.active || e.props.hasSurvey) return next(e)
+    const cur = byKey(focus.current)
+    const queue = queueOf().slice(0, QUEUE_MAX)
+    if (!cur && queue.length === 0 && !focus.waiting) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const room = Math.max(1, e.props.bodyColumns - 2) * Math.max(1, e.props.maxRows - 3)
+    return (
+      <Box flexDirection="column" paddingLeft={2} marginTop={1}>
+        {cur ? (
+          <Box key="head" flexDirection="row">
+            <Text backgroundColor={STATUS_BG[cur.status]} color={TAG_FG}>{` ${cur.status} `}</Text>
+            <Text> </Text>
+            <Button key="show-tag" label={cur.tag} plain onPress={() => void show($, cur.tag, cur.key)} />
+            <Text> </Text>
+            <Text backgroundColor={STAGE_BG[cur.stage] ?? '#303030'} color={TAG_FG}>{` ${cur.stage} `}</Text>
+          </Box>
+        ) : (
+          <Text key="head" dimColor>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>
+        )}
+        {cur && (
+          <Text key="question" wrap="wrap">
+            {cut(cur.question, room)}
+          </Text>
+        )}
+        <Box key="keys" flexDirection="row" flexWrap="wrap" columnGap={2}>
+          <Button key="pane" hotkey="0" label="面板" plain onPress={() => void openPane($)} />
+          {queue.map((q, i) => (
+            <Button key={`queue:${i}`} hotkey={String(i + 1)} label={`${q.tag}${q.isNew ? ' ✨' : ''}`} plain dimColor onPress={() => act($, ['focus-pick', q.key])} />
+          ))}
+          {cur && queue.length > 0 && <Button key="later" hotkey="8" label="延後處理" plain onPress={() => act($, ['focus-later'])} />}
+          {cur && <Button key="show" hotkey="9" label="顯示問題" plain onPress={() => void show($, cur.tag, cur.key)} />}
+        </Box>
+      </Box>
+    )
+  })
+}

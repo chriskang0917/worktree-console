@@ -1,0 +1,21 @@
+{
+  "id": "captured-2026-10-03",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_memory",
+      "status": "running",
+      "tail": [
+        "✽ Frolicking… (3s · thinking with medium effort)",
+        "  ⎿  Tip: Send messages to Claude while it works to steer Claude in real-time",
+        "                                                                                                    ◐ medium · /effort",
+        "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "❯ ",
+        "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  \\~/orca/workspaces/agent-skills/console-reply-memory  feat/console-reply-memory  Opus 5.5  80% left",
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent"
+      ],
+      "draft": ""
+    }
+  }
+}

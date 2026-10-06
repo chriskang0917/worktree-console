@@ -1,0 +1,36 @@
+{
+  "id": "ca4a76ad-13ee-4b8a-9efb-30342f563576",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_06b56664-b529-495f-a8ba-b1aac8e4fbed",
+      "status": "running",
+      "tail": [
+        "❯ 用 Bash 前景執行 python3 -c 'import time; time.sleep(30)'（不要背景），完成後只回覆：完成",
+        "⏺ Bash(python3 -c 'import time; time.sleep(30)')",
+        "  ⎿  (No output)",
+        "⏺ Background command \"Wait 25 seconds\" completed (exit code 0)",
+        "❯ 排隊測試二：之後請回覆收到",
+        "⏺ 完成",
+        "  收到",
+        "  （背景的 sleep 25 也已結束：完成）",
+        "✻ Cooked for 33s · done 12:05 PM",
+        "❯ /workflows",
+        "─────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  Dynamic workflows",
+        "  No dynamic workflows in this session.",
+        "  Esc to close"
+      ],
+      "truncated": true,
+      "limited": false,
+      "oldestCursor": "1885",
+      "nextCursor": "3885",
+      "latestCursor": "3885",
+      "returnedLineCount": 14,
+      "source": "screen"
+    }
+  },
+  "_meta": {
+    "runtimeId": "9367a505-a9c6-46b3-b6e7-2e9704395b36"
+  }
+}

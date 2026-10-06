@@ -1,0 +1,50 @@
+{
+  "id": "0a14116c-cf14-4c4f-851f-30b723d341ad",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_06b56664-b529-495f-a8ba-b1aac8e4fbed",
+      "status": "running",
+      "tail": [
+        "▝▜██████▀  Opus 5.5 with medium effort · Claude Max",
+        " ▝▝   ▝▝   ~/orca/workspaces/agent-skills/feat-console-verify-send",
+        "  ⎿  SessionStart:startup says: speak-human: on for summaries, HTML, proposals and rebuttals.",
+        "❯ 請只回覆一個字：好",
+        "⏺ 好",
+        "✻ Brewed for 1s · done 12:04 PM",
+        "❯ 用 Bash 執行 sleep 25，完成後只回覆：完成",
+        "⏺ Bash(sleep 25)",
+        "  ⎿  Running in the background (↓ to manage)",
+        "⏺ sleep 25 改在背景執行（前景 sleep 會被擋），結束時我會收到通知，到時再回覆「完成」。",
+        "✻ Worked for 4s · done 12:05 PM",
+        "❯ 排隊測試：之後請回覆收到",
+        "⏺ 收到",
+        "✻ Crunched for 1s · done 12:05 PM",
+        "❯ 用 Bash 前景執行 python3 -c 'import time; time.sleep(30)'（不要背景），完成後只回覆：完成",
+        "  Bash(python3 -c 'import time; time.sleep(30)')",
+        "  ⎿  Running… (16s)",
+        "     (ctrl+b to run in background)",
+        "❯ 排隊測試二：之後請回覆收到",
+        "  ctrl+enter to send now",
+        "✽ Nucleating… (18s · ↓ 101 tokens)",
+        "  ⎿  Tip: You have free guest passes to share · /passes",
+        "─────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "❯",
+        "─────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  \\~/orca/workspaces/agent-skills/feat-console-verify-send  feat/console-verify-send  Opus 5.5  95…",
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
+      ],
+      "truncated": true,
+      "limited": false,
+      "oldestCursor": "311",
+      "nextCursor": "2311",
+      "latestCursor": "2311",
+      "returnedLineCount": 27,
+      "source": "screen",
+      "draft": "Press up to edit queued messages"
+    }
+  },
+  "_meta": {
+    "runtimeId": "9367a505-a9c6-46b3-b6e7-2e9704395b36"
+  }
+}

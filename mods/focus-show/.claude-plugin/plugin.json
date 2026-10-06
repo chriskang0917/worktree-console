@@ -1,0 +1,9 @@
+{
+  "name": "focus-show",
+  "version": "0.1.2",
+  "description": "worktree-console 專注模式的 /focus-show：把橫條目前這題的完整回報直接印到對話，不經模型。",
+  "author": {
+    "name": "chriskang",
+    "email": "chriskang028@gmail.com"
+  }
+}

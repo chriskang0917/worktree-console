@@ -1,0 +1,45 @@
+# 開票（對齊）與開工
+
+`<base>` 是 worktree-console 的 base directory。herdr 模式讀票與開工改用 `herdr.md`〈開工〉的指令，其餘步驟照本檔。
+
+| 指令 | 用途 |
+| --- | --- |
+| `console.mjs define-goal` | 查 define-goal 有沒有裝：有裝印 `指令：<斜線指令>` 與 `目錄：<安裝目錄>`，沒裝印 `define-goal 未安裝` |
+| `console.mjs await-start --path P --expect <首則指令前 40 字> [--define-goal] [--timeout 60]` | `[票號] 已開工` 或 `[票號] 未開工：<原因>` |
+| `console.mjs title --terminal H -- <任務標題>` | 記下這個 session 的任務標題（≤ 15 字），專注卡片在同一個 worktree 有多個 session 時靠它分辨；成功不印任何東西 |
+
+## 開票（對齊）
+
+先跑一次 `console.mjs define-goal`，本 session 之後沿用結果。define-goal 是另一個 plugin 的 skill（例如 agent-skills 的 `define-goal`），本 plugin 不附帶：**沒裝時整個流程都不提 define-goal**，對齊摘要不問要不要跑、開工只走「不跑」那條路、不加 `--define-goal` 與 `--comment define-goal`。
+
+1. 使用者只給數字時，team key 從看板上既有的票號推：只有一種就用它；沒有就問一次；多種就問「要用哪一個 team key？」，下面每個 key 列一行 `- a. <key>`，使用者回字母或直接回 key 都認；本 session 之後沿用。
+2. `orca linear issue <KEY-n> --json` 讀票（Linear 只讀：不改狀態、不留言）。讀不到就說明原因，請使用者貼票的內容。
+3. 找母票（orca 的回傳沒有母票欄位，只能反查）：把票名開頭的 `[…]` 前綴去掉後跑 `orca linear search "<標題>" --limit 5 --json`，扣掉這張票自己；對每個候選跑 `orca linear issue <候選> --children --json`，子票清單裡有這張票的就是母票。都沒有就當沒有母票。
+4. 決定預定 repo 與 branch 名稱。預定 repo 預設是啟動中控台的 repo；使用者指定別的 repo（名稱對 `orca repo list --json` 的 `displayName`）就改用它，以下的 `$TARGET` 指它的主 checkout。branch 名稱：先讀 `<base>/references/branch-naming.md`。沒有母票時，預定 branch＝第 2 步讀到的 `result.issue.branchName`。有母票時，先看 `orca worktree list --json` 裡所有 repo 的 worktree，branch 名稱含母票號（不分大小寫）的就整串照用（前後端分在不同 repo，名稱要完全一樣）；沒有就用母票的 branchName（`orca linear issue <母票號> --json`）。讀不到 branchName 才在 `$TARGET` 照 `branch-naming.md` 取名，有母票時票號用母票號、功能描述取自母票標題。**不另外停下來問名稱**，也不要寫死任何個人前綴。
+5. 回一段對齊摘要，開頭 `[KEY-n] 對齊`，內容：這張票要做什麼（2～4 行）；有母票時一行 `子票 <KEY-n> → 母票 <母票號>《<母票標題>》`請使用者確認，沒找到時一行「沒查到母票，branch 用這張票的 Linear branch 名稱」；一行 `預定 repo：<名稱>`；預定 branch 名稱（使用者指定的名稱不合規時，照 `branch-naming.md` 加一行提醒與建議名稱）；有裝 define-goal 時再加固定問句「這張票要不要先跑 define-goal？」，沒裝就改問「確認後就開工？」。使用者否定母票、補給母票號或改 repo，就照他說的重做第 4 步。
+6. **使用者確認之前，不呼叫 `orca worktree create`、不啟動任何子 session。** 有裝 define-goal 時，沒回答要不要跑也不開工；使用者改 branch 名稱或 repo 就照新的。
+
+### 沒有票
+
+同上，只是沒有第 2、3 步：取一個 3～8 個英文字母的暱稱當代號，摘要開頭改成 `[<暱稱>] 對齊`，branch 名稱照第 4 步慣例從任務描述取。暱稱取常見、好懂的英文單字（例如 `login`、`review`、`cleanup`），不用縮寫或自創字。使用者可以改暱稱。
+
+## 開工
+
+預定 repo 已有 worktree 用著預定的 branch（同一張母票的另一張子票）時，不建新 worktree：`orca terminal create --worktree path:<path> --command "claude" --json`，`orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json` 為 `satisfied:true` 後送首則指令，對這個 handle 照第 2 步跑一次 `title`，再從第 3 步接著做。該 worktree 原本綁的票不改。
+
+1. 建 worktree 並啟動子 session（不帶 `--base-branch`，用 repo 預設 base）。`--linear-issue` 有母票（對齊時使用者確認過）就綁母票號，看板代號因此顯示母票號；沒有母票或使用者否定母票就綁這張票本身；沒有票就不帶：
+
+   ```bash
+   orca worktree create --repo "path:$TARGET" --name <資料夾名稱> --linear-issue <母票號或 KEY-n> [--comment define-goal] \
+     --agent claude --prompt "<首則指令>" --json
+   ```
+
+   資料夾名稱＝照 `branch-naming.md` 的預設格式與描述規則取的英文短名（只決定資料夾）；預定 branch 不是 Linear branchName 時就直接用預定 branch 名稱。
+
+   選跑 define-goal 時一定要加 `--comment define-goal`：目標檔寫出來之前，看板靠這個標記把階段顯示成規劃中；不跑就不加。
+2. 取回 `result.worktree.path` 與 `result.agentTerminalHandle`（舊版只有 `result.startupTerminal.handle`），跑 `console.mjs title --terminal <handle> -- "<任務標題>"`：一句 ≤ 15 字、說得出這個 session 要做什麼的中文（例如「修登入頁錯誤訊息」），不放票號。`git -C <path> branch --show-current` 與預定名稱不同（Orca 會把 `/` 換成 `-`；用 Linear branchName 時資料夾名稱本來就不同）就 `git -C <path> branch -m "<預定名稱>"`。沒有票時 `orca worktree set --worktree path:<path> --display-name <暱稱> --json`：看板、回報、指揮都靠這個顯示名稱認出暱稱（3～8 個英文字母且不等於 branch 名稱）。
+3. `console.mjs await-start --path <path> --expect "<首則指令前 40 字>" [--define-goal]`，把輸出逐字轉貼。
+   - 未開工：`orca terminal read --terminal <handle> --screen --json` 看畫面；是 trust／onboarding 對話框就用 `orca terminal send --terminal <handle> --text "<對應按鍵>" --enter --json` 回應，之後重送一次首則指令、再跑一次 `await-start`。仍失敗就回報原因並停下，不自行重試第三次。
+4. 首則指令：
+   - **跑 define-goal**（只在有裝時）：`<指令> <KEY-n>：<票名與摘要>`，`<指令>` 是 `console.mjs define-goal` 印的斜線指令（例如 `/agent-skills:define-goal`）；有母票時寫成 `<指令> <KEY-n>（母票 <母票號>）：<子票名與摘要>`（沒有票時以暱稱代替票號），後面接這段交代：「slug 用 <這張票的票號小寫或暱稱>（有母票時也用子票號，不用母票號）；以純文字一次問一題，不要用 AskUserQuestion 或任何選單介面；本次不要提議蒸餾，也不要安裝或提示 post-checkout hook，直接從這張票的目標開始問；定稿後不要問要不要跑 goal-to-spec，回報『定稿完成』後等待」。訪談問題會經 watcher 以 `### 💬 <票號> 等你回應` 的回報轉來，使用者的回答照〈指揮〉送回。定稿前子 session 不動手實作。收到「定稿完成」就讀 `<base>/references/handoff.md` 照做。
+   - **不跑**：首則指令＝`<KEY-n>`（或暱稱）開頭，有母票時寫成 `<KEY-n>（母票 <母票號>）：`，接著＋對齊時確認過的任務交代（要做什麼、範圍、branch 名稱）。

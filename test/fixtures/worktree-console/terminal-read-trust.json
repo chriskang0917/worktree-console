@@ -1,0 +1,28 @@
+{
+  "id": "926f1d73-9807-4673-8f7d-bf67bd91e6d1",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_e",
+      "status": "running",
+      "tail": [
+        " Do you trust the files in this folder?",
+        "",
+        " /Users/me/wt/proj-103-idle",
+        "",
+        " ❯ 1. Yes, proceed",
+        "   2. No, exit"
+      ],
+      "truncated": true,
+      "limited": false,
+      "oldestCursor": "9761",
+      "nextCursor": "11761",
+      "latestCursor": "11761",
+      "returnedLineCount": 34,
+      "source": "screen"
+    }
+  },
+  "_meta": {
+    "runtimeId": "a36bcbc2-2ab2-4d1c-a826-8f2f9a5042f1"
+  }
+}

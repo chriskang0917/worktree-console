@@ -1,0 +1,21 @@
+{
+  "id": "captured-2026-10-03",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_upgrade",
+      "status": "running",
+      "tail": [
+        "⏺ Artifact(\"(unprintable path)\")",
+        "✢ Moonwalking… (3s · ↓ 200 tokens · thought for 2s)",
+        "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "❯ ",
+        "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+        "  \\~/projects/proj-v2-frontend  dev*  Opus 5.5  85% left",
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ⧉ db-upgrade-guide · ← 1 agent",
+        "                                                                              ✔ Update installed · Restart to update"
+      ],
+      "draft": ""
+    }
+  }
+}
