@@ -4,25 +4,22 @@
 
 | 指令 | 用途 |
 | --- | --- |
-| `console.mjs interview [--set on\|off]` | 印 `需求訪談預設：開｜關｜未設定`；帶 `--set` 時先把預設記進 `config.json` 再印 |
 | `console.mjs await-start --path P --expect <首則指令前 40 字> [--interview] [--timeout 60]` | `[票號] 已開工` 或 `[票號] 未開工：<原因>` |
 | `console.mjs title --terminal H -- <任務標題>` | 記下這個 session 的任務標題（≤ 15 字），專注卡片在同一個 worktree 有多個 session 時靠它分辨；成功不印任何東西 |
 
 ## 開票（對齊）
 
-需求訪談＝開工前先讓子 session 照中控台 prompt（`console.mjs prompt` 印的那份檔案）的〈需求訪談〉一段問清楚目標與驗收準則，定稿後再交棒執行。先跑一次 `console.mjs interview`，本 session 之後沿用結果（設定改過就重跑），照 `需求訪談預設：` 決定每張票做不做，不逐張問：
+需求訪談＝開工前先讓子 session 照中控台 prompt（`console.mjs prompt` 印的那份檔案）的〈需求訪談〉一段問清楚目標與驗收準則，定稿後再交棒執行。做不做看啟動時 `console.mjs prompt` 印的 `需求訪談：`，不逐張問：
 
-- `開`：每張票都先做需求訪談；`關`：每張票都直接開工。
-- `未設定`（第一次開票）：對齊摘要最後問一次「之後開票預設要先做需求訪談嗎？」，下面列 `- a. 要：每張票先問清楚目標與驗收準則再開工` 與 `- b. 不要：每張票直接開工`。使用者回答後跑 `console.mjs interview --set on`（a）或 `--set off`（b），這張票也照這個答案，之後不再問。
-- 使用者對某張票明說「這張要訪談」或「這張不訪談」就照他說的，只影響這張，不改設定。
-- 使用者說「需求訪談預設開／關」時跑 `--set on`／`--set off`，把輸出轉貼。
+- `有`：每張票都先做需求訪談；`無`：每張票都直接開工。
+- 使用者對某張票明說「這張要訪談」或「這張不訪談」就照他說的，只影響這張；prompt 沒有〈需求訪談〉一段時不能訪談，照實告知。
 
 1. 使用者只給數字時，team key 從看板上既有的票號推：只有一種就用它；沒有就問一次；多種就問「要用哪一個 team key？」，下面每個 key 列一行 `- a. <key>`，使用者回字母或直接回 key 都認；本 session 之後沿用。
 2. `orca linear issue <KEY-n> --json` 讀票（Linear 只讀：不改狀態、不留言）。讀不到就說明原因，請使用者貼票的內容。
 3. 找母票（orca 的回傳沒有母票欄位，只能反查）：把票名開頭的 `[…]` 前綴去掉後跑 `orca linear search "<標題>" --limit 5 --json`，扣掉這張票自己；對每個候選跑 `orca linear issue <候選> --children --json`，子票清單裡有這張票的就是母票。都沒有就當沒有母票。
 4. 決定預定 repo 與 branch 名稱。預定 repo 預設是啟動中控台的 repo；使用者指定別的 repo（名稱對 `orca repo list --json` 的 `displayName`）就改用它，以下的 `$TARGET` 指它的主 checkout。branch 名稱：先讀 `<base>/references/branch-naming.md`。沒有母票時，預定 branch＝第 2 步讀到的 `result.issue.branchName`。有母票時，先看 `orca worktree list --json` 裡所有 repo 的 worktree，branch 名稱含母票號（不分大小寫）的就整串照用（前後端分在不同 repo，名稱要完全一樣）；沒有就用母票的 branchName（`orca linear issue <母票號> --json`）。讀不到 branchName 才在 `$TARGET` 照 `branch-naming.md` 取名，有母票時票號用母票號、功能描述取自母票標題。**不另外停下來問名稱**，也不要寫死任何個人前綴。
-5. 回一段對齊摘要，開頭 `[KEY-n] 對齊`，內容：這張票要做什麼（2～4 行）；有母票時一行 `子票 <KEY-n> → 母票 <母票號>《<母票標題>》`請使用者確認，沒找到時一行「沒查到母票，branch 用這張票的 Linear branch 名稱」；一行 `預定 repo：<名稱>`；預定 branch 名稱（使用者指定的名稱不合規時，照 `branch-naming.md` 加一行提醒與建議名稱）；一行 `需求訪談：做` 或 `需求訪談：不做`（照預設），以及固定問句「確認後就開工？」；預設還沒設定時改問上面那題。使用者否定母票、補給母票號或改 repo，就照他說的重做第 4 步。
-6. **使用者確認之前，不呼叫 `orca worktree create`、不啟動任何子 session。** 預設還沒設定時，沒回答那題也不開工；使用者改 branch 名稱或 repo 就照新的。
+5. 回一段對齊摘要，開頭 `[KEY-n] 對齊`，內容：這張票要做什麼（2～4 行）；有母票時一行 `子票 <KEY-n> → 母票 <母票號>《<母票標題>》`請使用者確認，沒找到時一行「沒查到母票，branch 用這張票的 Linear branch 名稱」；一行 `預定 repo：<名稱>`；預定 branch 名稱（使用者指定的名稱不合規時，照 `branch-naming.md` 加一行提醒與建議名稱）；一行 `需求訪談：做` 或 `需求訪談：不做`，以及固定問句「確認後就開工？」。使用者否定母票、補給母票號或改 repo，就照他說的重做第 4 步。
+6. **使用者確認之前，不呼叫 `orca worktree create`、不啟動任何子 session。** 使用者改 branch 名稱或 repo 就照新的。
 
 ### 沒有票
 

@@ -5,6 +5,7 @@
 <p align="center">
   <a href="#install">Install</a> ·
   <a href="#usage">Usage</a> ·
+  <a href="#customizing-the-console-prompt">Customizing</a> ·
   <a href="#development">Development</a> ·
   <a href="./CHANGELOG.md">Changelog</a> ·
   <a href="./LICENSE">MIT License</a>
@@ -21,8 +22,7 @@ worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https
 - **Direct, close and archive from one place.** Send instructions to any session by ticket, close a worktree when its branch is merged, or archive sessions you want out of sight.
 - **Automatic handoff.** When a session's context fills past a threshold, or its prompt cache is about to expire while you are away, it writes a handoff note and a fresh session takes over in a new tab. `/worktree-console:handoff` does it on demand.
 - **A log of how you work.** Every console and session event is recorded under `~/.worktree-console/`, so you can look back at what was started, asked and answered.
-- **Ask first, then build.** Before a session starts coding, it can interview you one question at a time until the goal and acceptance criteria are written down, then the console hands that goal to a fresh session to execute. You decide once whether kickoff does this by default.
-- **Make it yours.** On startup the console reads a prompt file. Copy it to `~/.config/worktree-console/prompt.md` and edit it to add your own console rules or change how the interview asks questions; plugin updates never overwrite your copy.
+- **Make it yours.** On startup the console reads a prompt file you can replace with your own, to add console rules or to have every session interview you before it codes. See [Customizing the console prompt](#customizing-the-console-prompt).
 
 ## Install
 
@@ -58,6 +58,40 @@ Open Claude Code in an Orca or herdr tab inside one of your repos, then:
 | `/worktree-console:handoff` | Hands the current session over to a fresh one |
 
 State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
+
+## Customizing the console prompt
+
+Every time the console starts, it reads one prompt file in full and follows it. The built-in one is nearly empty. To use your own:
+
+1. Copy it to `~/.config/worktree-console/prompt.md` (under `$WORKTREE_CONSOLE_HOME` if you set it). Start from [`templates/prompt.md`](./templates/prompt.md) if you want the interview, or from `skills/worktree-console/references/prompt.md` if you don't.
+2. Edit it. When this file exists the console reads only it, never the built-in one, and plugin updates never touch it.
+3. Restart the console. `node <plugin>/skills/worktree-console/scripts/console.mjs prompt` prints which file is in use, whether it is yours, and whether it has an interview section.
+
+The file has up to two sections, by heading:
+
+- `## 中控台`: extra rules for the console itself, in plain language.
+- `## 需求訪談` (the interview): if this section exists, every ticket starts with an interview before any coding; without it, sessions start coding right away. You can still say "interview this one" or "skip the interview" for a single ticket while aligning.
+
+During an interview the new session reads your `## 需求訪談` section, asks you questions until the goal is settled, writes a goal file, and stops. The console relays each question to you, then hands the goal to a fresh session to build it. Whatever you write in the section, keep these, or the console loses track:
+
+- **Question format.** Ask one question at a time, in plain text (no menus), in this shape. The focus band reads the options from it, and an answer like `b` is sent back by letter.
+
+  ```text
+  **第 N 題：<question>？**
+
+  <optional background>
+
+  - **a.** <option>: <explanation>
+  - **b.** <option>: <explanation>
+
+  建議：<letter>, <reason>
+  ```
+
+  Options use lowercase `a`, `b`, `c`. Put nothing after the options except the `建議：` (recommendation) line.
+- **Goal file.** Write it to `.goals/<slug>.md` in the main checkout, using the slug the first message gives. The handoff turns its `**驗收準則**` (acceptance criteria) list into the checks the building session must show, skipping items marked 🔧 (no test yet) or ⚠️ (needs a human), and fills in the `**實作方案**` (approach) line.
+- **Finish line.** When the goal is settled, reply with only `定稿完成：<absolute path of the goal file>` and wait. The console takes it from there.
+
+`templates/prompt.md` is a complete working example: what to ask about, how to write testable acceptance criteria, and the goal file layout.
 
 ## Development
 

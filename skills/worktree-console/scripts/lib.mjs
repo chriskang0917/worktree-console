@@ -1129,35 +1129,16 @@ export function recycledMark(session, text) {
 }
 
 // A ticket still being aligned in the console conversation, shown as the last row of its repo's table.
-export function aligningRow(ticket, title, repo, askInterview = false) {
-  return { repo, tag: ticket, title: title || "—", stage: STAGE.idle, kind: "waiting", state: LABEL.waiting, activity: askInterview ? "要不要預設先做需求訪談？" : "等你確認開工" };
-}
-
-// Whether kickoff starts with the 需求訪談 by default (`interview` in config.json); null until you choose once.
-export function interviewDefault() {
-  try {
-    const value = JSON.parse(fs.readFileSync(path.join(consoleHome(), "config.json"), "utf8")).interview;
-    return typeof value === "boolean" ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-export function setInterviewDefault(on) {
-  const file = path.join(consoleHome(), "config.json");
-  let config = {};
-  try {
-    config = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {}
-  fs.mkdirSync(consoleHome(), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ ...config, interview: on }, null, 2) + "\n");
+export function aligningRow(ticket, title, repo) {
+  return { repo, tag: ticket, title: title || "—", stage: STAGE.idle, kind: "waiting", state: LABEL.waiting, activity: "等你確認開工" };
 }
 
 // The prompt the console reads when it loads: your own copy in the console home wins over the one shipped here.
 export function promptFile() {
   const custom = path.join(consoleHome(), "prompt.md");
-  if (fs.existsSync(custom)) return { file: custom, custom: true };
-  return { file: fileURLToPath(new URL("../references/prompt.md", import.meta.url)), custom: false };
+  const found = fs.existsSync(custom);
+  const file = found ? custom : fileURLToPath(new URL("../references/prompt.md", import.meta.url));
+  return { file, custom: found, interview: /^## 需求訪談\s*$/m.test(fs.readFileSync(file, "utf8")) };
 }
 
 // Splits the columns left after state/tag/stage between summary and last activity, so every row fits `width`.

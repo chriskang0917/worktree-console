@@ -26,14 +26,17 @@ function cli(home, args, extra = {}) {
   return { code: res.status, out: res.stdout.trim() };
 }
 
-test("中控台 prompt：沒有自訂檔時用內建的 references/prompt.md", () => {
-  assert.deepEqual(cli(consoleHome(), ["prompt"]), { code: 0, out: `檔案：${builtinPrompt}\n來源：內建` });
+test("中控台 prompt：沒有自訂檔時用內建的 references/prompt.md，內建版沒有需求訪談", () => {
+  assert.deepEqual(cli(consoleHome(), ["prompt"]), { code: 0, out: `檔案：${builtinPrompt}\n來源：內建\n需求訪談：無` });
 });
 
-test("中控台 prompt：設定目錄有 prompt.md 時改用它，內建檔不動", () => {
+test("中控台 prompt：設定目錄有 prompt.md 時改用它，有〈需求訪談〉一段才算有", () => {
   const home = consoleHome();
-  fs.writeFileSync(path.join(home, "prompt.md"), "# 我的中控台 prompt\n");
-  assert.deepEqual(cli(home, ["prompt"]), { code: 0, out: `檔案：${path.join(home, "prompt.md")}\n來源：自訂` });
+  const custom = path.join(home, "prompt.md");
+  fs.writeFileSync(custom, "# 我的中控台 prompt\n\n說明裡提到 ## 需求訪談 不算\n");
+  assert.deepEqual(cli(home, ["prompt"]), { code: 0, out: `檔案：${custom}\n來源：自訂\n需求訪談：無` });
+  fs.copyFileSync(path.join(root, "templates", "prompt.md"), custom);
+  assert.deepEqual(cli(home, ["prompt"]), { code: 0, out: `檔案：${custom}\n來源：自訂\n需求訪談：有` });
 });
 
 test("主說明：啟動時一定要讀 console.mjs prompt 印的檔案", () => {
@@ -43,65 +46,37 @@ test("主說明：啟動時一定要讀 console.mjs prompt 印的檔案", () => 
   assert.match(start, /每次啟動都要讀，不可略過/);
 });
 
-test("內建 prompt：有〈中控台〉與〈需求訪談〉兩段，說明怎麼自訂，出題範例截得出 a、b 與建議", () => {
-  const prompt = read("skills/worktree-console/references/prompt.md");
-  assert.match(prompt, /^## 中控台$/m);
-  assert.match(prompt, /^## 需求訪談$/m);
-  assert.match(prompt, /~\/\.config\/worktree-console\/prompt\.md/);
-  const sample = prompt.match(/```text\n([\s\S]*?)```/)[1].replace("<問題>", "放哪裡").replace("<字母>", "b").replace(/<[^>]+>/g, "說明");
+test("內建 prompt 只有〈中控台〉一段並說明怎麼自訂；範本多一段〈需求訪談〉，出題範例截得出 a、b 與建議", () => {
+  const builtin = read("skills/worktree-console/references/prompt.md");
+  assert.match(builtin, /^## 中控台$/m);
+  assert.doesNotMatch(builtin, /^## 需求訪談$/m);
+  assert.match(builtin, /~\/\.config\/worktree-console\/prompt\.md/);
+  assert.match(builtin, /templates\/prompt\.md/);
+  const template = read("templates/prompt.md");
+  assert.match(template, /^## 中控台$/m);
+  assert.match(template, /^## 需求訪談$/m);
+  const sample = template.match(/```text\n([\s\S]*?)```/)[1].replace("<問題>", "放哪裡").replace("<字母>", "b").replace(/<[^>]+>/g, "說明");
   const session = { n: null, handle: "h", agent: { state: "done" }, status: agentStatus({ state: "done", lastAssistantMessage: sample }) };
   const [item] = pendingItems([{ repo: "app", label: "PROJ-1", ticket: "PROJ-1", branch: "proj-1", title: "x", stage: "規劃中", sessions: [session] }]);
   assert.deepEqual(item.choices, ["a", "b"]);
   assert.match(item.entries[0].suggest, /^b/);
 });
 
-test("需求訪談預設：第一次未設定，--set on/off 記進 config.json 且保留其他設定", () => {
-  const home = consoleHome();
-  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ titlePrefixes: ["[FE]"] }));
-  assert.deepEqual(cli(home, ["interview"]), { code: 0, out: "需求訪談預設：未設定" });
-  assert.deepEqual(cli(home, ["interview", "--set", "on"]), { code: 0, out: "需求訪談預設：開" });
-  assert.deepEqual(cli(home, ["interview"]), { code: 0, out: "需求訪談預設：開" });
-  assert.deepEqual(cli(home, ["interview", "--set", "off"]), { code: 0, out: "需求訪談預設：關" });
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8")), { titlePrefixes: ["[FE]"], interview: false });
-  assert.equal(cli(home, ["interview", "--set", "maybe"]).code, 1);
-});
-
-test("需求訪談預設：沒有 config.json 時 --set 會建立它", () => {
-  const home = path.join(consoleHome(), "fresh");
-  assert.deepEqual(cli(home, ["interview", "--set", "on"]), { code: 0, out: "需求訪談預設：開" });
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8")), { interview: true });
-});
-
-test("看板對齊列：需求訪談預設未設定才問，設定過就是「等你確認開工」", () => {
-  const orcaDir = () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-orca-"));
-    fs.cpSync(path.join(root, "test", "fixtures", "worktree-console"), dir, { recursive: true });
-    return dir;
-  };
-  const board = (home) => {
-    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-board-"));
-    spawnSync("git", ["init", "-q", repo]);
-    const out = cli(home, ["board", "--repo", repo, "--aligning", "PROJ-9=新票"], {
-      ORCA_BIN: path.join(root, "test", "fixtures", "worktree-console", "fake-orca.mjs"),
-      FAKE_ORCA_DIR: orcaDir(),
-      ORCA_TERMINAL_HANDLE: "term_self",
-      WORKTREE_CONSOLE_LOG_DIR: path.join(home, "log"),
-      CLAUDE_PROJECTS_DIR: path.join(home, "projects"),
-    }).out;
-    return out.split("\n").find((l) => l.includes("PROJ-9")) ?? out;
-  };
-  const home = consoleHome();
-  assert.match(board(home), /要不要預設先做需求訪談？/);
-  cli(home, ["interview", "--set", "off"]);
-  assert.match(board(home), /等你確認開工/);
+test("看板對齊列：一律是「等你確認開工」", () => {
   assert.equal(aligningRow("PROJ-1", "x", "app").activity, "等你確認開工");
 });
 
-test("開工與交棒說明：需求訪談照中控台 prompt 做、預設只問一次；/goal 規則寫在中控台自己的交棒說明", () => {
+test("README 說明怎麼客製中控台 prompt 與需求訪談要守的格式", () => {
+  const readme = read("README.md");
+  const section = readme.slice(readme.indexOf("## Customizing the console prompt"), readme.indexOf("## Development"));
+  for (const want of ["~/.config/worktree-console/prompt.md", "templates/prompt.md", "## 需求訪談", "## 中控台", "定稿完成：", ".goals/<slug>.md", "建議："]) assert.ok(section.includes(want), want);
+});
+
+test("開工與交棒說明：做不做需求訪談看中控台 prompt 有沒有那一段；/goal 規則寫在中控台自己的交棒說明", () => {
   const kickoff = read("skills/worktree-console/references/kickoff.md");
   const handoff = read("skills/worktree-console/references/handoff.md");
-  assert.match(kickoff, /`console\.mjs interview --set on`/);
-  assert.match(kickoff, /之後開票預設要先做需求訪談嗎？/);
+  assert.match(kickoff, /`console\.mjs prompt` 印的 `需求訪談：`/);
+  assert.doesNotMatch(kickoff, /console\.mjs interview/);
   assert.match(kickoff, /先完整讀 <`console\.mjs prompt` 印的檔案絕對路徑>，照其中〈需求訪談〉一段做/);
   assert.match(handoff, /未展示者一律視為未完成。/);
   assert.match(handoff, /≤800 字元/);

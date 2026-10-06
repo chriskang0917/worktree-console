@@ -1068,13 +1068,13 @@ test("摘要、最後動態截短後以…結尾，且是原文開頭；放得�
 
 test("還在確認要不要開 session 的票：--aligning 階段為未開工，補在啟動 repo 表格最後一列，摘要同樣截短；帶 <repo>/ 前綴時補在該 repo 的表格", () => {
   const long = "把報表匯出頁改成可以依照產業別、時間區間與情境自由組合篩選";
-  const out = run("console.mjs", ["board", "--repo", app(), "--aligning", `PROJ-7001=${long}`, "--aligning", "api/PROJ-7002=後端匯出"], { env: { WORKTREE_CONSOLE_HOME: path.join(tmp, "home-no-config") } }).out;
+  const out = run("console.mjs", ["board", "--repo", app(), "--aligning", `PROJ-7001=${long}`, "--aligning", "api/PROJ-7002=後端匯出"]).out;
   const t = table(out);
   const last = t.tables[0].rows.at(-1);
   assert.deepEqual([last[0], last[1], last[3]], ["💬 等待回應", "PROJ-7001", "未開工"]);
   assert.ok(last[2].endsWith("…"));
   assertClipped(last[2], long);
-  assertClipped(last[4], "要不要預設先做需求訪談？");
+  assertClipped(last[4], "等你確認開工");
   assert.deepEqual(t.tables[1].rows.at(-1).slice(0, 4), ["💬 等待回應", "PROJ-7002", "後端匯出", "未開工"]);
   for (const line of tableLines(out.split("\n"))) assert.ok(displayWidth(line) <= BOARD_WIDTH, line);
 });

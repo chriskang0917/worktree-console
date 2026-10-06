@@ -3,6 +3,6 @@
 ## 1.0.0
 
 - First standalone release. worktree-console, the handoff skill, the auto-handoff, console-log and focus band hooks, and the focus-show mod moved here from agent-skills.
-- Kickoff can start with a built-in interview (goal, acceptance criteria, non-goals) before any coding, then hand the goal to a fresh session. It does not depend on any other plugin. Whether it runs by default is asked once and kept as `interview` in `~/.config/worktree-console/config.json`; say `需求訪談預設開／關` to change it, or override a single ticket while aligning.
-- The console reads a prompt file when it loads (`references/prompt.md`, or your own `~/.config/worktree-console/prompt.md`), which holds extra console rules and the interview rules.
+- The console reads a prompt file when it loads: the near-empty built-in `references/prompt.md`, or your own `~/.config/worktree-console/prompt.md`. Its `## 中控台` section holds extra console rules.
+- Kickoff interview: when your prompt has a `## 需求訪談` section, every ticket starts with an interview (goal, acceptance criteria, non-goals) before any coding, then the goal goes to a fresh session. No other plugin is needed. `templates/prompt.md` is a ready-to-copy example; the README lists the format the console relies on.
 - Branch naming rules now ship inside the plugin (`references/branch-naming.md`).

@@ -6,9 +6,7 @@ import {
   LABELS,
   afterSendLines,
   aligningRow,
-  interviewDefault,
   promptFile,
-  setInterviewDefault,
   archivedLines,
   boardLines,
   childAnswer,
@@ -99,7 +97,6 @@ const { values, positionals } = parseArgs({
     target: { type: "string" },
     nickname: { type: "string" },
     title: { type: "string" },
-    set: { type: "string" },
   },
 });
 
@@ -144,14 +141,13 @@ function screenHint(handle) {
 
 // `[<repo>/]<票號>=<票名>`; without a repo the row goes to the launch repo's table.
 function aligning(data) {
-  const askInterview = values.aligning.length > 0 && interviewDefault() === null;
   return values.aligning.map((v) => {
     const i = v.indexOf("=");
     const head = (i < 0 ? v : v.slice(0, i)).trim();
     const title = i < 0 ? "" : v.slice(i + 1).trim();
     const slash = head.lastIndexOf("/");
     const repo = slash > 0 ? head.slice(0, slash) : data.launchRepo;
-    return aligningRow(head.slice(slash + 1), title, repo, askInterview);
+    return aligningRow(head.slice(slash + 1), title, repo);
   });
 }
 
@@ -1007,21 +1003,11 @@ function misjudge() {
   console.log(`[${tag}] 已記下誤判：看板顯示 ${LABELS[shown]}，實際是「${actual}」`);
 }
 
-const ON_OFF = { on: true, off: false };
-
 function promptCommand() {
-  const { file, custom } = promptFile();
+  const { file, custom, interview } = promptFile();
   console.log(`檔案：${file}`);
   console.log(`來源：${custom ? "自訂" : "內建"}`);
-}
-
-function interviewCommand() {
-  if (values.set !== undefined) {
-    if (!(values.set in ON_OFF)) fail("用法：console.mjs interview [--set on|off]");
-    setInterviewDefault(ON_OFF[values.set]);
-  }
-  const on = interviewDefault();
-  console.log(`需求訪談預設：${on === null ? "未設定" : on ? "開" : "關"}`);
+  console.log(`需求訪談：${interview ? "有" : "無"}`);
 }
 
 function herdrReportCommand() {
@@ -1048,7 +1034,6 @@ const commands = {
   close,
   "await-start": awaitStart,
   prompt: promptCommand,
-  interview: interviewCommand,
   handoff,
   report,
   archive,
@@ -1070,7 +1055,7 @@ const commands = {
   "ask-tab": askTab,
   nickname,
 };
-const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt", "interview"]);
+const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);
 if (!OFFLINE.has(command)) manager();
 await commands[command]();
