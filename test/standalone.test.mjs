@@ -25,7 +25,7 @@ function configDir() {
 function skill(dir) {
   fs.mkdirSync(path.join(dir, "references"), { recursive: true });
   fs.writeFileSync(path.join(dir, "SKILL.md"), "---\nname: define-goal\n---\n");
-  fs.writeFileSync(path.join(dir, "references", "orca-handoff.md"), "# handoff\n");
+  fs.writeFileSync(path.join(dir, "references", "handoff.md"), "# 交棒\n");
 }
 
 function installedPlugins(config, plugins) {
@@ -33,16 +33,22 @@ function installedPlugins(config, plugins) {
   fs.writeFileSync(path.join(config, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins }));
 }
 
-function defineGoal(config) {
-  const res = spawnSync(process.execPath, [consoleScript, "define-goal"], { encoding: "utf8", env: { ...process.env, CLAUDE_CONFIG_DIR: config } });
+function defineGoal(config, args = [], home = path.join(config, "console")) {
+  const res = spawnSync(process.execPath, [consoleScript, "define-goal", ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_CONFIG_DIR: config, WORKTREE_CONSOLE_HOME: home } });
   return { code: res.status, out: res.stdout.trim() };
+}
+
+function userSkillConfig() {
+  const config = configDir();
+  skill(path.join(config, "skills", "define-goal"));
+  return config;
 }
 
 test("define-goal 沒裝：印「define-goal 未安裝」", () => {
   assert.deepEqual(defineGoal(configDir()), { code: 0, out: "define-goal 未安裝" });
 });
 
-test("define-goal 由某個 plugin 安裝：印那個 plugin 的斜線指令與它實際的安裝目錄", () => {
+test("define-goal 由某個 plugin 安裝：印那個 plugin 的斜線指令、它實際的安裝目錄與預設", () => {
   const config = configDir();
   const install = path.join(config, "plugins", "cache", "someone", "agent-skills", "9.9.9");
   skill(path.join(install, "skills", "define-goal"));
@@ -52,8 +58,9 @@ test("define-goal 由某個 plugin 安裝：印那個 plugin 的斜線指令與�
   });
   const { code, out } = defineGoal(config);
   assert.equal(code, 0);
-  assert.equal(out, `指令：/agent-skills:define-goal\n目錄：${path.join(install, "skills", "define-goal")}`);
-  assert.ok(fs.existsSync(path.join(out.split("目錄：")[1], "references", "orca-handoff.md")), "orca-handoff.md 從實際安裝位置讀得到");
+  assert.equal(out, `指令：/agent-skills:define-goal\n目錄：${path.join(install, "skills", "define-goal")}\n預設：未設定`);
+  const dir = out.split("\n")[1].replace("目錄：", "");
+  assert.ok(fs.existsSync(path.join(dir, "references", "handoff.md")), "交棒規格從實際安裝位置讀得到");
 });
 
 test("define-goal 只裝在某個專案的 plugin 不算；裝成使用者 skill 時指令是 /define-goal", () => {
@@ -63,7 +70,51 @@ test("define-goal 只裝在某個專案的 plugin 不算；裝成使用者 skill
   installedPlugins(config, { "agent-skills@x": [{ scope: "project", projectPath: "/somewhere", installPath: install }] });
   assert.equal(defineGoal(config).out, "define-goal 未安裝");
   skill(path.join(config, "skills", "define-goal"));
-  assert.equal(defineGoal(config).out, `指令：/define-goal\n目錄：${path.join(config, "skills", "define-goal")}`);
+  assert.equal(defineGoal(config).out, `指令：/define-goal\n目錄：${path.join(config, "skills", "define-goal")}\n預設：未設定`);
+});
+
+test("開工預設：第一次未設定，--set on/off 記進 config.json 且保留其他設定，之後照設定印出", () => {
+  const config = userSkillConfig();
+  const home = path.join(config, "console");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ titlePrefixes: ["[FE]"] }));
+  assert.match(defineGoal(config).out, /\n預設：未設定$/);
+  assert.deepEqual(defineGoal(config, ["--set", "on"]), { code: 0, out: "define-goal 預設：開" });
+  assert.match(defineGoal(config).out, /\n預設：開$/);
+  assert.deepEqual(defineGoal(config, ["--set", "off"]), { code: 0, out: "define-goal 預設：關" });
+  assert.match(defineGoal(config).out, /\n預設：關$/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8")), { titlePrefixes: ["[FE]"], defineGoal: false });
+  assert.equal(defineGoal(config, ["--set", "maybe"]).code, 1);
+});
+
+test("開工預設：沒有 config.json 時 --set 會建立它", () => {
+  const config = userSkillConfig();
+  const home = path.join(config, "fresh-console");
+  assert.deepEqual(defineGoal(config, ["--set", "on"], home), { code: 0, out: "define-goal 預設：開" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8")), { defineGoal: true });
+});
+
+test("看板對齊列：有裝且預設未設定才問要不要跑 define-goal；設定過或沒裝都是「等你確認開工」", () => {
+  const board = (config, home) => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-board-"));
+    spawnSync("git", ["init", "-q", repo]);
+    const res = spawnSync(process.execPath, [consoleScript, "board", "--repo", repo, "--aligning", "PROJ-9=新票"], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_CONFIG_DIR: config, WORKTREE_CONSOLE_HOME: home, ORCA_BIN: path.join(root, "test", "fixtures", "worktree-console", "fake-orca.mjs"), FAKE_ORCA_DIR: orcaDir(), ORCA_TERMINAL_HANDLE: "term_self", WORKTREE_CONSOLE_LOG_DIR: path.join(home, "log"), CLAUDE_PROJECTS_DIR: path.join(home, "projects") },
+    });
+    return res.stdout.split("\n").find((l) => l.includes("PROJ-9")) ?? res.stdout + res.stderr;
+  };
+  const orcaDir = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-orca-"));
+    fs.cpSync(path.join(root, "test", "fixtures", "worktree-console"), dir, { recursive: true });
+    return dir;
+  };
+  const config = userSkillConfig();
+  const home = path.join(config, "console");
+  assert.match(board(config, home), /要不要先跑 define-goal？/);
+  defineGoal(config, ["--set", "off"]);
+  assert.match(board(config, home), /等你確認開工/);
+  assert.match(board(configDir(), path.join(configDir(), "console")), /等你確認開工/);
 });
 
 test("沒裝 define-goal：對齊中的票最後動態是「等你確認開工」，不問要不要跑 define-goal", () => {
@@ -71,14 +122,17 @@ test("沒裝 define-goal：對齊中的票最後動態是「等你確認開工�
   assert.equal(aligningRow("PROJ-1", "x", "app", true).activity, "要不要先跑 define-goal？");
 });
 
-test("開工與交棒說明：先查 define-goal 有沒有裝、沒裝不提供跑它的選項、有裝從實際安裝位置讀 orca-handoff.md", () => {
+test("開工與交棒說明：先查 define-goal 有沒有裝、沒裝不提供跑它的選項、有裝從實際安裝位置讀交棒規格；預設只問一次", () => {
   const kickoff = read("skills/worktree-console/references/kickoff.md");
   const handoff = read("skills/worktree-console/references/handoff.md");
   assert.match(kickoff, /`console\.mjs define-goal`/);
   assert.match(kickoff, /沒裝時整個流程都不提 define-goal/);
   assert.match(kickoff, /`<base>\/references\/branch-naming\.md`/);
   assert.doesNotMatch(kickoff, /`\/agent-skills:define-goal </);
-  assert.match(handoff, /`<define-goal>\/references\/orca-handoff\.md`/);
+  assert.match(handoff, /`<define-goal>\/references\/handoff\.md`/);
+  assert.match(kickoff, /`console\.mjs define-goal --set on`/);
+  assert.match(kickoff, /之後開票預設要先跑 define-goal 嗎？/);
+  for (const file of tracked()) assert.ok(!read(file).includes(["orca", "handoff"].join("-")), file);
   assert.ok(fs.existsSync(path.join(root, "skills", "worktree-console", "references", "branch-naming.md")));
 });
 

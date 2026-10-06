@@ -6,7 +6,9 @@ import {
   LABELS,
   afterSendLines,
   aligningRow,
+  defineGoalDefault,
   defineGoalInstall,
+  setDefineGoalDefault,
   archivedLines,
   boardLines,
   childAnswer,
@@ -97,6 +99,7 @@ const { values, positionals } = parseArgs({
     target: { type: "string" },
     nickname: { type: "string" },
     title: { type: "string" },
+    set: { type: "string" },
   },
 });
 
@@ -141,14 +144,14 @@ function screenHint(handle) {
 
 // `[<repo>/]<票號>=<票名>`; without a repo the row goes to the launch repo's table.
 function aligning(data) {
-  const defineGoal = values.aligning.length > 0 && defineGoalInstall() !== null;
+  const askDefineGoal = values.aligning.length > 0 && defineGoalInstall() !== null && defineGoalDefault() === null;
   return values.aligning.map((v) => {
     const i = v.indexOf("=");
     const head = (i < 0 ? v : v.slice(0, i)).trim();
     const title = i < 0 ? "" : v.slice(i + 1).trim();
     const slash = head.lastIndexOf("/");
     const repo = slash > 0 ? head.slice(0, slash) : data.launchRepo;
-    return aligningRow(head.slice(slash + 1), title, repo, defineGoal);
+    return aligningRow(head.slice(slash + 1), title, repo, askDefineGoal);
   });
 }
 
@@ -1003,11 +1006,20 @@ function misjudge() {
   console.log(`[${tag}] 已記下誤判：看板顯示 ${LABELS[shown]}，實際是「${actual}」`);
 }
 
+const ON_OFF = { on: true, off: false };
+
 function defineGoalCommand() {
+  if (values.set !== undefined) {
+    if (!(values.set in ON_OFF)) fail("用法：console.mjs define-goal [--set on|off]");
+    setDefineGoalDefault(ON_OFF[values.set]);
+    return console.log(`define-goal 預設：${ON_OFF[values.set] ? "開" : "關"}`);
+  }
   const found = defineGoalInstall();
   if (!found) return console.log("define-goal 未安裝");
+  const on = defineGoalDefault();
   console.log(`指令：${found.command}`);
   console.log(`目錄：${found.dir}`);
+  console.log(`預設：${on === null ? "未設定" : on ? "開" : "關"}`);
 }
 
 function herdrReportCommand() {

@@ -21,7 +21,7 @@ worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https
 - **Direct, close and archive from one place.** Send instructions to any session by ticket, close a worktree when its branch is merged, or archive sessions you want out of sight.
 - **Automatic handoff.** When a session's context fills past a threshold, or its prompt cache is about to expire while you are away, it writes a handoff note and a fresh session takes over in a new tab. `/worktree-console:handoff` does it on demand.
 - **A log of how you work.** Every console and session event is recorded under `~/.worktree-console/`, so you can look back at what was started, asked and answered.
-- **Works with define-goal when you have it.** If the `define-goal` skill (from [agent-skills](https://github.com/chriskang0917/agent-skills)) is installed, kickoff offers to run a goal interview first and hands the result to an executing session. Without it, kickoff goes straight to work.
+- **Works with define-goal when you have it.** If the `define-goal` skill (from [agent-skills](https://github.com/chriskang0917/agent-skills)) is installed, kickoff can run a goal interview first and hand the result to an executing session. You choose once whether that is the default; the console remembers it. Without define-goal, kickoff goes straight to work.
 
 ## Install
 

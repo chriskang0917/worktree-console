@@ -1128,8 +1128,28 @@ export function recycledMark(session, text) {
 }
 
 // A ticket still being aligned in the console conversation, shown as the last row of its repo's table.
-export function aligningRow(ticket, title, repo, defineGoal = true) {
-  return { repo, tag: ticket, title: title || "—", stage: STAGE.idle, kind: "waiting", state: LABEL.waiting, activity: defineGoal ? "要不要先跑 define-goal？" : "等你確認開工" };
+export function aligningRow(ticket, title, repo, askDefineGoal = true) {
+  return { repo, tag: ticket, title: title || "—", stage: STAGE.idle, kind: "waiting", state: LABEL.waiting, activity: askDefineGoal ? "要不要先跑 define-goal？" : "等你確認開工" };
+}
+
+// Whether kickoff runs define-goal by default (`defineGoal` in config.json); null until you choose once.
+export function defineGoalDefault() {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(consoleHome(), "config.json"), "utf8")).defineGoal;
+    return typeof value === "boolean" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setDefineGoalDefault(on) {
+  const file = path.join(consoleHome(), "config.json");
+  let config = {};
+  try {
+    config = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {}
+  fs.mkdirSync(consoleHome(), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ...config, defineGoal: on }, null, 2) + "\n");
 }
 
 // define-goal ships in another plugin (agent-skills:define-goal) or as a user skill; null when neither is installed.
