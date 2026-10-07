@@ -53,6 +53,7 @@ import { consoleSessionOk, focusPayload, focusPick, focusReplied, focusSkip, loa
 import { usageLines } from "./console-usage.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome } from "./herdr.mjs";
 import { herdrReport } from "./herdr-report.mjs";
+import { alreadyIn } from "./memory.mjs";
 import { maybeTerminals, runOrca, terminals } from "./terminals.mjs";
 import { commitsSince, dropBranch } from "./disposable.mjs";
 import {
@@ -98,6 +99,7 @@ const { values, positionals } = parseArgs({
     nickname: { type: "string" },
     title: { type: "string" },
     to: { type: "string" },
+    apply: { type: "boolean", default: false },
   },
 });
 
@@ -1073,6 +1075,106 @@ function herdrReportCommand() {
   for (const line of conclusion) console.log(line);
 }
 
+// The default branch and the refs to compare against: the local one and origin's, whichever exist.
+function pruneBases(main) {
+  const head = git(main, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  const exists = (ref) => git(main, ["rev-parse", "--verify", "--quiet", ref]).ok;
+  const name = head.ok ? head.out.replace(/^origin\//, "") : ["main", "master"].find((n) => exists(`refs/heads/${n}`));
+  const refs = name ? [name, `origin/${name}`].filter((r) => exists(`${r}^{commit}`)) : [];
+  return refs.length ? { name, refs } : null;
+}
+
+// How a local branch relates to the default branch: landed by ancestor or squash proof, or why it stays.
+function pruneLanding(main, refs, branch) {
+  const ref = `refs/heads/${branch}`;
+  const tip = git(main, ["rev-parse", ref]).out;
+  const same = refs.find((b) => git(main, ["rev-parse", `${b}^{commit}`]).out === tip);
+  if (same) return { keep: `和 ${same} 指向同一個 commit，沒有自己的 commit（可能剛開，不當成已合併）` };
+  const ancestor = refs.find((b) => git(main, ["merge-base", "--is-ancestor", ref, b]).ok);
+  if (ancestor) return { via: "ancestor", base: ancestor, why: `已合進 ${ancestor}（branch 是它的祖先）` };
+  const squash = refs.find((b) => alreadyIn(main, b, ref));
+  if (squash) return { via: "squash", base: squash, why: `squash 合併進 ${squash}（合併結果與 ${squash} 相同；刪除要用 -D，刪前會再確認一次）` };
+  return { keep: `還沒合進 ${refs[0]}` };
+}
+
+// One row per local branch, plus one per detached worktree: CANDIDATE rows carry `via`, KEEP rows carry `keep`.
+function prunePlan(main, bases) {
+  const trees = gitWorktrees(main);
+  const here = realpath(git(process.cwd(), ["rev-parse", "--show-toplevel"]).out || process.cwd());
+  const m = maybeTerminals();
+  const ps = m ? m.ps() : null;
+  const sessionKeep = (p) => {
+    if (!ps) return null;
+    if (!ps.ok) return `${m.name} 無法查詢 session 狀態`;
+    return ps.worktrees.some((w) => realpath(w.path) === p && w.agents?.length) ? "有 session 開著（先用 close 關掉）" : null;
+  };
+  const byBranch = new Map(trees.filter((t) => t.branch).map((t) => [t.branch, t]));
+  const branches = git(main, ["for-each-ref", "--format=%(refname)", "refs/heads"]).out.split("\n").filter(Boolean).map(stripRef);
+  const rows = branches.map((branch) => {
+    const tree = byBranch.get(branch) ?? null;
+    const path = tree?.path ?? null;
+    const keep =
+      (branch === bases.name && "預設分支") ||
+      (tree?.isMain && "主 checkout 目前所在的 branch") ||
+      (path === here && "你現在所在的 worktree") ||
+      (path && git(path, ["status", "--porcelain"]).out !== "" && "工作區有未 commit 的改動") ||
+      (path && sessionKeep(path)) ||
+      null;
+    return { branch, path, ...(keep ? { keep } : pruneLanding(main, bases.refs, branch)) };
+  });
+  for (const t of trees.filter((x) => !x.branch)) rows.push({ branch: null, path: t.path, keep: "detached HEAD，沒有 branch" });
+  return rows;
+}
+
+// Dry run by default; --apply removes CANDIDATE worktrees (never forced) and deletes their local branches, never remote ones.
+function prune() {
+  const repo = values.repo ? (fs.existsSync(values.repo) ? values.repo : repoByName(values.repo) ?? fail(`找不到 repo「${values.repo}」`)) : process.cwd();
+  const main = mainCheckout(realpath(repo));
+  if (!git(main, ["rev-parse", "--git-dir"]).ok) fail(`不是 git repo：${main}`);
+  const bases = pruneBases(main) ?? fail("找不到預設分支（origin/HEAD、main、master 都沒有）");
+  const rows = prunePlan(main, bases);
+  console.log(`[prune] 預設分支 ${bases.name}；比對 ${bases.refs.join("、")}`);
+  for (const r of rows) {
+    const where = r.path ? `（worktree：${r.path}）` : "";
+    console.log(`${r.via ? "CANDIDATE" : "KEEP     "}  ${r.branch ?? "（detached）"}${where}  ${r.why ?? r.keep}`);
+  }
+  const candidates = rows.filter((r) => r.via);
+  if (!values.apply) {
+    console.log(candidates.length ? `預覽：${candidates.length} 個可清理、${rows.length - candidates.length} 個保留；沒有刪任何東西，確認要清理再加 --apply` : "沒有可清理的");
+    return;
+  }
+  let failed = 0;
+  for (const r of candidates) {
+    if (r.path) {
+      const removed = git(main, ["worktree", "remove", r.path]);
+      if (!removed.ok) {
+        console.log(`[${r.branch}] 未清理：移除 worktree 失敗：${removed.err}`);
+        failed++;
+        continue;
+      }
+      forgetWorktree(r.path);
+      try {
+        writeArchive(readArchive().filter((a) => a.path !== r.path));
+      } catch {}
+    }
+    const squash = r.via === "squash";
+    // The proof is read again right before -D: the branch may have gained commits since the listing.
+    if (squash && !alreadyIn(main, r.base, `refs/heads/${r.branch}`)) {
+      console.log(`[${r.branch}] branch 保留：刪除前重新確認，內容已不在 ${r.base} 裡（之後又有新 commit）${r.path ? "；worktree 已移除" : ""}`);
+      failed++;
+      continue;
+    }
+    const dropped = git(main, ["branch", squash ? "-D" : "-d", r.branch]);
+    if (!dropped.ok) {
+      console.log(`[${r.branch}] branch 保留：${dropped.err}${r.path ? "；worktree 已移除" : ""}`);
+      failed++;
+      continue;
+    }
+    console.log(`[${r.branch}] 已清理：${r.path ? "worktree 已移除，" : ""}branch 已刪${squash ? `（squash 合併，改用 -D；刪前已重新確認內容在 ${r.base} 裡）` : ""}`);
+  }
+  if (failed) process.exit(1);
+}
+
 const commands = {
   board,
   todo,
@@ -1106,8 +1208,9 @@ const commands = {
   ask,
   "ask-tab": askTab,
   nickname,
+  prune,
 };
-const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt"]);
+const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt", "prune"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);
 if (!OFFLINE.has(command)) manager();
 await commands[command]();

@@ -108,7 +108,7 @@ function bases(dir, baseRef) {
 }
 
 // Merging `head` into `base` would change nothing: a squash or plain merge already brought it in.
-function alreadyIn(dir, base, head) {
+export function alreadyIn(dir, base, head) {
   const merged = git(dir, ["merge-tree", "--write-tree", base, head]);
   if (!merged.ok) return false;
   return merged.out.split("\n")[0] === git(dir, ["rev-parse", `${base}^{tree}`]).out;

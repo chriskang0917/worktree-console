@@ -23,7 +23,7 @@ description: 在單一 Claude Code session 透過 orca CLI 或 herdr 當中控�
 
 orca `--json` 回傳一律是 `{ok, result}`；`ok:false` 時看 `error.code`（例如 `timeout`、`terminal_handle_stale`、`linear_issue_required`）。branch 顯示前剝掉 `refs/heads/`。
 
-## 腳本一覽（除 `answer`、`send`、`close`、`handoff`、`ask`、`ask-tab` 外不動 Orca 與 git；封存、專注模式與問問題的子指令見各自段落）
+## 腳本一覽（除 `answer`、`send`、`close`、`prune`、`handoff`、`ask`、`ask-tab` 外不動 Orca 與 git；封存、專注模式與問問題的子指令見各自段落）
 
 | 指令 | 用途 |
 | --- | --- |
@@ -96,6 +96,7 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 | 丟票、選了待開工的票、同意開 session（〈開票（對齊）〉、〈沒有票〉、〈開工〉） | `kickoff.md` |
 | 需求訪談的子 session 回報「定稿完成」（交棒） | `handoff.md` |
 | 「關掉 <票號>」（〈關閉〉） | `close.md` |
+| 「清理 branch」「prune」（列出並清掉已合併的本地 branch 與 worktree） | `prune.md` |
 | 「報表」「最近卡在哪」等要看紀錄、打「已蒸餾」（〈過程紀錄〉） | `process-log.md` |
 | `todo` 印 `skip:no-config`（待開工提醒的設定與篩選規則） | `todo-config.md` |
 | 使用者問為什麼是這個狀態或階段，或寫詳情建議需要判斷階段時 | `status-stage.md` |

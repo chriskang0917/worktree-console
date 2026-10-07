@@ -56,6 +56,7 @@ Open Claude Code in an Orca or herdr tab inside one of your repos, then:
 | `<ticket> 詳情` | Shows what that session has been doing |
 | `b`, or any reply | Answers the question currently on the focus band |
 | `關掉 <ticket>` | Checks the worktree is safe to remove, then closes it |
+| `清理 branch` or `prune` | Lists local branches and worktrees as CANDIDATE or KEEP (merged or squash-merged, with the reason); deletes only after you confirm |
 | `/worktree-console:handoff` | Hands the current session over to a fresh one |
 
 State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
