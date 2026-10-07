@@ -31,7 +31,7 @@ function consoleRegistry() {
   return path.join(process.env.WORKTREE_CONSOLE_HOME || path.join(os.homedir(), ".config", "worktree-console"), "consoles.json");
 }
 
-function readJson(file, fallback) {
+export function readJson(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
@@ -55,7 +55,7 @@ export function readConfig() {
   return { enabled: c.enabled, ratio: ratio > 0 && ratio < 1 ? ratio : DEFAULT_RATIO };
 }
 
-function truthy(v) {
+export function truthy(v) {
   return !!v && !/^(0|false|no|off)$/i.test(String(v).trim());
 }
 
@@ -74,7 +74,7 @@ export function throwaway(cwd, handle = process.env.ORCA_TERMINAL_HANDLE) {
   return list.some((d) => (d.kind === "tab" && handle && d.handle === handle) || (d.kind === "worktree" && (here === d.path || here.startsWith(`${d.path}${path.sep}`))));
 }
 
-function readEntries(file, tailOnly = false) {
+export function readEntries(file, tailOnly = false) {
   let text;
   try {
     if (!tailOnly) text = fs.readFileSync(file, "utf8");
@@ -213,7 +213,7 @@ function lastAssistantText(entries) {
   return "";
 }
 
-function interactive(entries) {
+export function interactive(entries) {
   return !entries.some((e) => e.entrypoint && e.entrypoint !== "cli");
 }
 

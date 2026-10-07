@@ -21,6 +21,7 @@ worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https
 - **One board for everything.** `現在狀況` prints a table per repo: status, ticket, summary, stage (not started, planning, implementing, pushed) and the latest activity, so you can see where every session is.
 - **Direct, close and archive from one place.** Send instructions to any session by ticket, close a worktree when its branch is merged, or archive sessions you want out of sight.
 - **Automatic handoff.** When a session's context fills past a threshold, or its prompt cache is about to expire while you are away, it writes a handoff note and a fresh session takes over in a new tab. `/worktree-console:handoff` does it on demand.
+- **Context usage notices (off by default).** Turn it on and a session that crosses 30%, 50% or 70% of its real context window is told so, once per band, so a background or headless session can wrap up before the window fills. `node hooks/context-notice.mjs enable`, and `bands 20,40,60` to change the bands.
 - **A log of how you work.** Every console and session event is recorded under `~/.worktree-console/`, so you can look back at what was started, asked and answered.
 - **Make it yours.** On startup the console reads a prompt file you can replace with your own, to add console rules or to have every session interview you before it codes. See [Customizing the console prompt](#customizing-the-console-prompt).
 
