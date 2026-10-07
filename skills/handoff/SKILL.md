@@ -25,6 +25,7 @@ description: 立刻把目前的 Claude Code session 交棒給新 session：先�
 - 門檻照 session 實際的 context 上限算：200k 的模型 40% 是 80k，1M 的模型是 400k。
 - 單一 session 不想參與：啟動前設環境變數 `AUTO_HANDOFF_OFF=1`（只擋自動觸發，手動交棒照樣可用）。
 - 交棒說明寫在 `~/.config/claude-handoff/notes/<session id>.md`。
+- 另有 context 用量通知（預設關閉）：`node <root>/hooks/context-notice.mjs enable`，用量跨過 30%／50%／70% 時各告知 session 一次（`bands 20,40,60` 改門檻、`disable` 關閉、`show` 看目前用量）；`AUTO_HANDOFF_OFF=1` 同樣不通知。
 
 ## 交棒時會發生什麼
 
