@@ -118,7 +118,7 @@ export function executeCoreCommand(root, command, envelope = {}, options = {}) {
     if (command === "compact") { keys(envelope.data, []); return compactState(root, state, readCleanupConfig(root).history, options.fault); }
     if (command === "history restore") { keys(envelope.data, ["archive"]); return restoreState(root, state, text(envelope.data.archive, "archive")); }
     if (command === "migrate") { keys(envelope.data, []); return { schemaVersion: state.schemaVersion }; }
-    if (["close", "archive"].includes(command)) { keys(envelope.data, []); return archiveEvidence(root, state, options.fault); }
+    if (["close", "archive"].includes(command)) { keys(envelope.data, ["expectedEvidence"]); return archiveEvidence(root, state, options.fault, envelope.data.expectedEvidence); }
     const result = applyTaskOperation(root, state, command, envelope.data, now); propagateCompletion(state); return result;
   } };
   if (["close", "archive"].includes(command)) return withTaskLock(root, (_state, commit) => {

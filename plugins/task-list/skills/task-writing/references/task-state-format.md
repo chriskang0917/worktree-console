@@ -27,7 +27,7 @@
 }
 ```
 
-`task-new` 建立 v2 正本及建立事件；必要集合為 `items`、`reports`、`events`、`history`。v1 可唯讀，首次寫入或 `task migrate` 時在交易鎖內遷移，保留原始 snapshot 與 migration manifest；未知版本拒絕處理，舊 v1 writer 會拒絕 v2。
+`task-new` creates v2 state and a creation event; required collections are `items`, `reports`, `events`, and `history`. v1 is readable and migrates under the transaction lock on its first write or `task migrate`, retaining the original snapshot and migration manifest. Unknown versions are rejected; older v1 writers reject v2.
 
 ## IDs, attempts, and revisions
 
@@ -39,7 +39,7 @@ Renaming or reordering preserves IDs. Reopening creates a new attempt; changing 
 
 ## Commands and acceptance
 
-一般操作為 `item add/update/move/reopen/cancel`、`report submit/accept/reject/ack`、`read`、`validate`。歷史與結案操作見下節。CLI 提供一般旗標；`task <operation> --file <envelope.json>` 接受：
+Ordinary operations are `item add/update/move/reopen/cancel`, `report submit/accept/reject/ack`, `read`, and `validate`. History and close operations are described below. The CLI provides ordinary flags; `task <operation> --file <envelope.json>` accepts:
 
 ```json
 {
@@ -70,22 +70,21 @@ Generated headers contain `GENERATED`, `taskId`, `revision`, `generatedAt`, and 
 
 Exit 1 indicates an input, authoritative-state, revision, lock, or selection error. On `REVISION_CONFLICT`, reread and reconsider before submitting. On `COMMAND_ID_CONFLICT`, use a new ID only for a genuinely new request; do not retry blindly.
 
-Exit 2 表示生成、自動壓縮或結案後移除原副本失敗，不撤銷已提交事實。修正問題後重新讀取；不得為修看板覆蓋今天的正本。自動壓縮是第二筆交易，回應 `revision` 保留原指令 revision，`stateRevision` 才是後續壓縮 revision。
+Exit 2 indicates generation, automatic compaction, or post-close source removal failure without reverting committed facts. Fix the cause and reread; never replace authoritative state to repair a board. Automatic compaction is a second transaction: response `revision` remains the original command revision, while `stateRevision` is the subsequent compaction revision.
 
 This format covers local tasks and text graphs only, not a session runner, a Focus task panel, or Markdown import.
 
-## 歷史、遷移與結案契約
+## History, migration, and close contract
 
-- `history[]` 每筆含 `id`、`manifest`、`sha256`、`count`；還原後設 `restored: true`，檔案仍保留，但事件不再重複加入冷熱聯集。
-- `history/task-list/<id>/manifest.json` 含 taskId、schemaVersion、來源 revision、事件數及 revision 範圍；snapshot 與 JSONL segment 各自有相對路徑及 SHA-256。事件物件原樣保存，`commandId/requestHash/result` 不重編。每次讀取驗證歷史；損壞或缺失拒絕寫入。
-- 寫入順序為 snapshot → segment → manifest → 原子替換正本；正本指向 manifest 才算採用。切換前中止只留下未採用檔案，切換後可重建同 revision 的看板；兩種情況都不刪歷史。
-- 交易後熱事件超過 1,000 筆或 2 MiB 時自動另開壓縮交易；保留最近 200 筆與最近七天的聯集。狀態引用的事件／commandId、未知擴充指令留在熱資料。自動壓縮失敗回報 `compactionError`，不撤銷原交易。
-- `task compact` 預覽；`--apply --expected-revision R` 套用。`task history --limit 50 --before-revision R` 跨冷熱分頁，回傳 `nextBeforeRevision`；`task history verify` 驗證事件歷史。
-- `task history restore --archive ID` 預覽；加 `--apply --expected-revision R` 將事件搬回熱資料，revision 加一，items/reports/attempts 不回退。snapshot 不是可重播至任意 revision 的 event-sourcing 契約。
-- v1 遷移的 `migration` 指向含 checksum 的 manifest 及原始 v1 snapshot；保留未知擴充欄位。遷移與當次命令共用正本切換點。
-- `task close`／`task archive` 預覽；`--yes` 才套用。所有 active items、未 ack reports、未結問題、非終態 runs/claims 都阻擋套用。
-- 僅搬移 `reports[].evidence` 明確引用的任務內檔案至 `history/task-list/<id>/evidence/<原路徑>`，包含報告與附件。URI 留在原處；不掃描檔名推測所有權。控制檔、符號連結及越界路徑不可搬移。
-- `evidenceArchives[]` 保存 `id` 與 `files[{source,destination,sha256}]`。先複製並 fsync，正本切換後才移除 checksum 相符的原副本；重跑 close 可完成中斷搬移。更新 report evidence、item sourceRef 與 completionPolicy target；外部連結須依對照查歷史。
-- 文字圖預設收合完成項並顯示最近 20 筆；`--include-completed` 展開、`--json` 保留完整樹。未核對與歷史證據待核對獨立呈現。讀取失敗保留最後生成快照並標未知；看板不得寫入 `history/`。
-- 停用／移除插件不動正本、snapshot、歷史或證據；沒有自動到期或刪除指令。
-
+- Each `history[]` entry contains `id`, `manifest`, `sha256`, and `count`. Restore sets `restored: true`; files remain, but their events are no longer duplicated in the hot/cold union.
+- `history/task-list/<id>/manifest.json` contains taskId, schemaVersion, source revision, event count, and revision range. Snapshots and JSONL segments have relative paths and SHA-256 hashes. Events retain their original `commandId/requestHash/result`. Every read verifies history; missing or damaged history blocks writes.
+- Write order is snapshot, segment, manifest, then atomic state replacement. A manifest becomes committed only when state references it. Interruption before switching leaves unreferenced files; interruption after switching allows board regeneration at the same revision. Neither deletes history.
+- Above 1,000 hot events or 2 MiB, a separate automatic compaction transaction retains the union of the latest 200 events and seven days. State-referenced events/commandIds and unknown extension commands remain hot. Failure returns `compactionError` without reverting the original transaction.
+- `task compact` previews; `--apply --expected-revision R` applies. `task history --limit 50 --before-revision R` paginates across hot/cold events and returns `nextBeforeRevision`; `task history verify` verifies event history.
+- `task history restore --archive ID` previews; `--apply --expected-revision R` restores events to hot storage and increments revision without rolling back items, reports, or attempts. Snapshots are not an event-sourcing contract for arbitrary-time replay.
+- v1 `migration` references a checksum manifest and original v1 snapshot; unknown extension fields survive. Migration shares the current command's atomic state switch.
+- `task close` and `task archive` preview blockers, files, checksums, and `applyArgs`. Apply with `--yes --expected-revision R --expected-evidence HASH` copied from that preview. Changed revision, evidence list, or file contents require a new preview. JSON envelopes use `expectedRevision` and `data.expectedEvidence`. Active items, unacknowledged reports, unresolved questions, and nonterminal runs/claims block apply.
+- Only registered task-local `reports[].evidence` files move to `history/task-list/<id>/evidence/<original-path>`, including reports and attachments. URIs remain unchanged; filenames do not imply ownership. Control files, symlinks, and escaping paths cannot move.
+- `evidenceArchives[]` stores `id` and `files[{source,destination,sha256}]`. Copy and fsync precede the state switch; only matching source copies are removed afterward. Preview and apply close again to finish interrupted removal. Report evidence, item sourceRef, and completionPolicy targets are updated; old paths stop working and external links require manual updates.
+- Text graphs collapse completed leaves and show the latest 20 events by default; `--include-completed` expands them and `--json` retains the full tree. Unacknowledged current and historical evidence remains visible with group ownership. Failed reads preserve the last generated snapshot and mark its state unknown. Boards cannot overwrite registered evidence or store-owned files, including `history/`.
+- Disabling or uninstalling leaves authoritative state, snapshots, history, and evidence intact. There is no automatic expiry or deletion command.

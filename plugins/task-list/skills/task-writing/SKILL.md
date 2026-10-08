@@ -27,17 +27,17 @@ Leaves may omit `--parent`; omitting `--criterion` creates a group. Represent in
 
 Before changing completed work, run `task item reopen --id <leaf-id> --reason "<scope-change-or-fix>"`. Reports from older attempts or specifications remain historical and cannot complete new work. Cancel with `task item cancel --id <id> --reason "<reason>"`.
 
-`task read` 與 `task validate` 重建看板。Exit 2 表示生成、自動壓縮或結案後收尾失敗，已提交事實仍有效；先修正原因並重讀，不盲目重送驗收。Exit 1 表示指令或正本錯誤。遇 revision 衝突先重新判斷。
+`task read` and `task validate` rebuild the board. Exit 2 indicates generation, automatic compaction, or post-close cleanup failure; committed facts remain valid. Fix the cause and reread rather than blindly resubmitting acceptance. Exit 1 indicates a command or authoritative-state error. Reconsider after a revision conflict.
 
 Use `task --dir <task-directory>` or `task-todos --dir <task-directory>` to operate on another task without changing the selection. There is no Markdown import or task-bind command.
 
-## 整理顯示、歷史與結案
+## Display, history, and close
 
-完成項預設收成「已完成 N 項」，`task-todos --include-completed` 展開；時間線只顯示最近 20 筆。未核對、阻塞、驗收及未知／中斷活動分開顯示，不能當成已解決。
+Completed leaves collapse into a count by default; `task-todos --include-completed` expands them. The timeline shows the latest 20 events. Unacknowledged evidence, blockers, pending reviews, and unknown/interrupted activity remain visible and must not be treated as resolved.
 
-歷史會自動無損壓縮，但不自動刪除。查舊事件用 `task history --limit 50`，依 `nextBeforeRevision` 分頁。人工壓縮或還原前讀[格式契約](references/task-state-format.md#歷史遷移與結案契約)，先預覽，再帶明確 revision 套用；snapshot 不是任意時間回滾工具。
+History is automatically compacted without loss and never automatically deleted. Use `task history --limit 50` and paginate with `nextBeforeRevision`. Before manual compaction or restore, read the [format contract](references/task-state-format.md#history-migration-and-close-contract), preview, then apply with the explicit revision. Snapshots do not support arbitrary-time rollback.
 
-結案先執行 `task close`，逐項處理 blockers 並核對 files；使用者同意搬移後才執行 `task close --yes`。只搬明確登錄在 report evidence 的任務內報告／附件，不掃描其他筆記、不替人 ack、不操作 sessions 或 worktrees。
+Run `task close` first, resolve each blocker, and review its files and checksums. After the user agrees to move them, run `task close --yes --expected-revision <preview-revision> --expected-evidence <preview-evidenceSha256>` using the preview's `applyArgs`; `task archive` uses the same flags. If the revision, file list, or bytes change, preview and review again. Only registered task-local report evidence and attachments move; old paths stop working and external links are not updated. Other notes, sessions, and worktrees remain untouched; closing never acknowledges reports.
 
 
 ## File ownership

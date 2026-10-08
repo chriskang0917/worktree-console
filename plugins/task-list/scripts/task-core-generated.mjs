@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { atomicWrite, taskPath } from "./task-store.mjs";
 import { computeProgress } from "./task-core-schema.mjs";
 import { allTaskEvents, readCleanupConfig } from "./task-history.mjs";
@@ -20,8 +21,8 @@ export function renderTaskGraph(state, { includeCompleted = false, timelineLimit
   if (unacknowledged) summary.push(`★ ${unacknowledged} 未核對`);
   lines.push(summary.join(" · "), "");
   function row(item, prefix) {
-    if (includeCompleted || item.status !== "done" || item.star) lines.push(`${prefix}${glyphs[item.status]} ${item.title}${item.progress ? ` ${item.progress.done}/${item.progress.total}` : ""}${item.star ? " ★" : ""}${item.status === "review" ? " 待驗收" : ""}${item.nextAction ? ` — ${item.nextAction}` : ""}${item.review ? `；驗收者 ${item.review.reviewer}；再看 ${item.review.revisitAt}` : ""}`);
     const children = item.children.filter(child => includeCompleted || child.status !== "done" || child.star || child.children.length);
+    if (includeCompleted || item.status !== "done" || item.star || children.length) lines.push(`${prefix}${glyphs[item.status]} ${item.title}${item.progress ? ` ${item.progress.done}/${item.progress.total}` : ""}${item.star ? " ★" : ""}${item.status === "review" ? " 待驗收" : ""}${item.nextAction ? ` — ${item.nextAction}` : ""}${item.review ? `；驗收者 ${item.review.reviewer}；再看 ${item.review.revisitAt}` : ""}`);
     children.forEach((child, index) => row(child, index === children.length - 1 ? "╰─ " : "├─ "));
   }
   const tree = taskTree(state).filter(item => includeCompleted || item.status !== "done" || item.star || item.children.some(child => child.status !== "done" || child.star || child.children.length));
@@ -56,7 +57,11 @@ export function generateCoreViews(root, state, fault = () => {}, { boardPrefix =
   const header = `<!-- GENERATED / taskId=${state.taskId} / revision=${state.revision} / generatedAt=${new Date().toISOString()} / 離線快照 -->\n\n`;
   const reserved = new Set(["task-state.json", "decisions.md", "readme.md", "policy.md"]);
   const key = typeof boardPath === "string" ? boardPath.toLowerCase() : null;
-  if (boardPath !== null && (!key || reserved.has(key) || key === "history" || key.startsWith("history/") || key.startsWith(".console/") || key.startsWith("runs/") || key.startsWith("lines/"))) { errors.push("看板路徑不可覆寫正本、證據或其他生成文件"); boardPath = null; }
+  const evidence = new Set(state.reports.flatMap(report => report.evidence).filter(ref => !/^[a-z][a-z0-9+.-]*:/i.test(ref)).map(ref => path.resolve(fs.realpathSync(root), ref).toLowerCase()));
+  let collision = false;
+  try { collision = boardPath !== null && evidence.has(taskPath(root, boardPath).toLowerCase()); }
+  catch (error) { errors.push(`${error.code}：${error.message}`); boardPath = null; }
+  if (boardPath !== null && (!key || collision || reserved.has(key) || key === "history" || key.startsWith("history/") || key === ".console" || key.startsWith(".console/") || key === "runs" || key.startsWith("runs/") || key === "lines" || key.startsWith("lines/"))) { errors.push("BOARD_PATH_COLLISION：看板路徑不可覆寫正本、證據或其他生成文件"); boardPath = null; }
   for (const [relative, body] of [[boardPath, `# ${state.title}\n\n${boardPrefix}## 待辦\n\n${renderTaskGraph(state, { includeCompleted: view.completed === "expanded", timelineLimit: view.timelineLimit, timeline: allTaskEvents(root, state) })}\n`], ...extraFiles]) { if (!relative) continue; try { atomicWrite(taskPath(root, relative, true), header + body, fault); } catch (error) { errors.push(`${relative}：${error.message}`); } }
   return errors;
 }

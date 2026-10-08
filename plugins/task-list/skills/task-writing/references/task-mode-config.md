@@ -40,14 +40,14 @@ Each task's `.console/config.json` contains:
 
 `boardPath` must be relative to the task directory. It cannot traverse symlinks, leave the directory, or overwrite authoritative state, the README, configuration, or evidence. `snapshots/board.md` is valid. Legacy `todoGraph` fields no longer affect output; `task-todos --json` returns the item tree.
 
-以上為省略欄位時的安全預設。`view.completed` 可為 `collapsed`／`expanded`；數量、位元組與天數須為正整數，`autoCompact` 須為布林值，無效設定明確報錯。兩種保留條件取聯集，不保證熱事件低於門檻；可設 `autoCompact: false` 停止自動壓縮，仍可明確預覽／套用。歷史無保存期限，不自動刪除。
+These are safe defaults for omitted fields. `view.completed` accepts `collapsed` or `expanded`; counts, bytes, and days must be positive integers, and `autoCompact` must be boolean. Invalid settings fail explicitly. Retention conditions are combined as a union, so hot events may remain above the trigger. Set `autoCompact: false` to stop automatic compaction while retaining explicit preview/apply operations. History never expires or gets automatically deleted.
 
-`history/` 是保留路徑，看板不能寫入。`task-todos --include-completed` 可單次展開；分頁、checksum 驗證、還原與結案流程見[格式契約](task-state-format.md#歷史遷移與結案契約)。
+`history/` is reserved and cannot contain the board. `task-todos --include-completed` expands completed items for one invocation. See the [format contract](task-state-format.md#history-migration-and-close-contract) for pagination, checksum verification, restore, and close.
 
 ## Invalid selection and recovery
 
 No selected task returns `TASK_REQUIRED`; an invalid selection returns `INVALID_BINDING`, without falling back to machine-wide session operations. Supply a valid task with `--dir` or create one; importing existing Markdown directories is not supported.
 
-Exit 1 表示輸入、正本、選取或交易衝突；讀取故障時保留最後看板並標記未知。Exit 2 表示生成、自動壓縮或結案後搬移收尾失敗，不撤銷已提交工作。修正設定／檔案系統後重新讀取；不要盲目重做已成功的驗收。
+Exit 1 indicates input, authoritative-state, selection, or transaction conflicts; failed reads preserve the last board and mark its state unknown. Exit 2 indicates generation, automatic compaction, or post-close cleanup failure without reverting committed work. Fix configuration or filesystem problems and reread rather than blindly repeating successful acceptance.
 
 Linear tickets awaiting kickoff still use the main plugin's `todo` and `config.json`. Local tasks use their own authoritative state and `task-mode.json`; the two configurations do not overwrite each other.

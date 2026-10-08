@@ -1,6 +1,6 @@
 # task-list
 
-A standalone plugin for local task lists. Install it to create tasks and view text graphs and committed-event timelines without a `task-mode.json` switch, Linear, Focus, or a terminal host. The CLI requires only Node.js; all modules ship inside this plugin. Runtime output and generated task READMEs remain in Traditional Chinese.
+A standalone plugin for local task lists. Install it to create tasks and view text graphs and committed-event timelines without a `task-mode.json` switch, Linear, Focus, or a terminal host. No npm package dependencies; requires Node.js and a compatible POSIX environment with `ps`. All modules ship inside this plugin. Runtime output and generated task READMEs remain in Traditional Chinese.
 
 ## Install and remove
 
@@ -59,7 +59,7 @@ node <plugin>/scripts/task-list.mjs task-todos
 
 ## Collapse, compact, and close
 
-文字線圖在 `revision N` 後列出子項狀態摘要，依序為 `◆ 待回答`、`! 受阻`、`◇ 待驗收`、`▶ 進行`、`○ 待辦`、`= 停泊`，省略零項狀態；最後的 `★ 未核對` 計算所有未核對報告（含歷史報告）。沒有未完成子項時顯示 `沒有未完成項目`。群組之間留空行，不收合未完成子項、不加顏色。已完成子項預設收成 `已完成 N 項`（不計群組），但帶 `★` 的完成項仍顯示；`task-todos --include-completed` 顯示全部完成項。時間線依提交 revision 列出最近 20 筆事件；問題、待驗收、未核對報告與未知／中斷的執行狀態不受時間線限制。JSON 保留完整樹。
+The text graph lists nonzero leaf-status counts after the revision, ordered as waiting, blocked, review, doing, queued, and parked, followed by the count of all unacknowledged reports, including historical reports. It shows an empty-work summary when no leaves remain active. Groups are separated by blank lines; unfinished children and completed children with an unacknowledged report remain visible with their group headers. Completed leaves otherwise collapse into a count; `task-todos --include-completed` expands them. The graph written to `board.md` is plain text; status colours belong to the fork's panel UI, not this companion plugin. The timeline shows the latest 20 committed events in revision order; questions, pending reviews, unacknowledged reports, and unknown/interrupted runs are not subject to that limit. JSON retains the full tree.
 
 After a successful write, automatic compaction runs as a separate transaction when hot events exceed 1,000 entries or 2 MiB. It retains the latest 200 **and** the last seven days, plus events referenced by current state and unknown extension commands. These are retention floors, not a hard size cap. History never expires or gets automatically deleted.
 
@@ -80,12 +80,12 @@ Close/archive is separate from event compaction:
 
 ```sh
 node <plugin>/scripts/task-list.mjs task close
-node <plugin>/scripts/task-list.mjs task close --yes
+node <plugin>/scripts/task-list.mjs task close --yes --expected-revision <preview-revision> --expected-evidence <preview-evidenceSha256>
 ```
 
-`task archive` is the same operation. Preview lists blockers and files without writing. Apply refuses any active item, unacknowledged report, unresolved question, or nonterminal run/claim present in state. Only task-local files explicitly registered in `reports[].evidence` are moved, including report documents and attachments; register every file to include it. Remote URI references are retained. Unregistered notes, sessions, worktrees, and branches are untouched.
+`task archive` is the same operation. Preview lists blockers, files, checksums, and `applyArgs` without writing. Copy its `--expected-revision` and `--expected-evidence` values when applying; changes to the revision, evidence list, or file bytes require a new preview and review. Apply refuses any active item, unacknowledged report, unresolved question, or nonterminal run/claim present in state. Only task-local files explicitly registered in `reports[].evidence` are moved, including report documents and attachments; register every file to include it. Remote URI references are retained. Unregistered notes, sessions, worktrees, and branches are untouched.
 
-The close transaction copies and checksums evidence before switching state references, then removes only matching source copies. Report evidence, item source references, and completion-policy targets are updated; `evidenceArchives` records source-to-history mappings. External links are not rewritten. If interrupted after the switch, rerun close to finish removing source copies. History and report records are never deleted, and cleanup never acknowledges evidence for you.
+The close transaction copies and checksums evidence before switching state references, then removes only matching source copies, so old evidence paths stop working. Report evidence, item source references, and completion-policy targets are updated; `evidenceArchives` records source-to-history mappings. External links are not rewritten. If interrupted after the switch, preview close again and apply its new arguments to finish removing source copies. History and report records are never deleted, and cleanup never acknowledges evidence for you.
 
 Exit 2 can also report automatic-compaction or post-close cleanup failure; the original successful transaction remains committed. The response's `revision` belongs to that command receipt; `stateRevision`, when present, is the subsequent automatic-compaction revision. Always reread before a new write. A failed `task-todos` read displays the last generated board with an explicit unknown-state warning rather than treating missing history as empty.
 

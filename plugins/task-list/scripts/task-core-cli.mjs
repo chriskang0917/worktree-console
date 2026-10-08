@@ -7,7 +7,7 @@ import { executeCoreCommand } from "./task-core-commands.mjs";
 import { renderTaskGraph, taskTree } from "./task-core-generated.mjs";
 import { allTaskEvents, readCleanupConfig } from "./task-history.mjs";
 export function parseCoreTaskArgs(args) {
-  const strings = ["dir", "file", "id", "item", "parent", "title", "next", "source", "criterion", "target", "verifier", "evidence-type", "evidence", "reviewer", "revisit", "by", "reason", "attempt", "spec-revision", "order", "outcome", "limit", "before-revision", "expected-revision", "archive"];
+  const strings = ["dir", "file", "id", "item", "parent", "title", "next", "source", "criterion", "target", "verifier", "evidence-type", "evidence", "reviewer", "revisit", "by", "reason", "attempt", "spec-revision", "order", "outcome", "limit", "before-revision", "expected-revision", "expected-evidence", "archive"];
   const options = Object.fromEntries(strings.map((key) => [key, { type: "string" }]));
   for (const key of ["json", "include-completed", "apply", "yes"]) options[key] = { type: "boolean" };
   return parseArgs({ args, allowPositionals: true, options });
@@ -61,8 +61,9 @@ export async function coreTaskMain(command, args, { env = process.env, execute =
         else if (operation === "item move") { data.order = Number(v.order); data.parentId = v.parent ?? null; }
         else if (["item reopen", "item cancel", "report reject"].includes(operation)) data.reason = v.reason;
         else if (operation === "history restore") data.archive = v.archive;
+        if (["close", "archive"].includes(operation)) data.expectedEvidence = v["expected-evidence"];
         if (v.by) data.by = v.by;
-        if (["compact", "history restore"].includes(operation) && v["expected-revision"] === undefined) fail("REVISION_REQUIRED", "套用清理必須提供 --expected-revision");
+        if (["compact", "history restore", "close", "archive"].includes(operation) && v["expected-revision"] === undefined) fail("REVISION_REQUIRED", "套用清理必須提供預覽的 --expected-revision");
         envelope = { commandId: randomUUID(), expectedRevision: v["expected-revision"] === undefined ? state.revision : Number(v["expected-revision"]), actor: { host: "local", id: "task-cli" }, data };
       }
       result = execute(root, operation, envelope ?? {});

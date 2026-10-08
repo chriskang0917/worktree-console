@@ -18,6 +18,7 @@ function setup(t) {
   return { root: createCoreTask("清理驗收", { env }), env };
 }
 function command(root, operation, data = {}, options = {}) {
+  if (["close", "archive"].includes(operation)) data = { expectedEvidence: executeCoreCommand(root, `${operation} preview`).evidenceSha256, ...data };
   return executeCoreCommand(root, operation, { commandId: randomUUID(), expectedRevision: readTask(root).revision, actor: { host: "local", id: "驗收者" }, data }, options);
 }
 function save(root, state) { fs.writeFileSync(path.join(root, "task-state.json"), JSON.stringify(state)); }
@@ -301,7 +302,8 @@ test("CLI 結案預览不寫入，open 與 blocked 拒絕，歷史故障保留�
   assert.equal(preview.status, 0, preview.stdout + preview.stderr);
   assert.equal(JSON.parse(preview.stdout).blockers.length, 2);
   assert.equal(readTask(root).revision, state.revision);
-  const refused = spawnSync(process.execPath, [script, "task", "close", "--dir", root, "--yes"], { env, encoding: "utf8" });
+  const plan = JSON.parse(preview.stdout);
+  const refused = spawnSync(process.execPath, [script, "task", "close", "--dir", root, ...plan.applyArgs.split(" ")], { env, encoding: "utf8" });
   assert.equal(refused.status, 1);
   assert.equal(JSON.parse(refused.stdout).code, "CLOSE_BLOCKED");
   aged(root); command(root, "compact");
@@ -391,4 +393,71 @@ test("未知指令與事件引用保留在熱資料，重複壓縮還原不重�
   assert.equal(history.length, 1004);
   assert.equal(new Set(history.map(event => event.id)).size, 1004);
   assert.equal(readTask(root).history.length, 2);
+});
+
+test("看板碰撞登錄報告或任務控制路徑時讀取與重建不改證據", t => {
+  const { root } = setup(t);
+  completedEvidence(root);
+  const bytes = fs.readFileSync(path.join(root, "report.md"));
+  for (const boardPath of ["report.md", ".console/previous-0.json", "lines/evidence.md", "runs/evidence.md"]) {
+    fs.writeFileSync(path.join(root, ".console/config.json"), JSON.stringify({ boardPath }));
+    for (const operation of ["read", "validate"]) {
+      assert.match(executeCoreCommand(root, operation).viewErrors[0], /BOARD_PATH_COLLISION/);
+      assert.deepEqual(fs.readFileSync(path.join(root, "report.md")), bytes);
+    }
+  }
+});
+
+test("兩個完成群組的未核對子項各自保留所屬標題", t => {
+  const { root } = setup(t);
+  const state = readTask(root);
+  state.items = [group("第一組", 0, "done"), { ...group("第一子項", 0, "done"), kind: "leaf", parentId: "第一組" }, group("第二組", 1, "done"), { ...group("第二子項", 0, "done"), kind: "leaf", parentId: "第二組" }];
+  state.reports = ["第一子項", "第二子項"].map(itemId => ({ id: itemId, itemId, ack: false, evidence: [] }));
+  const graph = renderTaskGraph(state);
+  assert.match(graph, /✓ 第一組 1\/1[^\n]*\n╰─ ✓ 第一子項 ★[^\n]*\n\n✓ 第二組 1\/1[^\n]*\n╰─ ✓ 第二子項 ★/);
+});
+
+for (const operation of ["close", "archive"]) test(`${operation} 套用綁定預覽版本與證據清單摘要，未變更才搬移`, t => {
+  const { root, env } = setup(t);
+  const report = completedEvidence(root);
+  command(root, "report ack", { id: report });
+  const script = fileURLToPath(new URL("../scripts/task-list.mjs", import.meta.url));
+  const run = (...args) => spawnSync(process.execPath, [script, "task", operation, "--dir", root, ...args], { env, encoding: "utf8" });
+  const preview = JSON.parse(run().stdout);
+  const missing = run("--yes");
+  assert.equal(missing.status, 1);
+  assert.equal(JSON.parse(missing.stdout).code, "REVISION_REQUIRED");
+  fs.writeFileSync(path.join(root, "extra.md"), "新增證據");
+  const current = readTask(root);
+  command(root, "report submit", { itemId: "工作", attemptId: current.items[0].attemptId, specRevision: current.items[0].specRevision, outcome: "success", evidence: ["extra.md"], review: { reviewer: "驗收者", revisitAt: new Date(Date.now() + 86400000).toISOString(), nextAction: "核對" } });
+  const stale = run(...preview.applyArgs.split(" "));
+  assert.equal(stale.status, 1);
+  assert.equal(JSON.parse(stale.stdout).code, "REVISION_CONFLICT");
+  assert.equal(fs.readFileSync(path.join(root, "report.md"), "utf8"), "完整報告");
+  assert.equal(fs.readFileSync(path.join(root, "extra.md"), "utf8"), "新增證據");
+  assert.equal(fs.existsSync(path.join(root, "history/task-list")), false);
+  command(root, "report ack", { id: readTask(root).reports.at(-1).id });
+  const approved = JSON.parse(run().stdout);
+  const sameRevision = readTask(root);
+  fs.writeFileSync(path.join(root, "other.md"), "額外附件");
+  sameRevision.reports[0].evidence.push("other.md");
+  save(root, sameRevision);
+  const changedList = run(...approved.applyArgs.split(" "));
+  assert.equal(changedList.status, 1);
+  assert.equal(JSON.parse(changedList.stdout).code, "EVIDENCE_CHANGED");
+  assert.equal(fs.existsSync(path.join(root, "history/task-list")), false);
+  sameRevision.reports[0].evidence.pop();
+  save(root, sameRevision);
+  fs.writeFileSync(path.join(root, "report.md"), "變更內容");
+  const changed = run(...approved.applyArgs.split(" "));
+  assert.equal(changed.status, 1);
+  assert.equal(JSON.parse(changed.stdout).code, "EVIDENCE_CHANGED");
+  assert.equal(fs.existsSync(path.join(root, "history/task-list")), false);
+  fs.writeFileSync(path.join(root, "report.md"), "完整報告");
+  const applied = run(...approved.applyArgs.split(" "));
+  assert.equal(applied.status, 0, applied.stdout + applied.stderr);
+  assert.equal(fs.existsSync(path.join(root, "report.md")), false);
+  assert.equal(fs.existsSync(path.join(root, "extra.md")), false);
+  const archived = readTask(root);
+  assert.equal(fs.readFileSync(path.join(root, archived.reports[0].evidence[0]), "utf8"), "完整報告");
 });

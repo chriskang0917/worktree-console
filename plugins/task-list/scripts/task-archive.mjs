@@ -19,10 +19,13 @@ export function closePlan(root, state) {
     if (!fs.statSync(file).isFile()) fail("UNSAFE_ARCHIVE", `證據必須是檔案：${relative}`);
     files.push({ source: relative, sha256: hash(fs.readFileSync(file)) });
   }
-  return { revision: state.revision, blockers, files, preview: true };
+  files.sort((a, b) => a.source.localeCompare(b.source));
+  const evidenceSha256 = hash(JSON.stringify(files));
+  return { revision: state.revision, blockers, files, evidenceSha256, preview: true, applyArgs: `--yes --expected-revision ${state.revision} --expected-evidence ${evidenceSha256}` };
 }
-export function archiveEvidence(root, state, fault) {
+export function archiveEvidence(root, state, fault, expectedEvidence) {
   const plan = closePlan(root, state);
+  if (expectedEvidence !== plan.evidenceSha256) fail("EVIDENCE_CHANGED", "證據清單或內容已改變，請重新預覽並提供 --expected-evidence");
   if (plan.blockers.length) fail("CLOSE_BLOCKED", `尚不可結案：${plan.blockers.join("、")}`);
   const id = randomUUID();
   const files = plan.files.map(file => ({ ...file, destination: `history/task-list/${id}/evidence/${file.source}` }));
