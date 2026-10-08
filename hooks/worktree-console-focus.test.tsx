@@ -1427,7 +1427,7 @@ test('refined：主題只換顏色，無效設定只提示一次且每次開面�
   const original = await cardTags(ui)
   for (const [name, accent, border] of [
     ['neutral', 'cyan', 'gray'], ['neutral-light', '#0f7c8c', '#9a9ea6'],
-    ['dracula', '#8be9fd', '#9aa1c2'], ['gruvbox', '#83a598', '#665c54'], ['light', '#1f7a73', '#93a1a1'],
+    ['dracula', '#8be9fd', '#9aa1c2'], ['gruvbox', '#d5c4a1', '#665c54'], ['light', '#1f7a73', '#93a1a1'],
   ]) {
     config.theme = name
     await openPane($)
