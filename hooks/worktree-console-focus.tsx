@@ -496,7 +496,7 @@ export const register: Register = on => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
       const cell = statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
-      const tagRoom = modern ? inner - 12 - (hidden ? 10 : 0) : inner - columns(` ${r.status} `) - columns(` ${r.stage} `) - 3 - (hidden ? columns('取消封存') + 2 : 0)
+      const tagRoom = modern ? inner - 13 - (hidden ? 10 : 0) : inner - columns(` ${r.status} `) - columns(` ${r.stage} `) - 3 - (hidden ? columns('取消封存') + 2 : 0)
       const tag = truncateColumns(r.tag, Math.max(1, tagRoom))
       const summary = truncateColumns(r.summary, modern ? cols <= 36 ? 15 : SUMMARY_MAX : Math.min(SUMMARY_MAX, inner))
       const room = inner - columns(summary) - CORNER_GAP - (modern && r.stage !== '—' ? columns(r.stage) + 3 : 0)
@@ -506,8 +506,8 @@ export const register: Register = on => {
         <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} borderStyle={isSel ? 'double' : 'round'} borderColor={modern ? isSel ? theme.accent : theme.border : isSel ? 'cyanBright' : '#7a7a7a'} paddingX={2}>
           <Box flexDirection="row" justifyContent="space-between">
             <Box flexDirection="row">
-              {modern ? <Box key={`number:${r.key}`} width={2} flexShrink={0} overflow="hidden">{num ? <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} /> : <Text>  </Text>}</Box> : num && <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} />}
-              {modern && <Box flexDirection="row"><Box key={`status:${r.key}`} width={8} flexShrink={0}><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}`}</Text></Box><Text>  </Text></Box>}
+              {modern ? <Box key={`number:${r.key}`} width={3} flexShrink={0} overflow="hidden">{num ? <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} /> : <Text>   </Text>}</Box> : num && <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} />}
+              {modern && <Box flexDirection="row"><Box key={`status:${r.key}`} flexDirection="row" width={8} flexShrink={0}><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}`}</Text></Box><Text>  </Text></Box>}
               {hidden && <Text bold={modern} color={modern ? theme.fg : undefined}>{`${tag}  `}</Text>}
               <Button key={`name:${r.key}`} label={hidden ? '取消封存' : tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} />
               {!modern && <Text>  </Text>}
@@ -517,10 +517,10 @@ export const register: Register = on => {
           </Box>
           <Text dimColor={!modern} color={modern ? theme.dim : undefined} wrap="truncate-end">{truncateColumns(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
           <Box flexDirection="row" justifyContent="space-between">
-            <Box key={`corner:${r.key}`}>
-              {modern ? <><Text color={theme.dim} wrap="truncate-end">{repo}</Text>{repo && r.stage !== '—' && <Text color={theme.dim}> · </Text>}{r.stage !== '—' && <Text color={theme.muted}>{r.stage}</Text>}</> : <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>}
+            <Box key={`corner:${r.key}`} flexDirection={modern ? 'row' : undefined} flexShrink={modern ? 0 : undefined}>
+              {modern ? <Text wrap="truncate-end"><Text color={theme.dim}>{repo}{repo && r.stage !== '—' ? ' · ' : ''}</Text>{r.stage !== '—' && <Text color={theme.muted}>{r.stage}</Text>}</Text> : <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>}
             </Box>
-            <Box key={`summary:${r.key}`} flexDirection={modern ? 'row' : undefined}>
+            <Box key={`summary:${r.key}`} flexDirection={modern ? 'row' : undefined} flexShrink={modern ? 0 : undefined}>
               <Text color={modern ? theme.muted : CORNER_FG} wrap="truncate-end">{summary}</Text>
             </Box>
           </Box>

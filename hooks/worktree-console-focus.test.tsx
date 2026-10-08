@@ -1204,7 +1204,7 @@ test('↑↓ onto a card out of view scrolls the pane until that card shows whol
   await ui.unmount()
 })
 
-test('refined：各欄寬階段固定在底列，無階段不留分隔符，80 欄完整顯示 62 格名稱', async ($, on) => {
+test('refined：各欄寬階段固定在底列，無階段不留分隔符', async ($, on) => {
   const name = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
   const cards = [card('短名', { repo: 'claude-personal' }), card(name), card('無進度', { stage: '—' })]
   const w = world({ ...focusOf('短名', [name, '無進度']), sessions: cards })
@@ -1219,16 +1219,98 @@ test('refined：各欄寬階段固定在底列，無階段不留分隔符，80 �
     }
     expect((await ui.find({ key: `corner:${cards[0]!.key}` }))!.text).toBe(cols === 36 ? '實作中' : 'claude-personal · 實作中')
     expect((await ui.find({ key: `corner:${cards[2]!.key}` }))!.text).not.toContain('·')
-    if (cols === 80) {
-      expect((await ui.find({ key: `name:${cards[1]!.key}` }))?.props.label).toBe(name)
-      for (const c of cards) {
-        expect((await ui.find({ key: `number:${c.key}` }))?.props.width).toBe(2)
-        expect((await ui.find({ key: `status:${c.key}` }))?.props.width).toBe(8)
-      }
-    }
     await ui.unmount()
   }
 })
+
+// The mount kit exposes the drawn tree, not terminal cells. Lay out the card's
+// text/box subset so a vertically stacked corner or wrapped hotkey is observable.
+type CardDrawn = { type: string; props?: { key?: string; hotkey?: string; label?: string; width?: number; borderStyle?: string; paddingX?: number; flexDirection?: string; marginTop?: number }; children?: (CardDrawn | string)[] }
+const drawnText = (node: CardDrawn | string): string => typeof node === 'string' ? node : node.type === 'Button'
+  ? `${node.props?.hotkey ? `${node.props.hotkey}: ` : ''}${node.props?.label ?? ''}`
+  : (node.children ?? []).map(drawnText).join('')
+const cardLines = (node: CardDrawn | string, width: number): string[] => {
+  if (typeof node === 'string' || node.type !== 'Box') {
+    const text = drawnText(node)
+    const lines = ['']
+    for (const char of text) {
+      if (char === '\n') lines.push('')
+      else {
+        if (cardWidth(lines[lines.length - 1]!) + cardWidth(char) > width) lines.push('')
+        lines[lines.length - 1] += char
+      }
+    }
+    return lines
+  }
+  const props = node.props ?? {}
+  const children = node.children ?? []
+  const border = props.borderStyle ? 1 : 0
+  const room = (props.width ?? width) - 2 * (border + (props.paddingX ?? 0))
+  let lines: string[]
+  if (props.flexDirection === 'row') {
+    const parts = children.map(child => {
+      const natural = Math.max(1, ...cardLines(child, room).map(cardWidth))
+      return cardLines(child, typeof child === 'string' ? natural : child.props?.width ?? natural)
+    })
+    lines = Array.from({ length: Math.max(1, ...parts.map(part => part.length)) }, (_, row) => parts.map(part => {
+      const size = Math.max(...part.map(cardWidth))
+      return (part[row] ?? '') + ' '.repeat(Math.max(0, size - cardWidth(part[row] ?? '')))
+    }).join(''))
+  } else lines = children.flatMap(child => cardLines(child, room))
+  return [...Array(props.marginTop ?? 0).fill(''), ...Array(border).fill(''), ...lines, ...Array(border).fill('')]
+}
+const mountedCards = async (ui: { drawn(): Promise<CardDrawn> }): Promise<CardDrawn[]> => {
+  const root = await ui.drawn()
+  const cards = root.children!.find((node): node is CardDrawn => typeof node !== 'string' && node.props?.key === 'cards')!
+  return cards.children!.filter((node): node is CardDrawn => typeof node !== 'string' && !!node.props?.key?.startsWith('card:'))
+}
+
+for (const cols of [36, 46, 70, 80]) {
+  test(`refined：${cols} 欄 repo／階段／長摘要底列只佔一行`, async ($, on) => {
+    const c = card('甲', { repo: 'frontend', summary: '現場報工端埋-posthog-完整摘要' })
+    const w = world({ ...focusOf('甲', []), sessions: [c] })
+    appearanceConfig.set(w, { appearance: 'refined', motion: false })
+    await start($, on, w)
+    await openPane($)
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    const [drawn] = await mountedCards(ui)
+    const lines = cardLines(drawn!.children!.at(-1)!, cols - 6).filter(line => line.trim())
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain(cols === 36 ? '實作中' : 'frontend · 實作中')
+    expect(lines[0]).toContain('現場報工端埋')
+    expect(lines[0]).toContain('…')
+    expect(cardWidth(lines[0]!)).toBeLessThanOrEqual(cols - 6)
+    if (cols === 36) expect(lines[0]).not.toContain('frontend')
+    await ui.unmount()
+  })
+
+  for (const options of [[], ['繼續', '停止']]) {
+    test(`refined：${cols} 欄${options.length ? '有選項' : '無選項'}未選卡與選中卡等高、問題前僅一空行、編號後留一格`, async ($, on) => {
+      const cards = ['甲', '乙'].map(tag => card(tag, { repo: 'frontend', status: '回覆完畢', question: '要繼續嗎？', options }))
+      const w = world({ ...focusOf('甲', ['乙']), sessions: cards })
+      appearanceConfig.set(w, { appearance: 'refined', motion: false })
+      await start($, on, w)
+      await openPane($)
+      const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+      const [selected, other] = await mountedCards(ui)
+      const a = cardLines(selected!, cols)
+      const b = cardLines(other!, cols)
+      expect(b).toHaveLength(a.length)
+      expect(a).toHaveLength(options.length ? 8 : 7)
+      expect(a[2]).toBe('')
+      expect(b[2]).toBe('')
+      expect(a[3]).toBe('要繼續嗎？')
+      expect(b[3]).toBe('要繼續嗎？')
+      expect(b[1]).toContain('1: ↩ 已回覆')
+      expect(a[1]!.indexOf('↩')).toBe(b[1]!.indexOf('↩'))
+      await arrowTo($, '乙')
+      const swapped = await mountedCards(ui)
+      expect(cardLines(swapped[0]!, cols)).toHaveLength(a.length)
+      expect(cardLines(swapped[1]!, cols)).toHaveLength(b.length)
+      await ui.unmount()
+    })
+  }
+}
 
 test('refined：六種狀態與未知值保留正確圖標、文字及狀態色', async ($, on) => {
   const cases = [
@@ -1522,7 +1604,7 @@ test('refined：超過五筆排隊仍顯示完整隱藏數', async ($, on) => {
 })
 
 test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱且不超寬', async ($, on) => {
-  const cards = [card('abcdefghijklmnopqrstuvwxyzAB'), card('abcdefghijklmnopqr'), card('ABCDEFGHIJKLMNOPQR', { archived: true, pending: false }), card('ABCDEFGH', { archived: true, pending: false })]
+  const cards = [card('abcdefghijklmnopqrstuvwxyzA'), card('abcdefghijklmnopq'), card('ABCDEFGHIJKLMNOPQ', { archived: true, pending: false }), card('ABCDEFG', { archived: true, pending: false })]
   const w = world({ ...focusOf(cards[0]!.tag, [cards[1]!.tag]), sessions: cards })
   appearanceConfig.set(w, { appearance: 'refined', motion: false })
   await start($, on, w)
