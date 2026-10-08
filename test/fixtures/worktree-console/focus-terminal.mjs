@@ -88,7 +88,10 @@ export async function terminalFixture({ counts, columns = 120, socket = `wtcfix8
           const segment = tabs.slice(segmentStart).split(/  (?=[qwer]:)/)[0];
           const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
           const markerStart = width(tabs.slice(0, segmentStart));
-          const underline = lines[row + 1]?.slice(start).trimEnd() ?? "";
+          // Each row is cut at its own sidebar divider: wide characters left of it can shift string indexes between rows.
+          const below = lines[row + 1] ?? "";
+          const divider = below.search(/│(?=[─━])/);
+          const underline = divider >= 0 ? below.slice(divider + 1).trimEnd() : "";
           if (segmentStart >= 0 && underline.slice(markerStart, markerStart + width(segment)) === "━".repeat(width(segment))
             && !underline.slice(0, markerStart).includes("━") && !underline.slice(markerStart + width(segment)).includes("━")
             && expectedContent(frame)) return frame;
