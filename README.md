@@ -121,6 +121,8 @@ The refined panel calls running sessions **工作中**, questions **待回答**,
 
 Set `theme` in `config.json` to `neutral`, `neutral-light`, `dracula`, `gruvbox`, or `light`, then reopen the panel. `neutral` follows your terminal colors; `neutral-light` and `light` provide light-background palettes; `dracula` and `gruvbox` provide dark-background palettes. Theme changes affect only colors, not session data, layout, or shortcuts. The `classic` appearance ignores the theme.
 
+Palettes set foreground and border colors only; they do not change the terminal background. Pair `dracula` and `gruvbox` with a dark terminal, and `light` and `neutral-light` with a light terminal. Contrast was checked against these backgrounds: `dracula` — `#282a36`, `gruvbox` — `#282828`, `light` — `#fdf6e3`, `neutral-light` — `#f7f7f5`.
+
 Every palette keeps authorization labels in its blocked color while the ◆ glyph breathes between blocked and dim. Invalid theme names fall back to `neutral` with one toast per distinct invalid value in the session.
 
 ## Development

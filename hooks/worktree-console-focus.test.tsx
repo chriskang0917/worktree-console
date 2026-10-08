@@ -1440,8 +1440,45 @@ test('refined：主題只換顏色，無效設定只提示一次且每次開面�
   expect(await cardTags(ui)).toEqual(original)
   await openPane($)
   expect(w.toasts).toEqual(['config.json 的 theme 不認得：不存在，改用 neutral'])
+  config.theme = '另一個不存在'
+  await openPane($)
+  expect(w.toasts).toEqual([
+    'config.json 的 theme 不認得：不存在，改用 neutral',
+    'config.json 的 theme 不認得：另一個不存在，改用 neutral',
+  ])
   await ui.unmount()
 })
+
+for (const [name, blocked, dim, border] of [
+  ['neutral', 'red', 'gray', 'gray'],
+  ['neutral-light', '#b3262d', '#5f646d', '#9a9ea6'],
+  ['dracula', '#ffb86c', '#9aa1c2', '#6272a4'],
+  ['gruvbox', '#fe8019', '#bdae93', '#665c54'],
+  ['light', '#a34f00', '#586e75', '#93a1a1'],
+]) {
+  test(`refined：${name} 授權圖標呼吸但文字維持授權色，待回覆文字與線條分色`, async ($, on) => {
+    const w = world(focusOf('perm', ['focusui']))
+    appearanceConfig.set(w, { appearance: 'refined', theme: name })
+    const clock = await start($, on, w)
+    await openPane($)
+    const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+    const focusBand = await $.ui.mount({ ...band(80), surface: 'terminal' })
+    for (const [elapsed, glyphColor] of [[0, blocked], [1_200, dim]] as const) {
+      await clock.advance(elapsed)
+      expect((await ui.find({ type: 'Text', text: '◆' }))?.props.color).toBe(glyphColor)
+      expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe(blocked)
+      expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe(glyphColor)
+      expect((await focusBand.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe(blocked)
+    }
+    expect((await focusBand.find({ type: 'Text', text: '── 待回覆 1/2 ' }))?.props.color).toBe(dim)
+    expect((await focusBand.find({ type: 'Text', text: '─'.repeat(66) }))?.props.color).toBe(border)
+    if (name === 'neutral') {
+      expect((await texts(focusBand)).join('')).toContain(`── 待回覆 1/2 ${'─'.repeat(66)}`)
+    }
+    await focusBand.unmount()
+    await ui.unmount()
+  })
+}
 
 test('refined：只有工作中可見時不開動畫計時器', async ($, on) => {
   const cards = [card('a', { status: '執行中', pending: false }), card('b', { status: '執行中', pending: false })]
@@ -1545,9 +1582,13 @@ test('refined：主要題目不可見時，可見待授權仍呼吸；classic �
   expect((await ui.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
   expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
   config.appearance = 'classic'
+  config.theme = 'dracula'
   await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
   await clock.advance(1_800)
   expect((await ui.find({ type: 'Text', text: ' 等待授權 ' }))?.props.backgroundColor).toBe('#3e2a2a')
+  expect((await ui.find({ key: 'card:工作中@1' }))?.props.borderColor).toBe('cyanBright')
+  expect((await ui.find({ key: 'card:perm@1' }))?.props.borderColor).toBe('#7a7a7a')
+  expect((await ui.find({ type: 'Text', text: ' 等待授權 ' }))?.props.color).toBe('#c8c8c8')
   expect(await ui.find({ type: 'Text', text: '◆' })).toBeUndefined()
   await ui.unmount()
 })
