@@ -40,8 +40,8 @@ const SESSIONS = [
   card('tune', { repo: 'proj-agents-configuration', status: '執行中', pending: false, question: '/goal 本次任務…' }),
   card('PROJ-6668', { repo: 'proj-v2-frontend', question: '你要 A、A＋另開後端票做 B，還是其他做法？', options: ['這張票只在卡片…', '卡片直接顯示狀…', '前端自己去撈分…'], summary: '[FE] 專案檢視介面調整建議' }),
   card('upgrade#2', { repo: 'proj-v2-frontend', status: '回覆完畢', question: '頁面目前是私人的。' }),
-  card('PROJ-6650', { repo: 'proj-v2-frontend', status: '回覆完畢', stage: '已 push', pending: false, archived: true }),
-  card('chart', { repo: 'hours-dashboard', status: '閒置', stage: '已 push', pending: false, question: '（閒置）' }),
+  card('PROJ-6650', { repo: 'proj-v2-frontend', status: '回覆完畢', stage: '已推送', pending: false, archived: true }),
+  card('chart', { repo: 'hours-dashboard', status: '閒置', stage: '已推送', pending: false, question: '（閒置）' }),
   card('perm', { repo: 'hours-dashboard', status: '等待授權', question: 'Bash rm -rf build' }),
 ]
 

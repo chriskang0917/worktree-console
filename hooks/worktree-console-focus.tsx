@@ -57,7 +57,7 @@ const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean
 ]
 
 const STATUS_BG: Record<Status, string> = { 等待回應: '#3b3624', 等待授權: '#3e2a2a', 回覆完畢: '#26323f', 執行中: '#263a2d', 閒置: '#303030' }
-const STAGE_BG: Record<string, string> = { 未開工: '#303030', 規劃中: '#352c40', 實作中: '#24363a', '已 push': '#28382c' }
+const STAGE_BG: Record<string, string> = { 未開工: '#303030', 規劃中: '#352c40', 實作中: '#24363a', 已推送: '#28382c' }
 const TAG_FG = '#c8c8c8'
 const CORNER_FG = '#6a6a6a'
 const EMPTY = '目前沒有符合條件的 session'
