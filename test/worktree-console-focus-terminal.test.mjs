@@ -118,17 +118,19 @@ test("真實終端：切分頁與上下移動後，焦點反白只在選中的�
   const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 151 });
   try {
     await terminal.open();
-    for (const key of ["w", "Down", "q", "Down", "w"]) {
+    // `0` reopens the panel on 待回覆 with the band's question selected, wherever the ring was before.
+    for (const [key, card = ""] of [["w"], ["Down"], ["q"], ["Down"], ["w"], ["Down"], ["0", "\x1b[7mreply0\x1b[0m"], ["q"]]) {
       terminal.tmux("send-keys", "-t", "fixture:0.0", key);
       let inverted = [];
+      const onSelected = () => inverted.length > 0 && inverted.every(part => part.includes("║")) && inverted.some(part => part.includes(card));
       const deadline = Date.now() + 5_000;
       do {
         await new Promise(resolve => setTimeout(resolve, 100));
         const lines = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
         // The panel's part of each row: after its dock divider; the prompt's own cursor block sits left of it.
         inverted = lines.filter(line => line.indexOf("│", 40) >= 0).map(line => line.slice(line.indexOf("│", 40) + 1)).filter(part => part.includes("\x1b[7m"));
-      } while (Date.now() < deadline && inverted.some(part => !part.includes("║")));
-      assert.ok(inverted.length > 0 && inverted.every(part => part.includes("║")), `${key} 後反白落在未選中的卡：${JSON.stringify(inverted)}`);
+      } while (Date.now() < deadline && !onSelected());
+      assert.ok(onSelected(), `${key} 後反白落在未選中的卡：${JSON.stringify(inverted)}`);
     }
   } finally {
     await terminal.close();

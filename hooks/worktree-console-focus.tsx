@@ -351,17 +351,28 @@ function showTab(t: Tab) {
   follow = true
 }
 
-const focusSel = ($: EngineInterface) => sel && void $.ui.focus({ requestId: PANE, key: `name:${sel}` }).catch(() => {})
 // The ring resolves a key against the drawing on screen and keeps only the index, so a focus asked before a tab's
-// new drawing lands on whatever takes that index there (an unselected card's number). Re-ask on each drawing until the
-// held index is the selected name, a few times at most.
+// new drawing lands on whatever takes that index there (an unselected card's number). Re-ask a frame after each
+// drawing, once the engine has it, until the held index is the selected name, a few times at most; a pane without
+// the keys has no ring to fix.
 let focusAfterDraw = 0
+const FRAME_MS = 50
+async function focusSel($: EngineInterface) {
+  const pane = (await $.ui.panes().catch(() => [])).find(p => p.id === PANE)
+  if (!sel || !pane?.isFocused) return void (focusAfterDraw = 0)
+  const res = await $.ui.focus({ requestId: PANE, key: `name:${sel}` }).catch(() => ({ deny: 'failed' }))
+  if (!res.deny) $.ui.invalidate('ui.render')
+}
 
 async function openPane($: EngineInterface, t: Tab = 'pending') {
   await loadPreferences($)
   showTab(t)
   $.ui.invalidate('ui.render')
-  return $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
+  const opened = await $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
+  // The pane takes the keys back only now (the band's `0` held them), its ring still on the old tab's index.
+  focusAfterDraw = 5
+  $.ui.invalidate('ui.render')
+  return opened
 }
 
 // A card's number only chooses it: on a card waiting on you that switches the band to it (and the switch prints it).
@@ -428,7 +439,9 @@ export const register: Register = on => {
     const dir =
       e.origin.kind !== 'person' || to < 0 ? 0 : from === null ? (to === 0 ? 1 : to === n - 1 ? -1 : 0) : to === (from + 1) % n ? 1 : to === (from - 1 + n) % n ? -1 : 0
     const i = rows.findIndex(r => r.key === chosen)
-    const target = dir !== 0 && i >= 0 ? rows[Math.max(0, Math.min(rows.length - 1, i + dir))] : rows.find(r => r.key === m?.[2])
+    // While a new drawing is being re-pinned, the engine re-asserts the card it last held (reopening the pane does): keep the selection.
+    const repin = !!m && e.origin.kind !== 'person' && focusAfterDraw > 0 && i >= 0
+    const target = repin ? rows[i] : dir !== 0 && i >= 0 ? rows[Math.max(0, Math.min(rows.length - 1, i + dir))] : rows.find(r => r.key === m?.[2])
     if (!target) {
       const res = await next(e)
       if (!res.deny) held = to < 0 ? null : to
@@ -482,7 +495,7 @@ export const register: Register = on => {
     ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
     if (focusAfterDraw > 0) {
       if (sel && held !== null && ring[held] === `name:${sel}`) focusAfterDraw = 0
-      else (focusAfterDraw -= 1), $.clock.after(0, () => (focusSel($), $.ui.invalidate('ui.render')))
+      else (focusAfterDraw -= 1), $.clock.after(FRAME_MS, () => void focusSel($))
     }
     // Keep the selected label intact; only unselected labels shorten below 46 columns.
     const tabLabels = TABS.map(x => `${modern && cols < 46 && x.id !== tab ? '' : `${x.label} `}${rowsOf(x.id).length}`)
