@@ -119,9 +119,9 @@ The refined panel calls running sessions **工作中**, questions **待回答**,
 
 ### Themes
 
-Set `theme` in `config.json` to `neutral`, `neutral-light`, `dracula`, `gruvbox`, or `light`, then reopen the panel. `neutral` follows your terminal colors; `neutral-light` and `light` provide light-background palettes; `dracula` and `gruvbox` provide dark-background palettes. Theme changes affect only colors, not session data, layout, or shortcuts. The `classic` appearance ignores the theme.
+Set `theme` in `config.json` to `neutral`, `neutral-light`, `dracula`, `gruvbox`, or `light`, then reopen the panel. `neutral` keeps terminal-native foreground colors and follows Claude Code's panel background. Named themes paint their own panel background: `dracula` — `#282a36`, `gruvbox` — `#282828`, `light` — `#fdf6e3`, `neutral-light` — `#f7f7f5`. Theme changes affect only colors, not session data, layout, or shortcuts. The `classic` appearance ignores the theme and does not paint a background.
 
-Palettes set foreground and border colors only; they do not change the terminal background. Pair `dracula` and `gruvbox` with a dark terminal, and `light` and `neutral-light` with a light terminal. The side panel's background comes from Claude Code, not the terminal, so for the light palettes also switch Claude Code to a light theme (`/theme`). Contrast was checked against these backgrounds: `dracula` — `#282a36`, `gruvbox` — `#282828`, `light` — `#fdf6e3`, `neutral-light` — `#f7f7f5`.
+The outer panel background covers text, card spacing, and unused rows; inner text rows do not need separate backgrounds. Ink's border cells do not inherit that background. Claude Code's own frame, close row, and tab row remain in its theme colors. The focus band and the rest of the terminal retain their existing backgrounds; pair light palettes with a light Claude Code theme for those surfaces. Both light palettes keep dim text contrast at least 4.5:1 on their panel backgrounds. Dracula uses `#9aa1c2` borders for at least 3:1 contrast on `#282a36`.
 
 Every palette keeps authorization labels in its blocked color while the ◆ glyph breathes between blocked and dim. Invalid theme names fall back to `neutral` with one toast per distinct invalid value in the session.
 

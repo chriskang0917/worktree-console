@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { statusCell } from './status-view.ts'
 import { focusBandRows } from './worktree-console-focus.tsx'
+import { THEMES } from './console-theme.ts'
 
 const PLUGIN = 'worktree-console'
 const PANE = 'worktree-console-pending'
@@ -1422,11 +1423,11 @@ test('refined：主題只換顏色，無效設定只提示一次且每次開面�
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
   expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('#8be9fd')
-  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.borderColor).toBe('#6272a4')
+  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.borderColor).toBe('#9aa1c2')
   const original = await cardTags(ui)
   for (const [name, accent, border] of [
     ['neutral', 'cyan', 'gray'], ['neutral-light', '#0f7c8c', '#9a9ea6'],
-    ['dracula', '#8be9fd', '#6272a4'], ['gruvbox', '#83a598', '#665c54'], ['light', '#1f7a73', '#93a1a1'],
+    ['dracula', '#8be9fd', '#9aa1c2'], ['gruvbox', '#83a598', '#665c54'], ['light', '#1f7a73', '#93a1a1'],
   ]) {
     config.theme = name
     await openPane($)
@@ -1452,7 +1453,7 @@ test('refined：主題只換顏色，無效設定只提示一次且每次開面�
 for (const [name, blocked, dim, border] of [
   ['neutral', 'red', 'gray', 'gray'],
   ['neutral-light', '#b3262d', '#5f646d', '#9a9ea6'],
-  ['dracula', '#ffb86c', '#9aa1c2', '#6272a4'],
+  ['dracula', '#ffb86c', '#9aa1c2', '#9aa1c2'],
   ['gruvbox', '#fe8019', '#bdae93', '#665c54'],
   ['light', '#a34f00', '#586e75', '#93a1a1'],
 ]) {
@@ -1823,4 +1824,52 @@ test('refined：長多行問題與五個長排隊名稱仍畫出操作與 0 面�
     expect((await texts(ui)).find((text: string) => text.startsWith('第一行'))?.endsWith('…')).toBe(true)
     await ui.unmount()
   }
+})
+
+const contrast = (a: string, b: string): number => {
+  const luminance = (hex: string) => {
+    const channels = [1, 3, 5].map(i => {
+      const value = parseInt(hex.slice(i, i + 2), 16) / 255
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+    })
+    return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722
+  }
+  const x = luminance(a), y = luminance(b)
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+
+test('主題：命名配色有底色，中性不覆蓋，淺色次要文字與 Dracula 框線可辨識', () => {
+  expect(Object.hasOwn(THEMES.neutral, 'bg')).toBe(false)
+  for (const name of ['dracula', 'gruvbox', 'light', 'neutral-light'] as const) {
+    expect(THEMES[name].bg).toMatch(/^#[0-9a-f]{6}$/)
+  }
+  for (const name of ['light', 'neutral-light'] as const) {
+    const theme = THEMES[name]
+    expect(contrast(theme.dim!, theme.bg!)).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(theme.fg!, theme.bg!)).toBeGreaterThanOrEqual(4.5)
+  }
+  expect(contrast(THEMES.dracula.border!, THEMES.dracula.bg!)).toBeGreaterThanOrEqual(3)
+})
+
+test('面板：命名主題最外層帶底色，中性與 classic 不增加底色', async ($, on) => {
+  const w = world(pending())
+  const config: AppearanceConfig = { theme: 'dracula', motion: false }
+  appearanceConfig.set(w, config)
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  type Drawn = { type: string; props: { backgroundColor?: string }; children?: (Drawn | string)[] }
+  const outer = (node: Drawn): Drawn => node.type === 'Box' ? node : outer(node.children!.find(child => typeof child !== 'string') as Drawn)
+  for (const name of ['dracula', 'gruvbox', 'light', 'neutral-light', 'neutral'] as const) {
+    config.theme = name
+    await openPane($)
+    const box = outer(await ui.drawn())
+    expect(box.props.backgroundColor).toBe('bg' in THEMES[name] ? THEMES[name].bg : undefined)
+    expect(Object.hasOwn(box.props, 'backgroundColor')).toBe(name !== 'neutral')
+  }
+  config.appearance = 'classic'
+  config.theme = 'dracula'
+  await openPane($)
+  expect(Object.hasOwn(outer(await ui.drawn()).props, 'backgroundColor')).toBe(false)
+  await ui.unmount()
 })
