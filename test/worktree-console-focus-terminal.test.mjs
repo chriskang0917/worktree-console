@@ -53,7 +53,7 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
           const prefix = ["reply", "reply", "archive", "idle"][index];
           const header = lines.find(line => line.includes(`${prefix}0`) && /[║│]/.test(line));
           assert.ok(header, lines.join("\n"));
-          assert.match(header, new RegExp(`${index === 3 ? '閒置    ' : '已回覆  '}${prefix}0${index === 2 ? '  取消封存' : ''} +[║│]$`), "首卡標頭右側沒有覆畫的數字");
+          assert.match(header, new RegExp(`${index === 3 ? '閒置    ' : '已回覆  '}${prefix}0${index === 2 ? '  取消封存' : ''}(?: +(?:規劃中|實作中|已推送))? +[║│]$`), "首卡標頭右側沒有覆畫的數字");
         } else {
           assert.ok(lines.some(line => line.includes("目前沒有符合條件的 session")), lines.join("\n"));
         }
