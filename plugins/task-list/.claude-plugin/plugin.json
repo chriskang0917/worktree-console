@@ -1,0 +1,9 @@
+{
+  "name": "task-list",
+  "version": "0.1.0",
+  "description": "Local task lists, completion evidence and review, and text todo graphs; ready after installation, without the console or Linear.",
+  "author": {
+    "name": "chriskang",
+    "email": "chriskang028@gmail.com"
+  }
+}

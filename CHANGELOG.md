@@ -8,6 +8,13 @@
 - Only the primary question alternates ◆/◇ every 900ms. Every visible authorization ◆ breathes together (1.2 seconds blocked, 0.6 seconds dim), while its label and focus-band rail retain the blocked color. Rendering updates only when the visible animation frame changes; working sessions and errors remain static.
 - Refined cards show the stage as a grey tag at the right of the header from 46 columns up, and first in the bottom row below that; 未開工 is omitted. Every status has its own colour: 已回覆 gets bright cyan, 待授權 moves to bright magenta for contrast, 異常 to bright red. Hierarchy by subtraction: the focus band's session name is the one bold lead; status labels, repo rules, counts and the footer stay regular or grey, and only a leading count in a summary (`1 未核對`) lifts to the foreground. The band's name is plain text now; `9: 顯示問題` prints the question. Classic appearance is unchanged.
 - 修正 refined 窄版分頁列：不足 46 欄時僅縮短未選分頁為快捷鍵與計數，所選分頁保留完整名稱與計數，底線同步對齊；維持單行以防計數覆畫首卡標頭。46 欄以上及 classic 不變。回歸測試直接檢查隔離 tmux 中的真實終端畫面，不再以元件樹模擬裁切。
+- Package local task lists as the independently installable `task-list` companion plugin under `plugins/task-list/`; add its marketplace entry and include its tests in root `npm test`.
+- Installation enables the task-writing skill with text graphs on by default; remove task-mode enable/disable commands and restore the main console CLI and skill unchanged.
+- Preserve task storage locations, atomic revisions, evidence review, parent completion, committed-event timelines, and rebuildable offline boards.
+- Provide English task-list documentation and descriptions while retaining Traditional Chinese runtime output and generated task READMEs; include the MIT licence notice and Chris Kang credit in the installable plugin.
+- Add task-list schema v2 with v1 migration, collapsed completed items, a 20-event timeline, and independent outstanding-evidence/activity reminders.
+- Automatically compact eligible old events above 1,000 entries or 2 MiB, retaining the latest 200 and seven days; preserve immutable snapshots, event segments, checksums, cold-command deduplication, paginated history, verification, and forward-only restore.
+- Add preview-first task close/archive with `--yes`, unresolved-work safeguards, durable report/attachment relocation and reference mappings; never automatically delete task history.
 
 ## 1.1.0
 

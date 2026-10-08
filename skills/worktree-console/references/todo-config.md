@@ -1,5 +1,6 @@
 # 待開工的票：設定與篩選
 
+此設定只管 Linear 待開工票；本機任務清單與文字線圖請另裝 [task-list 插件](../../../plugins/task-list/README.md)。
 | 指令 | 用途 |
 | --- | --- |
 | `console.mjs todo --repo R` | 待開工的票：`### 待開工`，空一行後是 markdown 表格 `代號｜票號｜標題`（代號依序 a、b、c）（每列不超過 100 欄）；沒有符合的票就什麼都不印；沒有設定檔印 `skip:no-config`，`titlePrefixes` 為空印 `skip:disabled`，Linear 或 Orca 讀不到印 `skip:<error.code>` |

@@ -1,4 +1,4 @@
-> **Language note:** the skills, their prompts and everything the console prints are in Traditional Chinese (zh-TW). This README is in English; translation is planned.
+> **Language note:** the console's skills, prompts and runtime output are in Traditional Chinese (zh-TW). This README is in English.
 
 <h1 align="center">worktree-console</h1>
 
@@ -60,6 +60,20 @@ Open Claude Code in an Orca or herdr tab inside one of your repos, then:
 | `/worktree-console:handoff` | Hands the current session over to a fresh one |
 
 State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
+
+## Install task-list (optional)
+
+Local task lists ship as a separate companion plugin; the main console has no task CLI or task hooks.
+
+```sh
+claude plugin install task-list@worktree-console
+```
+
+Installing the plugin makes its task-writing skill available, with text todo graphs on by default. No enable command or Linear/Focus dependency is required. See [task-list](./plugins/task-list/README.md) for the standalone CLI, storage, evidence submission, and acceptance. Disable or uninstall it through `claude plugin`; task data is retained.
+
+Its [documentation](./plugins/task-list/README.md) is in English; runtime output and generated task READMEs remain in Traditional Chinese. The installable plugin includes the [MIT licence notice](./plugins/task-list/LICENSE) crediting Chris Kang.
+
+Task-list collapses completed work, displays the latest 20 events, and automatically compacts older events into permanent, checksum-verified history. Explicit `task close` previews evidence archival; `--yes` applies only after outstanding work and unread reports are resolved. See the companion's [cleanup commands](./plugins/task-list/README.md#collapse-compact-and-close).
 
 ## Customizing the console prompt
 
