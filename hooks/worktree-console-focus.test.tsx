@@ -1450,6 +1450,21 @@ test('refined：主題只換顏色，無效設定只提示一次且每次開面�
   await ui.unmount()
 })
 
+for (const name of ['light', 'dracula'] as const) {
+  test(`refined：${name} 空分頁提示用主題 dim 色`, async ($, on) => {
+    const w = world(nothing())
+    appearanceConfig.set(w, { appearance: 'refined', theme: name, motion: false })
+    await start($, on, w)
+    await openPane($)
+    const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+    await ui.press({ key: 'tab:hidden' })
+    const hint = (await ui.findAll({ type: 'Text' })).find((x: any) => x.text.trim() === EMPTY)
+    expect(hint?.props.color).toBe(THEMES[name].dim)
+    expect(hint?.props.dimColor).toBe(false)
+    await ui.unmount()
+  })
+}
+
 for (const [name, blocked, dim, border] of [
   ['neutral', 'red', 'gray', 'gray'],
   ['neutral-light', '#b3262d', '#5f646d', '#9a9ea6'],
