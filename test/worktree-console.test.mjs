@@ -599,10 +599,10 @@ test("board：主 checkout 在扣掉中控台後仍有 agent 時才列出", () =
   assert.ok(!table(run("console.mjs", ["board", "--repo", app()]).out).by.main, "只有中控台自己時不列");
 });
 
-test("階段：看板依 git、目標檔與 run folder 顯示未開工／規劃中／實作中／已 push", () => {
+test("階段：看板依 git、目標檔與 run folder 顯示未開工／規劃中／實作中／已推送", () => {
   const t = table(run("console.mjs", ["board", "--repo", app()]).out);
   assert.equal(t.by["PROJ-101"][3], "實作中");
-  assert.equal(t.by["PROJ-102(question)"][3], "已 push");
+  assert.equal(t.by["PROJ-102(question)"][3], "已推送");
   assert.equal(table(run("console.mjs", ["board", "--repo", app()], { dir: withMenuSession() }).out).by["PROJ-103"][3], "規劃中");
   assert.equal(t.by["PROJ-6923"][3], "未開工");
   assert.equal(t.by["release…#1"][3], "未開工");
@@ -782,13 +782,13 @@ test("階段：docs/dev-flow 以外有未 commit 改動或 commit → 實作中�
   const file = path.join(wt("chris-proj-102-question"), "wip.js");
   fs.writeFileSync(file, "wip\n");
   try {
-    assert.equal(table(run("console.mjs", ["board", "--repo", app()]).out).by["PROJ-102(question)"][3], "實作中", "已 push 後又有未 commit 改動");
+    assert.equal(table(run("console.mjs", ["board", "--repo", app()]).out).by["PROJ-102(question)"][3], "實作中", "已推送 後又有未 commit 改動");
   } finally {
     fs.rmSync(file);
   }
 });
 
-test("階段：只 push 了規劃檔不算已 push；push 了動到 code 的 commit 才是已 push", () => {
+test("階段：只 push 了規劃檔不算已推送；push 了動到 code 的 commit 才是已推送", () => {
   const branch = "chris/proj-7205-push";
   withWorktree(branch, (dir) => {
     writeFile(dir, "docs/dev-flow/chris-proj-7205-push/plan.md", plan("draft"));
@@ -801,11 +801,11 @@ test("階段：只 push 了規劃檔不算已 push；push 了動到 code 的 com
     sh(dir, "commit", "-qm", "code");
     assert.equal(stageAt(dir, branch), "實作中", "code commit 還沒 push");
     sh(dir, "push", "-q");
-    assert.equal(stageAt(dir, branch), "已 push");
+    assert.equal(stageAt(dir, branch), "已推送");
     writeFile(dir, "docs/dev-flow/chris-proj-7205-push/implement-report.md", "# report\n");
     sh(dir, "add", ".");
     sh(dir, "commit", "-qm", "report");
-    assert.equal(stageAt(dir, branch), "已 push", "之後只多了沒 push 的規劃檔 commit");
+    assert.equal(stageAt(dir, branch), "已推送", "之後只多了沒 push 的規劃檔 commit");
     sh(dir, "push", "-q", "origin", "--delete", branch);
   });
 });
@@ -832,7 +832,7 @@ test("階段：worktree comment 含舊的 define-goal 標記且沒有改動 → 
   assert.equal(table(run("console.mjs", ["board", "--repo", app()], { dir }).out).by["release…#1"][3], "規劃中");
 });
 
-test("階段：找不到 base 時，有 upstream、沒有未 push 的 code commit、不 dirty → 已 push", () => {
+test("階段：找不到 base 時，有 upstream、沒有未 push 的 code commit、不 dirty → 已推送", () => {
   const repo = path.join(tmp, "nobase");
   sh(tmp, "clone", "-q", "remote.git", "nobase");
   sh(repo, "remote", "set-head", "origin", "-d");
@@ -843,7 +843,7 @@ test("階段：找不到 base 時，有 upstream、沒有未 push 的 code commi
   sh(repo, "push", "-q", "-u", "origin", "feat-pushed");
   const pushed = stageFacts(repo, null, "feat-pushed");
   assert.deepEqual([pushed.hasBase, pushed.upstream, pushed.unpushed, pushed.dirty], [false, true, 0, false]);
-  assert.equal(deriveStage({ facts: pushed }), "已 push");
+  assert.equal(deriveStage({ facts: pushed }), "已推送");
   fs.writeFileSync(path.join(repo, "q.js"), "x\n");
   assert.equal(deriveStage({ facts: stageFacts(repo, null, "feat-pushed") }), "實作中");
   sh(repo, "checkout", "-q", "-b", "feat-local");
@@ -1020,7 +1020,7 @@ const screenshotRows = () => [
     repo: "proj-v2-frontend",
     label: "PROJ-6700",
     title: "資料管理頁依產業別情境時間選擇匯入-demo-資料",
-    stage: "已 push",
+    stage: "已推送",
     sessions: [{ n: null, status: { kind: "waiting", text: "已推上遠端。\n\n要我接著補 demo 資料匯入流程的端對端測試，還是先等 review？" } }],
   },
   {
@@ -1043,7 +1043,7 @@ test("看板每列顯示寬度不超過 100 欄（中文與 emoji 算 2 格）�
   const t = table(shot.join("\n"));
   assert.deepEqual(t.rows.map((r) => [r[0], r[1], r[3]]), [
     ["⏸ 回覆完畢", "dev", "實作中"],
-    ["💬 等待回應", "PROJ-6700", "已 push"],
+    ["💬 等待回應", "PROJ-6700", "已推送"],
     ["⏸ 回覆完畢", "PROJ-6923", "實作中"],
   ]);
   for (const dir of [fake(), withMenuSession(), fake(addSecondLoginSession)]) {
@@ -1309,7 +1309,7 @@ const listRow = (label, ...sessions) => ({ repo: "app", label, ticket: label, br
 const asking = (text) => agentStatus({ state: "done", lastAssistantMessage: text });
 const releaseBusy = (ps) => agentIn(ps, "release-2026-10").forEach((a) => Object.assign(a, { state: "working", toolName: null }));
 
-test("待回覆清單：watcher 回報時有 1 題以上在等就在看板後附清單，沒有就不附", () => {
+test("待回覆清單：watcher 回報時在看板後附清單（回報的那題一定在等你，所以必附）", () => {
   const two = run("watch.mjs", ["--baseline", allPanes("busy")]).out;
   const list = replyList(two);
   assert.ok(list, two);
@@ -1318,19 +1318,9 @@ test("待回覆清單：watcher 回報時有 1 題以上在等就在看板後附
   const permDone = (ps) => Object.assign(agentIn(ps, "proj-102-perm")[0], { state: "working", toolName: null });
   const one = run("watch.mjs", ["--baseline", allPanes("busy")], { dir: fake({ mutatePs: permDone }) }).out;
   assert.deepEqual(Object.keys(replyList(one).by), ["PROJ-102(question)", "release…#1", "release…#2"], one);
-  const none = fake({
-    mutatePs: (ps) => {
-      permDone(ps);
-      releaseBusy(ps);
-      Object.assign(agentIn(ps, "chris-proj-102-question")[0], { lastAssistantMessage: "做完了。" });
-    },
-  });
-  const zero = run("watch.mjs", ["--baseline", allPanes("busy")], { dir: none }).out;
-  assert.ok(blocks(zero).reports.length > 0, zero);
-  assert.equal(replyList(zero), null, zero);
 });
 
-test("待回覆清單：收 💬、🔐 與還沒 push 的 ⏸；🔄、💤 不列入", () => {
+test("待回覆清單：收 💬、🔐 與 ⏸（任何階段）；🔄、💤 不列入", () => {
   const rows = [
     listRow("PROJ-1", session(asking("要改嗎？"))),
     listRow("PROJ-2", session({ kind: "done", text: "登入頁改好了。測試也過了。" })),
@@ -1352,11 +1342,10 @@ test("待回覆清單：實作中的 ⏸ 列入，問題欄放最後一句；未
   assert.equal(pendingItems([{ ...listRow("PROJ-2", session(done)), stage: undefined }]).length, 0, "不知道階段時不列");
 });
 
-test("待回覆清單：已 push 的 ⏸ 不列入", () => {
-  const pushed = { ...listRow("PROJ-6", session({ kind: "done", text: "已推上遠端。" }, { handle: "h6" })), stage: "已 push" };
-  assert.deepEqual(pendingBlock([pushed]), []);
+test("待回覆清單：已推送 的 ⏸ 照樣列入", () => {
+  const pushed = { ...listRow("PROJ-6", session({ kind: "done", text: "已推上遠端。" }, { handle: "h6" })), stage: "已推送" };
   const rows = [listRow("PROJ-1", session(asking("要改嗎？"), { handle: "h1" })), pushed];
-  assert.deepEqual(Object.keys(replyList(pendingBlock(rows).join("\n")).by), ["PROJ-1"]);
+  assert.deepEqual(Object.keys(replyList(pendingBlock(rows).join("\n")).by), ["PROJ-1", "PROJ-6"]);
 });
 
 test("待回覆清單：代號沿用看板 tag，多 session 帶 #n，不另編流水號", () => {
@@ -1443,7 +1432,7 @@ test("現在狀況：有 1 題以上在等回覆時看板後附同一份清單�
     mutatePs: (ps) => {
       permDone(ps);
       releaseBusy(ps);
-      Object.assign(agentIn(ps, "chris-proj-102-question")[0], { lastAssistantMessage: "做完了。" });
+      Object.assign(agentIn(ps, "chris-proj-102-question")[0], { state: "working", toolName: null });
     },
   });
   assert.equal(replyList(run("console.mjs", ["board", "--repo", app()], { dir: none }).out), null);

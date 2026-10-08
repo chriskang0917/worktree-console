@@ -25,7 +25,7 @@ const URGENCY = ["anomaly", "permission", "busy", "waiting", "done", "idle"];
 const NEEDS_YOU = new Set(["anomaly", "permission", "waiting", "done"]);
 const CELL_MAX = 30;
 export const BOARD_WIDTH = 100;
-export const STAGE = { idle: "未開工", planning: "規劃中", implementing: "實作中", pushed: "已 push" };
+export const STAGE = { idle: "未開工", planning: "規劃中", implementing: "實作中", pushed: "已推送" };
 const PLAN_DIR = "docs/dev-flow";
 const NOT_PLAN = [":(top)", `:(top,exclude)${PLAN_DIR}`];
 const BOARD_HEAD = ["狀態", "票號", "摘要", "階段", "最後動態"];
@@ -1345,10 +1345,10 @@ function pendingEntry(tag, status, agent) {
   return textEntry(tag, status.text);
 }
 
-// A turn that ended without a question still waits on you until the ticket is pushed.
+// A turn that ended without a question still waits on you, whatever the stage.
 function awaitsYou(row, session) {
   const kind = session.status.kind;
-  return kind === "anomaly" || kind === "waiting" || kind === "permission" || (kind === "done" && !!row.stage && row.stage !== STAGE.pushed);
+  return kind === "anomaly" || kind === "waiting" || kind === "permission" || (kind === "done" && !!row.stage);
 }
 
 // Fields of a stop event: what the session waits on (permission: tool and first 80 chars) and its own suggestion.
@@ -1374,7 +1374,7 @@ function lastSentence(text) {
   return sentences((paragraphs(text).at(-1) ?? []).join(" ")).at(-1) ?? "";
 }
 
-// Sessions in ⚠️, 💬, 🔐, or ⏸ before 已 push, in board order with ⚠️ first; `exclude` holds tags just replied to.
+// Sessions in ⚠️, 💬, 🔐, or ⏸, in board order with ⚠️ first; `exclude` holds tags just replied to.
 export function pendingItems(rows, exclude = new Set()) {
   const items = [];
   for (const row of rows) {

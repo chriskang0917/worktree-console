@@ -40,8 +40,8 @@ const SESSIONS = [
   card('tune', { repo: 'proj-agents-configuration', status: '執行中', pending: false, question: '/goal 本次任務…' }),
   card('PROJ-6668', { repo: 'proj-v2-frontend', question: '你要 A、A＋另開後端票做 B，還是其他做法？', options: ['這張票只在卡片…', '卡片直接顯示狀…', '前端自己去撈分…'], summary: '[FE] 專案檢視介面調整建議' }),
   card('upgrade#2', { repo: 'proj-v2-frontend', status: '回覆完畢', question: '頁面目前是私人的。' }),
-  card('PROJ-6650', { repo: 'proj-v2-frontend', status: '回覆完畢', stage: '已 push', pending: false, archived: true }),
-  card('chart', { repo: 'hours-dashboard', status: '閒置', stage: '已 push', pending: false, question: '（閒置）' }),
+  card('PROJ-6650', { repo: 'proj-v2-frontend', status: '回覆完畢', stage: '已推送', pending: false, archived: true }),
+  card('chart', { repo: 'hours-dashboard', status: '閒置', stage: '已推送', pending: false, question: '（閒置）' }),
   card('perm', { repo: 'hours-dashboard', status: '等待授權', question: 'Bash rm -rf build' }),
 ]
 
@@ -445,7 +445,7 @@ test('pane groups by repo outside 待回覆: `── <repo> ── 共 N 個` co
   await ui.unmount()
 })
 
-test('cards: number (none on the question on screen) and nickname button, text status tag, stage on the right; question; a. b. options as text; summary, never 建議; chosen is a cyan double frame with a bold question', async ($, on) => {
+test('cards: number (none on the question on screen) and nickname button, text status tag, stage on the right; the question in grey, no options; summary, never 建議; chosen is a cyan double frame, its question not bold', async ($, on) => {
   const w = world(focusOf('focusui', ['perm', 'logging', 'PROJ-6668', 'upgrade#2']))
   await start($, on, w)
   await openPane($)
@@ -454,21 +454,61 @@ test('cards: number (none on the question on screen) and nickname button, text s
     const first = await ui.find({ key: `card:${keyOf('focusui')}` })
     expect(first?.props).toMatchObject({ borderStyle: 'double', borderColor: 'cyanBright' })
     expect(first?.text).toContain('展示 mod 的樣式要套在哪裡？')
-    expect(first?.text).toContain('a. 只套面板　b. 橫條也改清單　c. 都套')
+    expect(first?.text).not.toMatch(/a\. |只套面板|橫條也改清單/)
     expect(first?.text).not.toContain('建議：')
     expect(first?.text).toContain('feat/focusui')
     expect(first?.text).toContain(' 等待回應 ')
     expect(first?.text).toContain(' 規劃中 ')
     expect(first?.text).not.toMatch(/💬|🔐|⏸/)
-    expect((await ui.find({ type: 'Text', text: '展示 mod' }))?.props.bold).toBe(true)
+    expect((await ui.find({ type: 'Text', text: '展示 mod' }))?.props).toMatchObject({ dimColor: true, wrap: 'truncate-end' })
+    expect((await ui.find({ type: 'Text', text: '展示 mod' }))?.props.bold).toBeFalsy()
     expect(await ui.find({ key: `num:${keyOf('focusui')}` })).toBeUndefined()
     expect((await ui.find({ key: `num:${keyOf('perm')}` }))?.props).toMatchObject({ hotkey: '1', label: '', plain: true })
     expect((await ui.find({ key: `name:${keyOf('focusui')}` }))?.props).toMatchObject({ label: 'focusui', plain: true })
     expect((await ui.find({ key: `name:${keyOf('focusui')}` }))?.props.hotkey).toBeUndefined()
     const other = await ui.find({ key: `card:${keyOf('perm')}` })
     expect(other?.props).toMatchObject({ borderStyle: 'round', borderColor: '#7a7a7a' })
-    expect((await ui.find({ type: 'Text', text: 'Bash rm' }))?.props.bold).toBe(false)
+    expect((await ui.find({ type: 'Text', text: 'Bash rm' }))?.props).toMatchObject({ dimColor: true })
+    expect((await ui.find({ type: 'Text', text: 'Bash rm' }))?.props.bold).toBeFalsy()
     expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+const findKey = (node: any, key: string): any => (node?.props?.key === key ? node : (node?.children ?? []).map((c: any) => (typeof c === 'object' ? findKey(c, key) : null)).find(Boolean))
+const textOf = (node: any): string => (typeof node === 'string' ? node : (node?.children ?? []).map(textOf).join(''))
+
+test('cards on 待回覆, 全部, 封存 and 閒置: header, one grey question row, corner line — 3 rows, no gap; a long or multi-line question is cut with … and never wraps; options never show', async ($, on) => {
+  const long = '這是一個非常長的題目，會遠遠超過卡片的內寬，\n而且還有第二行與第三行的內容，需要被截短成一行並以刪節號結尾'
+  const opts = { question: long, options: ['第一個選項', '第二個選項'] }
+  const four = [
+    card('p1', opts),
+    card('a1', { ...opts, status: '執行中', pending: false }),
+    card('h1', { ...opts, archived: true, pending: false, status: '回覆完畢' }),
+    card('i1', { ...opts, status: '閒置', pending: false }),
+  ]
+  const w = world({ ...focusOf('p1', []), sessions: four })
+  await start($, on, w)
+  await openPane($)
+  for (const cols of [40, 70]) {
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    for (const [tabKey, tag] of [['tab:pending', 'p1'], ['tab:all', 'a1'], ['tab:hidden', 'h1'], ['tab:idle', 'i1']]) {
+      await ui.press({ key: tabKey })
+      const box = findKey(await ui.drawn(), `card:${keyOf(tag)}`)
+      expect(box.children.length).toBe(3)
+      for (const child of box.children) expect(child.props.marginTop ?? 0).toBe(0)
+      const q = box.children[1]
+      expect(q.type).toBe('Text')
+      expect(q.props).toMatchObject({ dimColor: true, wrap: 'truncate-end' })
+      expect(q.props.bold).toBeFalsy()
+      const line = textOf(q)
+      expect(line.startsWith('這是一個非常長的題目')).toBe(true)
+      expect(line.endsWith('…')).toBe(true)
+      expect(line).not.toContain('\n')
+      expect(cells(line)).toBeLessThanOrEqual(cols - 6)
+      expect(cells(line)).toBeGreaterThan(cols - 8)
+      expect(textOf(box)).not.toMatch(/a\. |第一個選項|第二個選項/)
+    }
     await ui.unmount()
   }
 })
@@ -719,7 +759,7 @@ test('empty pane: the frame is a grey darker than a card frame (#7a7a7a), never 
 const corner = async (ui: any, tag: string) => (await ui.find({ key: `corner:${keyOf(tag)}` }))?.text
 const withRepos = (repos: Record<string, Partial<Card>>) => ({ ...pending(), sessions: SESSIONS.map(s => ({ ...s, ...repos[s.tag] })) })
 
-test('card corner on 待回覆: the repo in grey with no prefix on every card, choice questions too, never 建議; the summary on the right stays', async ($, on) => {
+test('card corner on 待回覆: the repo and the summary in dark grey #6a6a6a, darker than the question; the repo with no prefix on every card, choice questions too, never 建議; the summary on the right stays', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   await openPane($)
@@ -728,7 +768,8 @@ test('card corner on 待回覆: the repo in grey with no prefix on every card, c
   expect(await corner(ui, 'upgrade#2')).toBe('proj-v2-frontend')
   expect(await corner(ui, 'focusui')).toBe('agent-skills')
   expect(await corner(ui, 'PROJ-6668')).toBe('proj-v2-frontend')
-  expect((await ui.find({ type: 'Text', text: 'hours-dashboard' }))?.props.dimColor).toBe(true)
+  expect((await ui.find({ type: 'Text', text: 'hours-dashboard' }))?.props.color).toBe('#6a6a6a')
+  expect((await ui.find({ type: 'Text', text: 'feat/perm' }))?.props.color).toBe('#6a6a6a')
   expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.text).toContain('feat/perm')
   expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.text).not.toContain('repo：')
   for (const r of pending().sessions) expect((await ui.find({ key: `card:${r.key}` }))?.text ?? '').not.toContain('建議：')
@@ -958,7 +999,7 @@ test('待回覆 cards past the 5th go on 6, 7, …; the pane picks them by that 
   w.focus = start0
   await clock.advance(5_000)
   await openPane($)
-  const small = await $.ui.mount({ ...pane(70, 26), surface: 'terminal' })
+  const small = await $.ui.mount({ ...pane(70, 19), surface: 'terminal' })
   expect(await drawnTags(small)).toEqual(['perm', 'q0', 'q1'])
   expect(await drawnTags(small)).not.toContain('q6')
   const off = await small.find({ key: `num:${keyOf('q6')}` })
@@ -1075,8 +1116,8 @@ test('cards past the pane height: the keys line scrolls with the cards, out of v
   await start($, on, w)
   await openPane($)
   for (const [rows, first, last] of [
-    [26, ['perm', 'q0', 'q1'], ['q7', 'q8', 'q9']],
-    [23, ['perm', 'q0', 'q1'], ['q8', 'q9']],
+    [19, ['perm', 'q0', 'q1'], ['q7', 'q8', 'q9']],
+    [18, ['perm', 'q0', 'q1'], ['q8', 'q9']],
   ] as const) {
     const ui = await $.ui.mount({ ...pane(70, rows), surface: 'terminal' })
     const scroll = (by: number, pointer?: object) => $.ui.scroll({ component: 'Pane', requestId: PANE, offset: 0, by, bodyRows: rows, contentRows: rows, origin: { kind: 'person' }, ...(pointer && { pointer }) } as any)
@@ -1086,8 +1127,8 @@ test('cards past the pane height: the keys line scrolls with the cards, out of v
       const drawn = (await drawnTags(ui)).length
       const foot = end ? 2 : 0
       expect(await footerLines(ui)).toEqual(end ? [FOOTER_TEXT] : null)
-      expect(2 + drawn * 7 + foot).toBeLessThanOrEqual(rows)
-      if (!end) expect(2 + (drawn + 1) * 7).toBeGreaterThan(rows)
+      expect(2 + drawn * 5 + foot).toBeLessThanOrEqual(rows)
+      expect(2 + (drawn + 1) * 5 + foot).toBeGreaterThan(rows)
     }
     expect(await drawnTags(ui)).toEqual([...first])
     await check(false)
@@ -1123,10 +1164,10 @@ test('the same pane height holds more cards than when the counts and keys were p
   const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [...SESSIONS, ...many] })
   await start($, on, w)
   await openPane($)
-  for (const rows of [23, 30, 37]) {
+  for (const rows of [17, 22, 27]) {
     const ui = await $.ui.mount({ ...pane(70, rows), surface: 'terminal' })
-    expect((await drawnTags(ui)).length).toBe(Math.floor((rows - 2) / 7))
-    expect((await drawnTags(ui)).length).toBeGreaterThan(Math.floor((rows - 5) / 7))
+    expect((await drawnTags(ui)).length).toBe(Math.floor((rows - 2) / 5))
+    expect((await drawnTags(ui)).length).toBeGreaterThan(Math.floor((rows - 5) / 5))
     await ui.unmount()
   }
 })
@@ -1136,7 +1177,7 @@ test('↑↓ onto a card out of view scrolls the pane until that card shows whol
   const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [...SESSIONS, ...many] })
   await start($, on, w)
   await openPane($)
-  const ui = await $.ui.mount({ ...pane(70, 26), surface: 'terminal' })
+  const ui = await $.ui.mount({ ...pane(70, 19), surface: 'terminal' })
   const arrow = arrows($, ui, w)
   expect(await drawnTags(ui)).toEqual(['perm', 'q0', 'q1'])
   await arrow(1)
