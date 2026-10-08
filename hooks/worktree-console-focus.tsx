@@ -471,8 +471,9 @@ export const register: Register = on => {
     ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
     const tabStart = TABS.slice(0, TABS.findIndex(x => x.id === tab)).reduce((n, x) => n + columns(`${x.key}: ${x.label} ${rowsOf(x.id).length}`) + 2, 0)
     const tabWidth = Math.min(Math.max(0, cols - tabStart), columns(`${TABS.find(x => x.id === tab)!.key}: ${TABS.find(x => x.id === tab)!.label} ${rows.length}`))
+    // Narrow tab labels can wrap past their row and paint over the first card.
     const tabs = (
-      <Box key="tabs" flexDirection="row" columnGap={2} marginBottom={modern ? 0 : 1}>
+      <Box key="tabs" flexDirection="row" columnGap={2} marginBottom={modern ? 0 : 1} height={modern ? 1 : undefined} flexShrink={modern ? 0 : undefined} overflow={modern ? 'hidden' : undefined}>
         {TABS.map(x => (
           <Button
             key={`tab:${x.id}`}
