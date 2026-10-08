@@ -1,6 +1,6 @@
-export type ConsoleTheme = Record<'fg' | 'muted' | 'dim' | 'border' | 'accent' | 'busy' | 'waiting' | 'blocked' | 'error', string | undefined>
+export type ConsoleTheme = Record<'fg' | 'muted' | 'dim' | 'border' | 'accent' | 'busy' | 'waiting' | 'blocked' | 'answered' | 'error', string | undefined>
 export const THEMES = {
-  neutral: { fg: undefined, muted: undefined, dim: 'gray', border: 'gray', accent: 'cyan', busy: 'green', waiting: 'yellow', blocked: 'red', error: 'red' },
+  neutral: { fg: undefined, muted: undefined, dim: 'gray', border: 'gray', accent: 'cyan', busy: 'green', waiting: 'yellow', blocked: 'magentaBright', answered: 'cyanBright', error: 'redBright' },
 } satisfies Record<string, ConsoleTheme>
 export type Appearance = { appearance: 'refined' | 'classic'; theme: keyof typeof THEMES; motion: boolean }
 export function loadAppearance(text: string, warnings: string[]): Appearance {

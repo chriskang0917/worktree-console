@@ -1204,20 +1204,30 @@ test('↑↓ onto a card out of view scrolls the pane until that card shows whol
   await ui.unmount()
 })
 
-test('refined：各欄寬階段固定在底列，無階段不留分隔符', async ($, on) => {
+test('refined：46 欄以上階段是標頭右側灰色小標，更窄移到底列最前；未開工與無階段不顯示', async ($, on) => {
   const name = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-  const cards = [card('短名', { repo: 'claude-personal' }), card(name), card('無進度', { stage: '—' })]
-  const w = world({ ...focusOf('短名', [name, '無進度']), sessions: cards })
+  const cards = [card('短名', { repo: 'claude-personal' }), card(name), card('無進度', { stage: '—' }), card('沒開工', { stage: '未開工' })]
+  const w = world({ ...focusOf('短名', [name, '無進度', '沒開工']), sessions: cards })
   appearanceConfig.set(w, { appearance: 'refined', motion: false })
   await start($, on, w)
   await openPane($)
-  for (const cols of [80, 60, 59, 46, 36]) {
+  for (const cols of [80, 60, 59, 46, 45, 39, 36]) {
     const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    const header = cols >= 46
+    const stage = await ui.find({ key: `stage:${cards[0]!.key}` })
+    expect(stage?.text).toBe(header ? '實作中' : undefined)
+    if (header) expect((await ui.find({ type: 'Text', text: '實作中' }))?.props.color).toBe('gray')
+    expect(await ui.find({ key: `stage:${cards[2]!.key}` })).toBeUndefined()
+    expect(await ui.find({ key: `stage:${cards[3]!.key}` })).toBeUndefined()
+    expect((await ui.find({ key: `card:${cards[3]!.key}` }))!.text).not.toContain('未開工')
     for (const c of cards) {
       expect((await ui.find({ key: `card:${c.key}` }))!.text).not.toContain('階段')
       expect((await ui.find({ key: `summary:${c.key}` }))!.text).not.toContain('實作中')
     }
-    expect((await ui.find({ key: `corner:${cards[0]!.key}` }))!.text).toBe(cols === 36 ? '實作中' : 'claude-personal · 實作中')
+    const corner = (await ui.find({ key: `corner:${cards[0]!.key}` }))!.text
+    if (header) expect(corner).toBe('claude-personal')
+    else if (cols === 36) expect(corner).toBe('實作中')
+    else expect(corner).toMatch(/^實作中 · claude/)
     expect((await ui.find({ key: `corner:${cards[2]!.key}` }))!.text).not.toContain('·')
     await ui.unmount()
   }
@@ -1265,7 +1275,7 @@ const mountedCards = async (ui: { drawn(): Promise<CardDrawn> }): Promise<CardDr
   return cards.children!.filter((node): node is CardDrawn => typeof node !== 'string' && !!node.props?.key?.startsWith('card:'))
 }
 
-test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段維持 muted 且不加粗', async ($, on) => {
+test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段小標也是 dim 且不加粗', async ($, on) => {
   const c = card('甲', { repo: 'frontend', summary: '現場報工端埋' })
   const w = world({ ...focusOf('甲', []), sessions: [c] })
   appearanceConfig.set(w, { appearance: 'refined', motion: false })
@@ -1274,7 +1284,7 @@ test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段維�
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: '現場報工端埋' }))?.props.color).toBe('gray')
   const stage = await ui.find({ type: 'Text', text: '實作中' })
-  expect(stage?.props.color).toBeUndefined()
+  expect(stage?.props.color).toBe('gray')
   expect(stage?.props.bold).toBeFalsy()
   await ui.unmount()
 })
@@ -1290,7 +1300,8 @@ for (const cols of [36, 46, 70, 80]) {
     const [drawn] = await mountedCards(ui)
     const lines = cardLines(drawn!.children!.at(-1)!, cols - 6).filter(line => line.trim())
     expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain(cols === 36 ? '實作中' : 'frontend · 實作中')
+    expect(lines[0]).toContain(cols === 36 ? '實作中' : cols < 46 ? '實作中 · frontend' : 'frontend')
+    if (cols >= 46) expect(lines[0]).not.toContain('實作中')
     expect(lines[0]).toContain('現場報工端埋')
     expect(lines[0]).toContain('…')
     expect(cardWidth(lines[0]!)).toBeLessThanOrEqual(cols - 6)
@@ -1328,10 +1339,12 @@ for (const cols of [36, 46, 70, 80]) {
 test('refined：六種狀態與未知值保留正確圖標、文字及狀態色', async ($, on) => {
   const cases = [
     ['執行中', '✳ 工作中', 'green'], ['等待回應', '◆ 待回答', 'yellow'],
-    ['等待授權', '◆ 待授權', 'red'], ['回覆完畢', '↩ 已回覆', undefined],
-    ['閒置', '- 閒置', 'gray'], ['session 異常，需手動排程', '! 異常', 'red'],
+    ['等待授權', '◆ 待授權', 'magentaBright'], ['回覆完畢', '↩ 已回覆', 'cyanBright'],
+    ['閒置', '- 閒置', 'gray'], ['session 異常，需手動排程', '! 異常', 'redBright'],
     ['未知狀態內容', '? 未知…', 'gray'],
   ] as const
+  expect(new Set(cases.slice(0, 4).map(c => c[2])).size).toBe(4)
+  expect(new Set(cases.slice(0, 6).filter(c => c[0] !== '閒置').map(c => c[2])).size).toBe(5)
   const cards = cases.map(([status], i) => card(`狀態${i}`, { status }))
   const w = world({ ...focusOf('狀態0', cards.slice(1).map(c => c.tag)), sessions: cards })
   appearanceConfig.set(w, { appearance: 'refined', motion: false })
@@ -1399,19 +1412,19 @@ test('refined：所有可見待授權同拍呼吸，文字不變暗，關閉 mot
   for (const tag of ['perm', '另一授權']) expect((await ui.find({ key: `status:${keyOf(tag)}` }))?.text).toContain('◆ 待授權')
   expect((await ui.findAll({ type: 'Text', text: '◆' })).map(t => t.props.color)).toEqual(['gray', 'gray', 'yellow'])
   expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
-  expect((await focusBand.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('red')
-  expect((await focusBand.find({ type: 'Text', text: '│ ' }))?.props.color).toBe('red')
-  expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('red')
+  expect((await focusBand.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
+  expect((await focusBand.find({ type: 'Text', text: '│ ' }))?.props.color).toBe('magentaBright')
+  expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
   await clock.advance(600)
   expect(invalidations).toBe(before + 2)
-  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('red')
+  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('magentaBright')
   config.motion = false
   await openPane($)
   const stopped = invalidations
   await clock.advance(900)
   expect(invalidations).toBe(stopped)
   expect((await ui.find({ key: 'status:perm@1' }))?.text).toContain('◆ 待授權')
-  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('red')
+  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('magentaBright')
   await focusBand.unmount()
   await ui.unmount()
 })
@@ -1465,7 +1478,7 @@ test('refined：主要題目不可見時，可見待授權仍呼吸；classic �
   const ui = await $.ui.mount({ ...pane(36), surface: 'terminal' })
   await clock.advance(1_200)
   expect((await ui.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
-  expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('red')
+  expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
   config.appearance = 'classic'
   await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
   await clock.advance(1_800)
@@ -1480,7 +1493,7 @@ test('refined：焦點框待回覆分隔線、授權色左線、不重複階段�
   const clock = await start($, on, w)
   const ui = await $.ui.mount({ ...band(46), surface: 'terminal' })
   expect((await texts(ui)).some((t: string) => t.includes('待回覆 1/2'))).toBe(true)
-  expect((await ui.find({ type: 'Text', text: '│ ' }))?.props.color).toBe('red')
+  expect((await ui.find({ type: 'Text', text: '│ ' }))?.props.color).toBe('magentaBright')
   expect((await texts(ui)).some((t: string) => t.includes('實作中'))).toBe(false)
   expect((await labels(ui)).some((t: string) => t.includes('1: focusui'))).toBe(true)
   w.focus = focusOf('perm', [])
@@ -1617,7 +1630,7 @@ test('refined：超過五筆排隊仍顯示完整隱藏數', async ($, on) => {
 })
 
 test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱且不超寬', async ($, on) => {
-  const cards = [card('abcdefghijklmnopqrstuvwxyzA'), card('abcdefghijklmnopq'), card('ABCDEFGHIJKLMNOPQ', { archived: true, pending: false }), card('ABCDEFG', { archived: true, pending: false })]
+  const cards = [card('abcdefghijklmnopqrst'), card('abcdefghijklmnopq'), card('ABCDEFGHIJ', { archived: true, pending: false }), card('ABCDEFG', { archived: true, pending: false })]
   const w = world({ ...focusOf(cards[0]!.tag, [cards[1]!.tag]), sessions: cards })
   appearanceConfig.set(w, { appearance: 'refined', motion: false })
   await start($, on, w)

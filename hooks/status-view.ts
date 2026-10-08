@@ -1,12 +1,12 @@
 export const ANIMATION_FRAMES = { attention: ['◆', '◇'] } as const
 export const PULSE = { on: 8, period: 12 } as const
-type StatusColor = 'busy' | 'waiting' | 'blocked' | 'muted' | 'dim' | 'error'
+type StatusColor = 'busy' | 'waiting' | 'blocked' | 'answered' | 'dim' | 'error'
 export type StatusCell = { glyph: string; label: string; color: StatusColor; glyphColor: StatusColor }
 const STATUS_VIEW: Record<string, Omit<StatusCell, 'glyphColor'>> = {
   執行中: { glyph: '✳', label: '工作中', color: 'busy' },
   等待回應: { glyph: '◆', label: '待回答', color: 'waiting' },
   等待授權: { glyph: '◆', label: '待授權', color: 'blocked' },
-  回覆完畢: { glyph: '↩', label: '已回覆', color: 'muted' },
+  回覆完畢: { glyph: '↩', label: '已回覆', color: 'answered' },
   閒置: { glyph: '-', label: '閒置', color: 'dim' },
   'session 異常，需手動排程': { glyph: '!', label: '異常', color: 'error' },
 }

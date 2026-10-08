@@ -499,10 +499,13 @@ export const register: Register = on => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
       const cell = statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
-      const tagRoom = modern ? inner - 13 - (hidden ? 10 : 0) : inner - columns(` ${r.status} `) - columns(` ${r.stage} `) - 3 - (hidden ? columns('取消封存') + 2 : 0)
+      // Stage is the ticket's progress, not a repo attribute: a quiet header tag where the name can spare it, else first on the bottom row.
+      const stageWord = modern && r.stage !== '—' && r.stage !== '未開工' ? r.stage : ''
+      const stageInHeader = !!stageWord && cols >= 46
+      const tagRoom = modern ? inner - 13 - (hidden ? 10 : 0) - (stageInHeader ? 7 : 0) : inner - columns(` ${r.status} `) - columns(` ${r.stage} `) - 3 - (hidden ? columns('取消封存') + 2 : 0)
       const tag = truncateColumns(r.tag, Math.max(1, tagRoom))
       const summary = truncateColumns(r.summary, modern ? cols <= 36 ? 15 : SUMMARY_MAX : Math.min(SUMMARY_MAX, inner))
-      const room = inner - columns(summary) - CORNER_GAP - (modern && r.stage !== '—' ? columns(r.stage) + 3 : 0)
+      const room = inner - columns(summary) - CORNER_GAP - (stageWord && !stageInHeader ? columns(stageWord) + 3 : 0)
       const repo = tab === 'pending' && room >= REPO_MIN && !(modern && cols <= 36) ? truncateColumns(r.repo, room) : ''
       const stage = <Text backgroundColor={STAGE_BG[r.stage] ?? '#303030'} color={TAG_FG} wrap="truncate-end">{` ${r.stage} `}</Text>
       return (
@@ -517,11 +520,12 @@ export const register: Register = on => {
               {!modern && <Text backgroundColor={STATUS_BG[r.status]} color={TAG_FG} wrap="truncate-end">{` ${r.status} `}</Text>}
             </Box>
             {!modern && stage}
+            {stageInHeader && <Box key={`stage:${r.key}`} width={columns(stageWord)} flexShrink={0} marginLeft={1}><Text color={theme.dim}>{stageWord}</Text></Box>}
           </Box>
           <Text dimColor={!modern} color={modern ? theme.dim : undefined} wrap="truncate-end">{truncateColumns(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
           <Box flexDirection="row" justifyContent="space-between">
             <Box key={`corner:${r.key}`} flexDirection={modern ? 'row' : undefined} flexShrink={modern ? 0 : undefined}>
-              {modern ? <Text wrap="truncate-end"><Text color={theme.dim}>{repo}{repo && r.stage !== '—' ? ' · ' : ''}</Text>{r.stage !== '—' && <Text color={theme.muted}>{r.stage}</Text>}</Text> : <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>}
+              {modern ? <Text wrap="truncate-end" color={theme.dim}>{stageInHeader || !stageWord ? repo : `${stageWord}${repo ? ` · ${repo}` : ''}`}</Text> : <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>}
             </Box>
             <Box key={`summary:${r.key}`} flexDirection={modern ? 'row' : undefined} flexShrink={modern ? 0 : undefined}>
               <Text color={modern ? theme.dim : CORNER_FG} wrap="truncate-end">{summary}</Text>
