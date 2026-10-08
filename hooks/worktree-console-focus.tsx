@@ -131,10 +131,11 @@ export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, has
   return { margin, separator, header, actions, keys, question: questionRows, questionText, queueLabels, keyLines }
 }
 
-// Only a leading count lifts to the foreground; digits inside words (面板 v2 改版) stay in the caller's quiet colour.
+// Only a leading count lifts to the foreground; digits inside words (面板 v2 改版) stay dim.
 const leadNumbers = (Text: (props: any) => any, text: string, theme: ConsoleTheme) => {
   const lead = /^\d+(?=\s)/.exec(text)?.[0]
-  return lead ? [<Text key="lead" color={theme.fg}>{lead}</Text>, text.slice(lead.length)] : text
+  // The quiet part is its own run: a parent colour would leak into neutral's colourless fg.
+  return lead ? [<Text key="lead" color={theme.fg}>{lead}</Text>, <Text key="rest" color={theme.dim}>{text.slice(lead.length)}</Text>] : <Text color={theme.dim}>{text}</Text>
 }
 
 let focus: Focus = { active: false }
@@ -520,7 +521,7 @@ export const register: Register = on => {
             <Box flexDirection="row">
               {modern ? <Box key={`number:${r.key}`} width={3} flexShrink={0} overflow="hidden">{num ? <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} /> : <Text>   </Text>}</Box> : num && <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} />}
               {modern && <Box flexDirection="row"><Box key={`status:${r.key}`} flexDirection="row" width={8} flexShrink={0}><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}`}</Text></Box><Text>  </Text></Box>}
-              {hidden && <Text bold={modern} color={modern ? theme.fg : undefined}>{`${tag}  `}</Text>}
+              {hidden && <Text color={modern ? theme.fg : undefined}>{`${tag}  `}</Text>}
               <Button key={`name:${r.key}`} label={hidden ? '取消封存' : tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} />
               {!modern && <Text>  </Text>}
               {!modern && <Text backgroundColor={STATUS_BG[r.status]} color={TAG_FG} wrap="truncate-end">{` ${r.status} `}</Text>}
@@ -534,7 +535,7 @@ export const register: Register = on => {
               {modern ? <Text wrap="truncate-end" color={theme.dim}>{stageInHeader || !stageWord ? repo : `${stageWord}${repo ? ` · ${repo}` : ''}`}</Text> : <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>}
             </Box>
             <Box key={`summary:${r.key}`} flexDirection={modern ? 'row' : undefined} flexShrink={modern ? 0 : undefined}>
-              <Text color={modern ? theme.dim : CORNER_FG} wrap="truncate-end">{modern ? leadNumbers(Text, summary, theme) : summary}</Text>
+              <Text color={modern ? undefined : CORNER_FG} wrap="truncate-end">{modern ? leadNumbers(Text, summary, theme) : summary}</Text>
             </Box>
           </Box>
         </Box>
@@ -553,7 +554,7 @@ export const register: Register = on => {
         out.push(
           <Box key={`repo:${r.repo}`} flexShrink={0} marginTop={j === 0 ? 0 : 1}>
             {modern
-              ? <Text color={theme.dim} wrap="truncate-end">{'── '}<Text color={theme.fg}>{r.repo}</Text>{` ${'─'.repeat(Math.max(2, cols - columns(r.repo) - columns(tail) - 4))}${tail}`}</Text>
+              ? <Text wrap="truncate-end"><Text color={theme.dim}>{'── '}</Text><Text color={theme.fg}>{r.repo}</Text><Text color={theme.dim}>{` ${'─'.repeat(Math.max(2, cols - columns(r.repo) - columns(tail) - 4))}${tail}`}</Text></Text>
               : <Text dimColor wrap="truncate-end">{`── ${r.repo} ${'─'.repeat(Math.max(2, cols - columns(r.repo) - columns(tail) - 4))}${tail}`}</Text>}
           </Box>,
         )

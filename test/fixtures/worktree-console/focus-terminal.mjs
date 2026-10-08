@@ -9,18 +9,18 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-export function focusFixture(counts) {
+export function focusFixture(counts, summaries = []) {
   const [pending, all, hidden, idle] = counts;
   const make = (prefix, count, extra) => Array.from({ length: count }, (_, i) => ({
     key: `${prefix}${i}@1`, tag: `${prefix}${i}`, repo: "fixture", status: "回覆完畢", stage: "實作中",
     summary: "假資料摘要", question: "假資料問題", options: [], archived: false, pending: false, report: "假資料", ...extra,
   }));
-  const queue = make("reply", pending, { pending: true });
+  const queue = make("reply", pending, { pending: true }).map((s, i) => (summaries[i] ? { ...s, summary: summaries[i] } : s));
   return { active: true, current: queue[0].key, queue: queue.slice(1).map(s => ({ key: s.key, isNew: false })),
     sessions: [...queue, ...make("work", all - pending, { status: "執行中" }), ...make("archive", hidden, { archived: true }), ...make("idle", idle, { status: "閒置" })] };
 }
 
-export async function terminalFixture({ counts, columns = 120, socket = `wtcfix8-test-${process.pid}`, appearance = "refined", source = process.env.WTC_FOCUS_SOURCE } = {}) {
+export async function terminalFixture({ counts, summaries, columns = 120, socket = `wtcfix8-test-${process.pid}`, appearance = "refined", source = process.env.WTC_FOCUS_SOURCE } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wtcfix8-"));
   fs.mkdirSync(path.join(home, ".claude"));
   fs.writeFileSync(path.join(home, ".claude/.claude.json"), JSON.stringify({
@@ -43,7 +43,7 @@ export async function terminalFixture({ counts, columns = 120, socket = `wtcfix8
   fs.writeFileSync(path.join(input, "hooks/fixture.tsx"), `export const register = on => {
   on('fs.read', async () => ({ value: ${JSON.stringify(JSON.stringify({ appearance, motion: false }))} }))
   on('env.get', async (_$, e) => ({ value: e.name === 'ORCA_TERMINAL_HANDLE' ? 'fixture-only' : e.name === 'HOME' ? ${JSON.stringify(home)} : undefined }))
-  on('process.run', async () => ({ value: { exitCode: 0, stdout: ${JSON.stringify(JSON.stringify(focusFixture(counts)))}, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: ${JSON.stringify(JSON.stringify(focusFixture(counts, summaries)))}, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
 }
 `);
   const tmux = (...args) => {

@@ -64,3 +64,52 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
     }
   });
 }
+
+// Foreground in effect for each printed character of one captured line ("default" when reset).
+function foregrounds(line) {
+  const out = [];
+  let fg = "default";
+  for (let i = 0; i < line.length;) {
+    const m = /^\x1b\[([0-9;:]*)m/.exec(line.slice(i));
+    if (m) {
+      const p = m[1].split(/[;:]/);
+      for (let j = 0; j < p.length; j++) {
+        const n = Number(p[j] || 0);
+        if (n === 0 || n === 39) fg = "default";
+        else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) fg = String(n);
+        else if (n === 38) { fg = p[j + 1] === "5" ? `5;${p[j + 2]}` : `2;${p.slice(j + 2, j + 5).join(";")}`; j += p[j + 1] === "5" ? 2 : 4; }
+        else if (n === 48) j += p[j + 1] === "5" ? 2 : 4;
+      }
+      i += m[0].length;
+      continue;
+    }
+    const ch = String.fromCodePoint(line.codePointAt(i));
+    out.push({ ch, fg });
+    i += ch.length;
+  }
+  return out;
+}
+const fgOf = (line, text) => {
+  const cells = foregrounds(line);
+  const at = cells.map(c => c.ch).join("").indexOf(text);
+  return at < 0 ? undefined : cells.slice(at, at + [...text].length).map(c => c.fg);
+};
+
+test("真實終端：neutral 摘要開頭的數字用預設前景色、其餘灰色；字中數字不拆", { timeout: 30_000 }, async () => {
+  const terminal = await terminalFixture({ counts: [2, 2, 0, 0], summaries: ["1 未核對", "面板 v2 改版"], columns: 151 });
+  try {
+    await terminal.open();
+    const frame = await terminal.waitFor(f => f.includes("未核對") && f.includes("面板 v2 改版"), "等待摘要");
+    assert.ok(frame);
+    const lines = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
+    const counted = lines.find(line => line.includes("未核對"));
+    const [lead] = fgOf(counted, "1 未核對") ?? [];
+    const rest = fgOf(counted, "未核對");
+    assert.equal(lead, "default", `開頭數字應是預設前景色：${JSON.stringify(counted)}`);
+    assert.ok(rest.every(fg => fg !== "default"), "標籤應是灰色");
+    const word = lines.find(line => line.includes("面板 v2 改版"));
+    assert.equal(new Set(fgOf(word, "面板 v2 改版")).size, 1, "字中數字維持同色");
+  } finally {
+    await terminal.close();
+  }
+});

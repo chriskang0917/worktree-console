@@ -1275,6 +1275,22 @@ const mountedCards = async (ui: { drawn(): Promise<CardDrawn> }): Promise<CardDr
   return cards.children!.filter((node): node is CardDrawn => typeof node !== 'string' && !!node.props?.key?.startsWith('card:'))
 }
 
+// The colour a terminal paints a run with: the innermost Text holding exactly that text, coloured by itself or its nearest coloured ancestor.
+type Painted = { type: string; props?: { color?: string; bold?: boolean }; children?: (Painted | string)[] }
+const plain = (node: Painted | string): string => typeof node === 'string' ? node : (node.children ?? []).map(plain).join('')
+function paintOf(root: Painted, text: string): { color?: string; bold?: boolean } | undefined {
+  let found: { color?: string; bold?: boolean } | undefined
+  const walk = (node: Painted | string, color: string | undefined, bold: boolean | undefined) => {
+    if (typeof node === 'string') return
+    const c = node.type === 'Text' ? (node.props?.color ?? color) : color
+    const b = node.type === 'Text' ? (node.props?.bold ?? bold) : bold
+    if (node.type === 'Text' && plain(node) === text) found = { color: c, bold: b }
+    for (const child of node.children ?? []) walk(child, c, b)
+  }
+  walk(root, undefined, undefined)
+  return found
+}
+
 test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段小標也是 dim 且不加粗', async ($, on) => {
   const c = card('甲', { repo: 'frontend', summary: '現場報工端埋' })
   const w = world({ ...focusOf('甲', []), sessions: [c] })
@@ -1282,7 +1298,7 @@ test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段小�
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: '現場報工端埋' }))?.props.color).toBe('gray')
+  expect(paintOf(await ui.drawn(), '現場報工端埋')?.color).toBe('gray')
   const stage = await ui.find({ type: 'Text', text: '實作中' })
   expect(stage?.props.color).toBe('gray')
   expect(stage?.props.bold).toBeFalsy()
@@ -1337,22 +1353,35 @@ for (const cols of [36, 46, 70, 80]) {
 }
 
 test('refined：只有焦點框的名稱加粗；摘要只有開頭的數字提亮，字中數字與狀態字都不加粗', async ($, on) => {
-  const cards = [card('甲', { repo: 'frontend', summary: '1 未核對', status: '等待授權' }), card('乙', { repo: 'frontend', summary: '面板 v2 改版', status: '回覆完畢' })]
+  const cards = [card('甲', { repo: 'frontend', summary: '1 未核對', status: '等待授權' }), card('乙', { repo: 'frontend', summary: '面板 v2 改版', status: '回覆完畢' }), card('丙', { summary: '123456789012345678901234 項', archived: true, pending: false })]
   const w = world({ ...focusOf('甲', ['乙']), sessions: cards })
   appearanceConfig.set(w, { appearance: 'refined', motion: false })
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
   const all = await ui.findAll({ type: 'Text' })
-  const lead = all.find((x: any) => x.text === '1')
-  expect(lead?.props.color).toBeUndefined()
-  expect(lead?.props.bold).toBeFalsy()
+  const root = await ui.drawn()
+  expect(all.some((x: any) => x.text === '1')).toBe(true)
+  const lead = paintOf(root, '1')
+  expect(lead).toBeDefined()
+  expect(lead!.color).toBeUndefined()
+  expect(lead!.bold).toBeFalsy()
+  expect(paintOf(root, ' 未核對')?.color).toBe('gray')
   expect(all.some((x: any) => x.text === '2')).toBe(false)
-  expect(all.find((x: any) => x.text === '面板 v2 改版')?.props.color).toBe('gray')
+  expect(paintOf(await ui.drawn(), '面板 v2 改版')?.color).toBe('gray')
   expect(all.filter((x: any) => x.props.bold)).toEqual([])
   await ui.press({ key: 'tab:all' })
   expect((await ui.findAll({ type: 'Text' })).filter((x: any) => x.props.bold)).toEqual([])
+  expect(paintOf(await ui.drawn(), 'frontend')?.color).toBeUndefined()
+  await ui.press({ key: 'tab:hidden' })
+  expect((await ui.findAll({ type: 'Text' })).map((x: any) => x.text)).toContain('丙  ')
+  expect((await ui.findAll({ type: 'Text' })).filter((x: any) => x.props.bold)).toEqual([])
   await ui.unmount()
+  const narrow = await $.ui.mount({ ...pane(36), surface: 'terminal' })
+  const cut = (await narrow.find({ key: `summary:${cards[2]!.key}` }))!.text
+  expect(cut).toMatch(/^\d+…$/)
+  expect(paintOf(await narrow.drawn(), cut)?.color).toBe('gray')
+  await narrow.unmount()
   const focusBand = await $.ui.mount({ ...band(80), surface: 'terminal' })
   const bandTexts = await focusBand.findAll({ type: 'Text' })
   expect(bandTexts.filter((x: any) => x.props.bold).map((x: any) => x.text)).toEqual(['甲'])
