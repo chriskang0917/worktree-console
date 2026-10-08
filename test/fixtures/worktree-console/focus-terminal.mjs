@@ -73,7 +73,30 @@ export async function terminalFixture({ counts, columns = 120, socket = `wtcfix8
       tmux("send-keys", "-t", "fixture:0.0", "狀態", "Enter");
       return waitFor(frame => frame.includes("│q:"), "等待假資料側邊面板");
     },
-    async press(key) { tmux("send-keys", "-t", "fixture:0.0", key); await delay(200); return capture(); },
+    async press(key, expectedContent) {
+      tmux("send-keys", "-t", "fixture:0.0", key);
+      let frame = "";
+      const deadline = Date.now() + 5_000;
+      do {
+        frame = capture();
+        const lines = frame.split("\n");
+        const row = lines.findIndex(line => line.includes("│q:"));
+        if (row >= 0) {
+          const start = lines[row].indexOf("q:");
+          const tabs = lines[row].slice(start).trimEnd();
+          const segmentStart = tabs.indexOf(`${key}:`);
+          const segment = tabs.slice(segmentStart).split(/  (?=[qwer]:)/)[0];
+          const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
+          const markerStart = width(tabs.slice(0, segmentStart));
+          const underline = lines[row + 1]?.slice(start).trimEnd() ?? "";
+          if (segmentStart >= 0 && underline.slice(markerStart, markerStart + width(segment)) === "━".repeat(width(segment))
+            && !underline.slice(0, markerStart).includes("━") && !underline.slice(markerStart + width(segment)).includes("━")
+            && expectedContent(frame)) return frame;
+        }
+        await delay(50);
+      } while (Date.now() < deadline);
+      throw new Error(`等待 ${key} 分頁選取標記與內容逾時\n${frame}`);
+    },
     async close() {
       spawnSync("tmux", ["-L", socket, "kill-server"]);
       await delay(500);

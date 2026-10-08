@@ -26,13 +26,26 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
     try {
       await terminal.open();
       for (const [index, [key, label]] of tabs.entries()) {
-        const frame = await terminal.press(key);
+        const expectedContent = frame => {
+          const content = panel(frame).join("\n");
+          if (!counts[index]) return content.includes("目前沒有符合條件的 session");
+          return content.includes(`${["reply", "reply", "archive", "idle"][index]}0`)
+            && (index !== 1 || content.includes("── fixture"));
+        };
+        const frame = await terminal.press(key, expectedContent);
         const lines = panel(frame);
         const row = lines.findIndex(line => line.startsWith("q:"));
         assert.ok(lines[row].includes(`${key}: ${label} ${counts[index]}`), lines.join("\n"));
         for (const [hotkey] of tabs) assert.ok(lines[row].includes(`${hotkey}:`), lines[row]);
         assert.match(lines[row + 1], /^[─━]+$/, "分頁只有一行，下一行必須是底線");
         assert.equal([...lines[row + 1]].length, cols, "確認面板的實際欄寬");
+        const segmentStart = lines[row].indexOf(`${key}:`);
+        const segment = lines[row].slice(segmentStart).split(/  (?=[qwer]:)/)[0];
+        const cellWidth = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
+        const start = cellWidth(lines[row].slice(0, segmentStart));
+        const end = start + cellWidth(segment);
+        assert.equal(lines[row + 1], `${"─".repeat(start)}${"━".repeat(end - start)}${"─".repeat(cols - end)}`, `${key} 的粗底線必須只在所選分頁下方`);
+        assert.ok(expectedContent(frame), "所選分頁內容必須完成繪製");
         if (cols === 46) {
           assert.equal(lines[row], `q: 待回覆 ${counts[0]}  w: 全部 ${counts[1]}  e: 封存 ${counts[2]}  r: 閒置 ${counts[3]}`);
         }
