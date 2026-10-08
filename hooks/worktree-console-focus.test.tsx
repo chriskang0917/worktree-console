@@ -1414,16 +1414,26 @@ test('refined：六種狀態與未知值保留正確圖標、文字及狀態色'
   await ui.unmount()
 })
 
-test('refined：neutral 使用終端色，無效設定只提示一次且每次開面板重讀', async ($, on) => {
+test('refined：主題只換顏色，無效設定只提示一次且每次開面板重讀', async ($, on) => {
   const w = world(pending())
-  const config: AppearanceConfig = { appearance: 'refined', theme: 'neutral', motion: false }
+  const config: AppearanceConfig = { appearance: 'refined', theme: 'dracula', motion: false }
   appearanceConfig.set(w, config)
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
-  expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('cyan')
-  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.borderColor).toBe('gray')
+  expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('#8be9fd')
+  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.borderColor).toBe('#6272a4')
   const original = await cardTags(ui)
+  for (const [name, accent, border] of [
+    ['neutral', 'cyan', 'gray'], ['neutral-light', '#0f7c8c', '#9a9ea6'],
+    ['dracula', '#8be9fd', '#6272a4'], ['gruvbox', '#83a598', '#665c54'], ['light', '#1f7a73', '#93a1a1'],
+  ]) {
+    config.theme = name
+    await openPane($)
+    expect((await ui.find({ key: 'card:perm@1' }))?.props.borderColor).toBe(accent)
+    expect((await ui.find({ key: 'card:focusui@1' }))?.props.borderColor).toBe(border)
+    expect(await cardTags(ui)).toEqual(original)
+  }
   config.theme = '不存在'
   await openPane($)
   expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('cyan')
