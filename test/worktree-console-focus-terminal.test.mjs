@@ -240,7 +240,8 @@ for (const cols of [80, 46, 39]) {
 
 // Walks key presses and task rewrites, checking after each step the shown tab, the selected item and that the
 // terminal's only focus inverse sits on it, then again 600 ms later so a late re-focus cannot drift off it.
-// A step is [key or task rewrite, tab, item]: on card tabs the item is the framed card; on 待辦 it is text of the one
+// A step is [key or task rewrite, tab, item, drawn?]: `drawn` (on the panel's text) holds the checks back until a
+// rewrite is actually on screen, so a step cannot pass on the frame before the poll. On card tabs the item is the framed card; on 待辦 it is text of the one
 // row drawn in the accent colour (the selection mark), and the inverse is on its label (the arrow is not part of it).
 async function walk(terminal, steps) {
   const plain = text => text.replace(/\x1b\[[0-9;]*m/g, "");
@@ -270,27 +271,27 @@ async function walk(terminal, steps) {
       const drawn = panelCells(line);
       return drawn.some(cell => cell.fg === accent) ? [drawn.map(cell => cell.ch).join("").trimEnd()] : [];
     });
-    return { tab, framed, inverse, marked };
+    return { tab, framed, inverse, marked, panel: text.join("\n") };
   };
-  const settled = (state, tab, item) => state.tab === tab && state.inverse.length > 0
+  const settled = (state, tab, item, drawn = () => true) => drawn(state.panel) && state.tab === tab && state.inverse.length > 0
     && (tab === "待辦"
       ? state.inverse.length === 1 && state.inverse[0].label === item.replace(/ [▸▾]$/, "") && state.marked.length === 1 && state.marked[0].includes(item)
       : state.framed === item && state.inverse.every(run => run.framed && run.label === item));
-  for (const [i, [action, tab, item]] of steps.entries()) {
+  for (const [i, [action, tab, item, drawn]] of steps.entries()) {
     if (typeof action === "string") terminal.tmux("send-keys", "-t", "fixture:0.0", action);
     else await action();
     // A rewrite shows only at the next poll, up to 5 s away.
     const deadline = Date.now() + (typeof action === "string" ? 5_000 : 9_000);
     let state = read();
-    while (Date.now() < deadline && !settled(state, tab, item)) {
+    while (Date.now() < deadline && !settled(state, tab, item, drawn)) {
       await new Promise(resolve => setTimeout(resolve, 100));
       state = read();
     }
     const name = typeof action === "string" ? action : "等輪詢";
-    assert.ok(settled(state, tab, item), `第 ${i + 1} 步 ${name} 後應在「${tab}」選中 ${item}，焦點反白只在它上面：${JSON.stringify(state)}`);
+    assert.ok(settled(state, tab, item, drawn), `第 ${i + 1} 步 ${name} 後應在「${tab}」選中 ${item}，焦點反白只在它上面：${JSON.stringify(state)}`);
     await new Promise(resolve => setTimeout(resolve, 600));
     state = read();
-    assert.ok(settled(state, tab, item), `第 ${i + 1} 步 ${name} 之後焦點漂移：${JSON.stringify(state)}`);
+    assert.ok(settled(state, tab, item, drawn), `第 ${i + 1} 步 ${name} 之後焦點漂移：${JSON.stringify(state)}`);
   }
 }
 
@@ -372,8 +373,8 @@ test("真實終端：輪詢在選中項目上方加入或移除可選列，焦�
     await terminal.open();
     await walk(terminal, [
       ["t", "待辦", "面板待辦分頁"], ["Down", "待辦", "資料讀取與錯誤處理"],
-      [() => terminal.writeTask(added), "待辦", "資料讀取與錯誤處理"], ["Down", "待辦", "還有 2 項"],
-      [() => terminal.writeTask(task), "待辦", "還有 2 項"], ["Down", "待辦", "已完成 2 項 ▸"],
+      [() => terminal.writeTask(added), "待辦", "資料讀取與錯誤處理", panel => panel.includes("新的大項")], ["Down", "待辦", "還有 2 項"],
+      [() => terminal.writeTask(task), "待辦", "還有 2 項", panel => !panel.includes("新的大項")], ["Down", "待辦", "已完成 2 項 ▸"],
     ]);
   } finally {
     await terminal.close();
