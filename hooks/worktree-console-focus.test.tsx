@@ -1265,6 +1265,20 @@ const mountedCards = async (ui: { drawn(): Promise<CardDrawn> }): Promise<CardDr
   return cards.children!.filter((node): node is CardDrawn => typeof node !== 'string' && !!node.props?.key?.startsWith('card:'))
 }
 
+test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段維持 muted 且不加粗', async ($, on) => {
+  const c = card('甲', { repo: 'frontend', summary: '現場報工端埋' })
+  const w = world({ ...focusOf('甲', []), sessions: [c] })
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: '現場報工端埋' }))?.props.color).toBe('gray')
+  const stage = await ui.find({ type: 'Text', text: '實作中' })
+  expect(stage?.props.color).toBeUndefined()
+  expect(stage?.props.bold).toBeFalsy()
+  await ui.unmount()
+})
+
 for (const cols of [36, 46, 70, 80]) {
   test(`refined：${cols} 欄 repo／階段／長摘要底列只佔一行`, async ($, on) => {
     const c = card('甲', { repo: 'frontend', summary: '現場報工端埋-posthog-完整摘要' })

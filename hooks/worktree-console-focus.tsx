@@ -524,7 +524,7 @@ export const register: Register = on => {
               {modern ? <Text wrap="truncate-end"><Text color={theme.dim}>{repo}{repo && r.stage !== '—' ? ' · ' : ''}</Text>{r.stage !== '—' && <Text color={theme.muted}>{r.stage}</Text>}</Text> : <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>}
             </Box>
             <Box key={`summary:${r.key}`} flexDirection={modern ? 'row' : undefined} flexShrink={modern ? 0 : undefined}>
-              <Text color={modern ? theme.muted : CORNER_FG} wrap="truncate-end">{summary}</Text>
+              <Text color={modern ? theme.dim : CORNER_FG} wrap="truncate-end">{summary}</Text>
             </Box>
           </Box>
         </Box>
