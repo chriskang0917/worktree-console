@@ -1465,9 +1465,17 @@ for (const name of ['light', 'dracula'] as const) {
   })
 }
 
+test('主題：每個主題的工作中、待回答、待授權、已回覆、異常各用不同顏色', () => {
+  for (const [name, t] of Object.entries(THEMES)) {
+    const roles = [t.busy, t.waiting, t.blocked, t.answered, t.error]
+    expect(roles.every(Boolean), name).toBe(true)
+    expect(new Set(roles).size, name).toBe(5)
+  }
+})
+
 for (const [name, blocked, dim, border] of [
-  ['neutral', 'red', 'gray', 'gray'],
-  ['neutral-light', '#b3262d', '#5f646d', '#9a9ea6'],
+  ['neutral', 'magentaBright', 'gray', 'gray'],
+  ['neutral-light', '#a3267a', '#5f646d', '#9a9ea6'],
   ['dracula', '#ffb86c', '#9aa1c2', '#9aa1c2'],
   ['gruvbox', '#fe8019', '#bdae93', '#665c54'],
   ['light', '#a34f00', '#586e75', '#93a1a1'],
