@@ -1336,28 +1336,29 @@ for (const cols of [36, 46, 70, 80]) {
   }
 }
 
-test('refined：數字領頭加粗、標籤放淡；待授權與異常的狀態字加粗', async ($, on) => {
-  const cards = [card('甲', { repo: 'frontend', summary: '12 未核對', status: '等待授權' }), card('乙', { repo: 'frontend', status: '回覆完畢' })]
+test('refined：只有焦點框的名稱加粗；摘要只有開頭的數字提亮，字中數字與狀態字都不加粗', async ($, on) => {
+  const cards = [card('甲', { repo: 'frontend', summary: '1 未核對', status: '等待授權' }), card('乙', { repo: 'frontend', summary: '面板 v2 改版', status: '回覆完畢' })]
   const w = world({ ...focusOf('甲', ['乙']), sessions: cards })
   appearanceConfig.set(w, { appearance: 'refined', motion: false })
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
   const all = await ui.findAll({ type: 'Text' })
-  const one = (text: string) => all.find((x: any) => x.text === text)
-  expect(one('12')?.props.bold).toBe(true)
-  expect((await ui.find({ key: `summary:${cards[0]!.key}` }))!.text).toBe('12 未核對')
-  expect(one(' 待授權')?.props.bold).toBe(true)
-  expect(one(' 已回覆')?.props.bold).toBeFalsy()
+  const lead = all.find((x: any) => x.text === '1')
+  expect(lead?.props.color).toBeUndefined()
+  expect(lead?.props.bold).toBeFalsy()
+  expect(all.some((x: any) => x.text === '2')).toBe(false)
+  expect(all.find((x: any) => x.text === '面板 v2 改版')?.props.color).toBe('gray')
+  expect(all.filter((x: any) => x.props.bold)).toEqual([])
   await ui.press({ key: 'tab:all' })
-  const grouped = await ui.findAll({ type: 'Text' })
-  expect(grouped.find((x: any) => x.text === 'frontend')?.props.bold).toBe(true)
-  expect(grouped.find((x: any) => x.text === '2')?.props.bold).toBe(true)
+  expect((await ui.findAll({ type: 'Text' })).filter((x: any) => x.props.bold)).toEqual([])
   await ui.unmount()
   const focusBand = await $.ui.mount({ ...band(80), surface: 'terminal' })
   const bandTexts = await focusBand.findAll({ type: 'Text' })
-  expect(bandTexts.find((x: any) => x.text === '1/2')?.props.bold).toBe(true)
-  expect(bandTexts.find((x: any) => x.text === '── 待回覆 1/2 ')?.props.color).toBe('gray')
+  expect(bandTexts.filter((x: any) => x.props.bold).map((x: any) => x.text)).toEqual(['甲'])
+  expect(await focusBand.find({ key: 'show-tag' })).toBeUndefined()
+  await focusBand.press({ key: 'show' })
+  expect(w.shown.at(-1)).toMatch(/^甲/)
   await focusBand.unmount()
 })
 

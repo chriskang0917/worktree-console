@@ -131,10 +131,11 @@ export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, has
   return { margin, separator, header, actions, keys, question: questionRows, questionText, queueLabels, keyLines }
 }
 
-// Urgent states carry weight in the label; the rest stay regular so the name leads.
-const urgent = (cell: { color: string }) => cell.color === 'blocked' || cell.color === 'error'
-// Numbers lead their group: bold in the theme's foreground, the words around them stay in the caller's quiet colour.
-const leadNumbers = (Text: (props: any) => any, text: string, theme: ConsoleTheme) => text.split(/(\d+)/).map((part, i) => (i % 2 ? <Text key={i} bold color={theme.fg}>{part}</Text> : part))
+// Only a leading count lifts to the foreground; digits inside words (面板 v2 改版) stay in the caller's quiet colour.
+const leadNumbers = (Text: (props: any) => any, text: string, theme: ConsoleTheme) => {
+  const lead = /^\d+(?=\s)/.exec(text)?.[0]
+  return lead ? [<Text key="lead" color={theme.fg}>{lead}</Text>, text.slice(lead.length)] : text
+}
 
 let focus: Focus = { active: false }
 let tab: Tab = 'pending'
@@ -518,7 +519,7 @@ export const register: Register = on => {
           <Box flexDirection="row" justifyContent="space-between">
             <Box flexDirection="row">
               {modern ? <Box key={`number:${r.key}`} width={3} flexShrink={0} overflow="hidden">{num ? <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} /> : <Text>   </Text>}</Box> : num && <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} />}
-              {modern && <Box flexDirection="row"><Box key={`status:${r.key}`} flexDirection="row" width={8} flexShrink={0}><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]} bold={urgent(cell)}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}`}</Text></Box><Text>  </Text></Box>}
+              {modern && <Box flexDirection="row"><Box key={`status:${r.key}`} flexDirection="row" width={8} flexShrink={0}><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}`}</Text></Box><Text>  </Text></Box>}
               {hidden && <Text bold={modern} color={modern ? theme.fg : undefined}>{`${tag}  `}</Text>}
               <Button key={`name:${r.key}`} label={hidden ? '取消封存' : tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} />
               {!modern && <Text>  </Text>}
@@ -548,12 +549,11 @@ export const register: Register = on => {
       const i = top + j
       const out = []
       if (tab !== 'pending' && (j === 0 || r.repo !== rows[i - 1]!.repo)) {
-        const count = sessions().filter(x => x.repo === r.repo).length
-        const tail = ` 共 ${count} 個`
+        const tail = ` 共 ${sessions().filter(x => x.repo === r.repo).length} 個`
         out.push(
           <Box key={`repo:${r.repo}`} flexShrink={0} marginTop={j === 0 ? 0 : 1}>
             {modern
-              ? <Text color={theme.dim} wrap="truncate-end">{'── '}<Text bold color={theme.fg}>{r.repo}</Text>{` ${'─'.repeat(Math.max(2, cols - columns(r.repo) - columns(tail) - 4))} 共 `}<Text bold color={theme.fg}>{String(count)}</Text>{' 個'}</Text>
+              ? <Text color={theme.dim} wrap="truncate-end">{'── '}<Text color={theme.fg}>{r.repo}</Text>{` ${'─'.repeat(Math.max(2, cols - columns(r.repo) - columns(tail) - 4))}${tail}`}</Text>
               : <Text dimColor wrap="truncate-end">{`── ${r.repo} ${'─'.repeat(Math.max(2, cols - columns(r.repo) - columns(tail) - 4))}${tail}`}</Text>}
           </Box>,
         )
@@ -584,7 +584,7 @@ export const register: Register = on => {
         </Box>
         {top >= lastTop(rows) && (
           <Box key="footer" flexShrink={0} marginTop={1} paddingLeft={1}>
-            {modern ? <Text color={theme.dim}><Text color={theme.fg}>qwer</Text>{' 切分頁 · '}<Text color={theme.fg}>1-9,0/↑↓</Text>{' 選卡片'}</Text> : <Text dimColor>{FOOTER}</Text>}
+            <Text dimColor={!modern} color={modern ? theme.dim : undefined}>{modern ? 'qwer 切分頁 · 1-9,0/↑↓ 選卡片' : FOOTER}</Text>
           </Box>
         )}
       </Box>
@@ -622,21 +622,20 @@ export const register: Register = on => {
       const others = queue.slice(0, cols < 60 ? 1 : QUEUE_MAX)
       const budget = focusBandRows({ cols, maxRows: e.props.maxRows, question: cur?.question ?? '', queue, hiddenCount: fullQueue.length - queue.length, hasCurrent: !!cur })
       const rail = <Text color={cell ? theme[cell.color] : theme.dim}>│ </Text>
-      const position = `${cur ? 1 : 0}/${fullQueue.length + (cur ? 1 : 0)}`
-      const label = `── 待回覆 ${position} `
+      const label = `── 待回覆 ${cur ? 1 : 0}/${fullQueue.length + (cur ? 1 : 0)} `
       const keyItems = [
         rail,
         ...(others.length ? [<Text color={theme.dim}>其他 </Text>] : []),
         ...others.map((q, i) => <Box key={`other:${i}`} flexDirection="row"><Button key={`queue:${i}`} hotkey={String(i + 1)} label={budget.queueLabels[i]!} plain dimColor onPress={() => act($, ['focus-pick', q.key])} /><Text color={theme.dim}> · </Text></Box>),
-        ...(fullQueue.length > others.length ? [<Text color={theme.dim}><Text bold color={theme.fg}>{`＋${fullQueue.length - others.length}`}</Text>{' · '}</Text>] : []),
+        ...(fullQueue.length > others.length ? [<Text color={theme.dim}>{`＋${fullQueue.length - others.length} · `}</Text>] : []),
         <Button key="pane" hotkey="0" label="面板" plain onPress={() => void openPane($)} />,
       ]
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Box flexDirection="row"><Text color={theme.dim}>{'── 待回覆 '}<Text bold color={theme.fg}>{position}</Text>{' '}</Text><Text color={theme.border}>{'─'.repeat(Math.max(0, cols - columns(label)))}</Text></Box>
+          <Box flexDirection="row"><Text color={theme.dim}>{label}</Text><Text color={theme.border}>{'─'.repeat(Math.max(0, cols - columns(label)))}</Text></Box>
           <Box flexDirection="row" paddingLeft={2}>
             {rail}
-            {cur && cell ? <Box flexDirection="row"><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]} bold>{` ${cell.label}  `}</Text><Button key="show-tag" label={truncateColumns(cur.tag, Math.max(1, cols - 14))} plain onPress={() => void show($, cur.tag, cur.key)} /></Box> : <Text color={theme.dim}>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>}
+            {cur && cell ? <Box flexDirection="row"><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}  `}</Text><Text key="band-name" bold color={theme.fg}>{truncateColumns(cur.tag, Math.max(1, cols - 14))}</Text></Box> : <Text color={theme.dim}>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>}
           </Box>
           {cur && budget.question > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.question} flexShrink={0} overflow="hidden">{rail}<Box width={Math.max(1, cols - 6)} flexShrink={0}><Text key="question" color={theme.fg} wrap="wrap">{budget.questionText}</Text></Box></Box>}
           {cur && <Box flexDirection="row" paddingLeft={2} height={budget.actions} flexShrink={0}>{rail}<Button key="show" hotkey="9" label="顯示問題" plain onPress={() => void show($, cur.tag, cur.key)} />{queue.length > 0 && <Box flexDirection="row"><Text color={theme.dim}> · </Text><Button key="later" hotkey="8" label="延後處理" plain onPress={() => act($, ['focus-later'])} /></Box>}</Box>}
