@@ -1285,7 +1285,7 @@ for (const cols of [36, 46, 70, 80]) {
   })
 
   for (const options of [[], ['繼續', '停止']]) {
-    test(`refined：${cols} 欄${options.length ? '有選項' : '無選項'}未選卡與選中卡等高、問題前僅一空行、編號後留一格`, async ($, on) => {
+    test(`refined：${cols} 欄${options.length ? '有選項' : '無選項'}未選卡與選中卡等高、問題緊接標頭只佔一行、不顯示選項、編號後留一格`, async ($, on) => {
       const cards = ['甲', '乙'].map(tag => card(tag, { repo: 'frontend', status: '回覆完畢', question: '要繼續嗎？', options }))
       const w = world({ ...focusOf('甲', ['乙']), sessions: cards })
       appearanceConfig.set(w, { appearance: 'refined', motion: false })
@@ -1296,11 +1296,10 @@ for (const cols of [36, 46, 70, 80]) {
       const a = cardLines(selected!, cols)
       const b = cardLines(other!, cols)
       expect(b).toHaveLength(a.length)
-      expect(a).toHaveLength(options.length ? 8 : 7)
-      expect(a[2]).toBe('')
-      expect(b[2]).toBe('')
-      expect(a[3]).toBe('要繼續嗎？')
-      expect(b[3]).toBe('要繼續嗎？')
+      expect(a).toHaveLength(5)
+      expect(a[2]).toBe('要繼續嗎？')
+      expect(b[2]).toBe('要繼續嗎？')
+      expect(a.join('\n')).not.toContain('繼續 ·')
       expect(b[1]).toContain('1: ↩ 已回覆')
       expect(a[1]!.indexOf('↩')).toBe(b[1]!.indexOf('↩'))
       await arrowTo($, '乙')
@@ -1486,7 +1485,7 @@ test('refined：計數改用工作中與已回覆，選中問題不加粗', asyn
   await h.unmount()
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: 'Bash rm -rf build' }))?.props.bold).toBe(false)
+  expect((await ui.find({ type: 'Text', text: 'Bash rm -rf build' }))?.props.bold).toBeFalsy()
   await ui.unmount()
 })
 
@@ -1545,9 +1544,9 @@ test('refined：捲動移動卡片窗口，畫面外編號仍可選到整張卡'
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80, 26), surface: 'terminal' })
-  expect(await drawnTags(ui)).toEqual(['perm', 'q0', 'q1'])
+  expect(await drawnTags(ui)).toEqual(['perm', 'q0', 'q1', 'q2'])
   await $.ui.scroll({ component: 'Pane', requestId: PANE, offset: 0, by: 1, bodyRows: 26, contentRows: 26, origin: { kind: 'person' } })
-  expect(await drawnTags(ui)).toEqual(['q0', 'q1', 'q2'])
+  expect(await drawnTags(ui)).toEqual(['q0', 'q1', 'q2', 'q3'])
   await ui.press({ key: 'num:q8@1' })
   expect(await chosenTag(ui)).toBe('q8')
   expect(await drawnTags(ui)).toContain('q8')
