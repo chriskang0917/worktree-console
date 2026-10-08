@@ -57,8 +57,7 @@ const URGENT: readonly TaskStatus[] = ['waiting', 'blocked', 'review']
 const isSettled = (item: TaskItem) => item.status === 'done' || item.status === 'cancelled'
 const byOrder = (a: TaskItem, b: TaskItem) => a.order - b.order
 
-export const liveRootCount = (state: TaskState | null) => state?.items.filter(item => item.parentId === undefined && !isSettled(item)).length ?? 0
-export const isSettledItem = (state: TaskState | null, id: string) => !!state?.items.some(item => item.id === id && isSettled(item))
+export const liveRootIds = (state: TaskState | null) => state?.items.filter(item => item.parentId === undefined && !isSettled(item)).map(item => item.id) ?? []
 
 // Panel-only: a group wears its most urgent open child, which the CLI's stored group status does not say.
 function groupTone(item: TaskItem, children: TaskItem[]): TaskStatus {
@@ -98,8 +97,8 @@ export type TodoRow =
   | { kind: 'child'; last: boolean; lastChild: boolean; rail: TaskStatus | null; status: TaskStatus; title: string; star: string; dependency: string; dim: boolean }
   | { kind: 'dependency'; last: boolean; lastChild: boolean; text: string }
   | { kind: 'more'; key: string; last: boolean; groupId: string; text: string }
-  | { kind: 'completed'; key: string; text: string }
-  | { kind: 'timeline'; key: string; text: string }
+  | { kind: 'completed'; key: string; text: string; open: boolean }
+  | { kind: 'timeline'; key: string; text: string; open: boolean }
 
 export const todoKeyOf = (row: TodoRow) => (row.kind === 'root' || row.kind === 'more' || row.kind === 'completed' || row.kind === 'timeline' ? row.key : undefined)
 
@@ -223,13 +222,17 @@ export function todoRows({ state, cols, now, staleSince, collapsed, showAllChild
   const roots = state.items.filter(item => item.parentId === undefined).sort(byOrder)
   pushRoots(roots.filter(item => !isSettled(item)), false)
   const done = endpoints.filter(item => item.status === 'done').length
+  // One blank row keeps the fold (or, without it, the timeline) from reading as part of the tree.
+  const gapBefore = () => rows.at(-1)?.kind !== 'blank' && rows.push({ kind: 'blank' })
   if (done) {
-    rows.push({ kind: 'completed', key: 'todo:completed', text: `已完成 ${done} 項 ${completedOpen ? '▾' : '▸'}` })
+    gapBefore()
+    rows.push({ kind: 'completed', key: 'todo:completed', text: `已完成 ${done} 項`, open: completedOpen })
     if (completedOpen) pushRoots(roots.filter(isSettled), true)
   }
 
   if (state.events.length) {
-    rows.push({ kind: 'timeline', key: 'todo:timeline', text: `時間線 · ${state.events.length} ${timelineOpen ? '▾' : '▸'}` })
+    if (!done) gapBefore()
+    rows.push({ kind: 'timeline', key: 'todo:timeline', text: `時間線 · ${state.events.length}`, open: timelineOpen })
     if (timelineOpen) {
       const events = [...state.events].sort((a, b) => a.revision - b.revision)
       const today = new Date(now).toDateString()

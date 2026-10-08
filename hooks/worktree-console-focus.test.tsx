@@ -1921,8 +1921,8 @@ test('待辦：大項圖示是最急的未完成子項、待回答與受阻大�
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
   await ui.press({ key: 'tab:todo' })
   const lines = await todoLines(ui)
-  expect(lines.slice(2, 15)).toEqual([
-    expect.stringMatching(/^├─ ◆ 面板待辦分頁 ▾ +完成 1\/3 項   3 分鐘前$/),
+  expect(lines.slice(2, 16)).toEqual([
+    expect.stringMatching(/^┝━ ◆ 面板待辦分頁 ▾ +完成 1\/3 項   3 分鐘前$/),
     '│  ├─ ◆ 確認 hotkey',
     '│  ├─ ▶ 畫摘要列  前置 資料讀取/讀檔',
     '│  ╰─ ✓ 寫測試 ★',
@@ -1934,6 +1934,7 @@ test('待辦：大項圖示是最急的未完成子項、待回答與受阻大�
     '│  ╰─ 還有 3 項',
     '│',
     '╰─ ○ 整理 README',
+    ' ',
     '已完成 2 項 ▸',
   ])
   expect([lines[2]!, lines[7]!].map(cells)).toEqual([80, 80])
@@ -1969,7 +1970,7 @@ test('待辦：Enter 收合大項、↑↓ 走過大項、還有 N 項、已完�
 
   await ui.press({ key: 'todo:g1' })
   const collapsed = await todoLines(ui)
-  expect(collapsed[2]).toMatch(/^├─ ◆ 面板待辦分頁 ▸ ★1 +完成 1\/3 項   3 分鐘前$/)
+  expect(collapsed[2]).toMatch(/^┝━ ◆ 面板待辦分頁 ▸ ★1 +完成 1\/3 項   3 分鐘前$/)
   expect(collapsed[3]).toBe('│')
   expect(await todoChosen(ui)).toBe('todo:g1')
 
@@ -1977,7 +1978,7 @@ test('待辦：Enter 收合大項、↑↓ 走過大項、還有 N 項、已完�
   await clock.advance(5_000)
   const polled = await todoLines(ui)
   expect(polled[2]).toMatch(/^├─ ○ 新的大項 ▾ +完成 0\/0 項 +$/)
-  expect(polled[4]).toMatch(/^├─ ◆ 面板待辦分頁 ▸ ★1/)
+  expect(polled[4]).toMatch(/^┝━ ◆ 面板待辦分頁 ▸ ★1/)
   expect(await todoChosen(ui)).toBe('todo:g1')
   expect((await ui.find({ key: 'tab:todo' }))?.props.label).toBe('待辦 4')
 
@@ -1989,6 +1990,39 @@ test('待辦：Enter 收合大項、↑↓ 走過大項、還有 N 項、已完�
   setTask(w, taskState({ items: [group('g0', '新的大項', 'queued', -1), ...taskItems().map(done)] }))
   await clock.advance(5_000)
   expect(await todoChosen(ui)).toBe('todo:completed')
+  await ui.unmount()
+})
+
+// Each 待辦 row drawn in the accent colour, with its accent parts.
+const accentRows = async (ui: any) => {
+  const root = await ui.drawn()
+  const lines = (await ui.findAll({ type: 'Box' })).filter((b: any) => /^todo:line:\d+$/.test(b.key ?? ''))
+  return lines.flatMap((b: any) => {
+    const parts = (findKey(root, b.key)?.children ?? []).filter((c: any) => c.props?.color === 'cyan').map((c: any) => c.children.join(''))
+    return parts.length ? [{ line: b.text, parts }] : []
+  })
+}
+
+test('待辦：沒有按鍵焦點也看得出選中哪一列：只有那一列的軌道變粗、和箭頭一起變強調色，↓ 後跟著移動', async ($, on) => {
+  const w = taskWorld()
+  await start($, on, w, TASK_ENV)
+  await openPane($)
+  const unfocused = pane(80)
+  const ui = await $.ui.mount({ ...unfocused, props: { ...unfocused.props, isFocused: false }, surface: 'terminal' })
+  await ui.press({ key: 'tab:todo' })
+  expect(await accentRows(ui)).toEqual([{ line: expect.stringMatching(/^┝━ ◆ 面板待辦分頁 ▾ /), parts: ['┝━ ', ' ▾'] }])
+  const arrow = todoArrows($, ui, w)
+  await arrow(1)
+  const marked = await accentRows(ui)
+  expect(marked).toEqual([{ line: expect.stringMatching(/^┝━ ! 資料讀取 ▾ /), parts: ['┝━ ', ' ▾'] }])
+  expect((await todoLines(ui))[2]).toMatch(/^├─ ◆ 面板待辦分頁 ▾ /)
+  await arrow(1)
+  // Inside a waiting or blocked group the rail of 還有 N 項 is accent too, not the group's colour.
+  expect(await accentRows(ui)).toEqual([{ line: '│  ┕━ 還有 3 項', parts: ['┕━ '] }])
+  await arrow(1)
+  expect(await accentRows(ui)).toEqual([{ line: '已完成 2 項 ▸', parts: [' ▸'] }])
+  await arrow(1)
+  expect(await accentRows(ui)).toEqual([{ line: '時間線 · 5 ▾', parts: [' ▾'] }])
   await ui.unmount()
 })
 
@@ -2117,7 +2151,7 @@ test('待辦：46 欄標題縮短但列寬不變；36 欄完成數與時間換�
       // 停泊 is the least urgent count and gives way so ★ stays on the row.
       expect(lines[0]).toBe('◆ 1 · ! 1 · ◇ 1 · ▶ 1 · ○ 4 · ★ 2')
       expect(lines.slice(2, 8)).toEqual([
-        '├─ ◆ 面板待辦分頁 ▾',
+        '┝━ ◆ 面板待辦分頁 ▾',
         '│    完成 1/3 項 · 3 分鐘前',
         '│  ├─ ◆ 確認 hotkey',
         '│  ├─ ▶ 畫摘要列',

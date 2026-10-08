@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { loadAppearance, THEMES, type Appearance, type ConsoleTheme } from './console-theme.ts'
 import { statusCell, columns, truncateColumns, TASK_STATUS_VIEW } from './status-view.ts'
-import { clockText, isSettledItem, liveRootCount, parseTaskMode, parseTaskState, parseTaskView, todoKeyOf, todoRows, type TaskState, type TaskView, type TodoRow } from './todo-view.ts'
+import { clockText, liveRootIds, parseTaskMode, parseTaskState, parseTaskView, todoKeyOf, todoRows, type TaskState, type TaskView, type TodoRow } from './todo-view.ts'
 
 type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
 
@@ -175,6 +175,8 @@ const collapsedGroups = new Set<string>()
 const allChildrenShown = new Set<string>()
 let todoSel: string | null = null
 let todoKeys: string[] = []
+// Group keys that were open at the last drawing: only a group that finishes while selected sends the selection to 已完成.
+let liveTodoKeys = new Set<string>()
 let todoRowCount = 0
 const hasTodoTab = () => refined() && taskPath !== null
 const tabsOf = (): { id: Tab; key: string; label: string }[] => (hasTodoTab() ? [...TABS, TODO_TAB] : TABS)
@@ -615,7 +617,7 @@ export const register: Register = on => {
     const at = (drawing += 1)
     if (repin) $.clock.after(FRAME_MS, () => void focusSel($, at))
     // Keep the selected label intact; only unselected labels shorten below 46 columns.
-    const tabCount = (x: { id: Tab }) => (x.id === 'todo' ? liveRootCount(taskState) : rowsOf(x.id).length)
+    const tabCount = (x: { id: Tab }) => (x.id === 'todo' ? liveRootIds(taskState).length : rowsOf(x.id).length)
     // With the fifth tab (待辦) the row can outgrow 46 columns too; it never wraps, so it shortens the same way. Without it the row stays as it was.
     const tabsFit = !hasTodoTab() || tabList.reduce((n, x, i) => n + columns(`${x.key}: ${x.label} ${tabCount(x)}`) + (i ? 2 : 0), 0) <= cols
     const tabLabels = tabList.map(x => `${modern && (cols < 46 || !tabsFit) && x.id !== tab ? '' : `${x.label} `}${tabCount(x)}`)
@@ -646,17 +648,21 @@ export const register: Register = on => {
         const key = todoKeyOf(row)
         return key ? [{ key, line }] : []
       })
-      if (!keyed.some(k => k.key === todoSel)) {
-        const settled = todoSel?.startsWith('todo:') && isSettledItem(taskState, todoSel.slice('todo:'.length))
-        const earlier = todoSel ? todoKeys.slice(0, Math.max(0, todoKeys.indexOf(todoSel))).reverse() : []
-        todoSel = (settled && keyed.some(k => k.key === 'todo:completed') ? 'todo:completed' : earlier.find(key => keyed.some(k => k.key === key))) ?? keyed[0]?.key ?? null
+      const liveKeys = new Set(liveRootIds(taskState).map(id => `todo:${id}`))
+      const finished = todoSel !== null && liveTodoKeys.has(todoSel) && !liveKeys.has(todoSel) && !!taskState?.items.some(item => `todo:${item.id}` === todoSel)
+      const placed = todoSel ? todoKeys.indexOf(todoSel) : -1
+      if (finished || !keyed.some(k => k.key === todoSel)) {
+        const earlier = todoSel ? todoKeys.slice(0, Math.max(0, placed)).reverse() : []
+        todoSel = (finished && keyed.some(k => k.key === 'todo:completed') ? 'todo:completed' : earlier.find(key => keyed.some(k => k.key === key))) ?? keyed[0]?.key ?? null
         follow = true
-        // The engine still holds the vanished row's index, which now names another Button: pin the new selection after this drawing.
-        if (!repin) {
-          startRepin()
-          $.clock.after(FRAME_MS, () => void focusSel($, at))
-        }
       }
+      // The engine holds the selection by its place in the ring: once that place changes (a row vanished, the group
+      // finished, rows came or went above it), pin the selection again after this drawing.
+      if (keyed.findIndex(k => k.key === todoSel) !== placed && !repin) {
+        startRepin()
+        $.clock.after(FRAME_MS, () => void focusSel($, at))
+      }
+      liveTodoKeys = liveKeys
       todoKeys = keyed.map(k => k.key)
       todoRowCount = todo.length
       if (follow) revealTodo(keyed.find(k => k.key === todoSel)?.line ?? -1)
@@ -673,7 +679,10 @@ export const register: Register = on => {
       const toggle = (row: TodoRow, key: string, dim: boolean, label: string) => (
         <Button key={key} label={label} plain dimColor={dim} autoFocus={todoSel === key ? true : undefined} onPress={press(row, key)} />
       )
+      // Selection shows without key focus too: the selected row's own rail turns heavy and accent, its arrow accent.
       const line = (row: TodoRow, index: number) => {
+        const chosen = todoKeyOf(row) === todoSel
+        const arrow = (open: boolean) => <Text color={chosen ? theme.accent : theme.dim}>{open ? ' ▾' : ' ▸'}</Text>
         const lineKey = `todo:line:${index}`
         const box = { key: lineKey, flexDirection: 'row' as const, height: 1, flexShrink: 0, overflow: 'hidden' as const }
         const indent = (last: boolean) => <Text color={theme.border}>{last ? '   ' : '│  '}</Text>
@@ -699,10 +708,10 @@ export const register: Register = on => {
             const cell = TASK_STATUS_VIEW[row.tone]
             return (
               <Box {...box}>
-                <Text color={theme.border}>{row.last ? '╰─ ' : '├─ '}</Text>
+                <Text color={chosen ? theme.accent : theme.border}>{chosen ? (row.last ? '┕━ ' : '┝━ ') : row.last ? '╰─ ' : '├─ '}</Text>
                 <Text color={theme[cell.color]}>{`${cell.glyph} `}</Text>
                 {row.key ? toggle(row, row.key, row.dim, row.title) : <Text color={row.dim ? theme.dim : theme.fg}>{row.title}</Text>}
-                {row.key && <Text color={theme.dim}>{row.open ? ' ▾' : ' ▸'}</Text>}
+                {row.key && arrow(row.open)}
                 {row.star && <Text color={theme.waiting}>{row.star}</Text>}
                 {row.cluster && <Text color={theme.dim}>{`${' '.repeat(row.pad)}${row.cluster}`}</Text>}
               </Box>
@@ -726,10 +735,10 @@ export const register: Register = on => {
           case 'dependency':
             return <Box {...box}><Text color={theme.dim}>{`${row.last ? '   ' : '│  '}${row.lastChild ? ' ' : '│'}    ${row.text}`}</Text></Box>
           case 'more':
-            return <Box {...box}>{indent(row.last)}<Text color={theme.border}>{'╰─ '}</Text>{toggle(row, row.key, true, row.text)}</Box>
+            return <Box {...box}>{indent(row.last)}<Text color={chosen ? theme.accent : theme.border}>{chosen ? '┕━ ' : '╰─ '}</Text>{toggle(row, row.key, true, row.text)}</Box>
           case 'completed':
           case 'timeline':
-            return <Box {...box}>{toggle(row, row.key, true, row.text)}</Box>
+            return <Box {...box}>{toggle(row, row.key, true, row.text)}{arrow(row.open)}</Box>
         }
       }
       // Rows scrolled out keep their buttons, zero rows tall, so the ring keeps its places as on the card tabs.

@@ -75,6 +75,10 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
   };
   return {
     home, tmux, capture, waitFor,
+    // Rewrites the task as the CLI would between polls; the panel picks it up on its next poll.
+    writeTask(state) {
+      fs.writeFileSync(path.join(taskDir, "task-state.json"), JSON.stringify(state));
+    },
     async open() {
       await waitFor(frame => frame.includes("0: 面板"), "等待假資料專注列");
       tmux("send-keys", "-t", "fixture:0.0", "狀態", "Enter");
