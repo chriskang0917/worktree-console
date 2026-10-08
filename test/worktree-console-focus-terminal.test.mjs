@@ -114,23 +114,55 @@ test("真實終端：neutral 摘要開頭的數字用預設前景色、其餘灰
   }
 });
 
-test("真實終端：切分頁與上下移動後，焦點反白只在選中的卡上", { timeout: 30_000 }, async () => {
+test("真實終端：切分頁、重按同一分頁與上下移動後，選中卡逐步正確，焦點反白只在選中的卡名上", { timeout: 90_000 }, async () => {
   const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 151 });
+  const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
+  const plain = text => text.replace(/\x1b\[[0-9;]*m/g, "");
+  // The shown tab (the label over the ━ underline), the framed card's name and every inverse run in the panel.
+  const read = () => {
+    // The panel's part of each row: after its dock divider; the prompt's own cursor block sits left of it.
+    const parts = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n").map(line => line.indexOf("│", 40) < 0 ? "" : line.slice(line.indexOf("│", 40) + 1));
+    const text = parts.map(plain);
+    const row = text.findIndex(line => line.startsWith("q:"));
+    const under = text[row + 1] ?? "";
+    // The underline row is only ─ and ━, one column each.
+    const mark = under.indexOf("━");
+    let start = 0;
+    const tab = (text[row] ?? "").trimEnd().split(/  (?=[qwer]:)/).find(segment => {
+      const hit = mark >= start && mark < start + width(segment);
+      start += width(segment) + 2;
+      return hit;
+    })?.replace(/^[qwer]: (\S+).*$/, "$1");
+    const selected = text.find(line => line.startsWith("║") && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
+    const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: text[i].startsWith("║"), label: plain(m[1]).trim() }))).filter(run => run.label);
+    return { tab, selected, inverse };
+  };
+  const settled = (state, tab, card) => state.tab === tab && state.selected === card && state.inverse.length > 0 && state.inverse.every(run => run.framed && run.label === card);
   try {
     await terminal.open();
-    // `0` reopens the panel on 待回覆 with the band's question selected, wherever the ring was before.
-    for (const [key, card = ""] of [["w"], ["Down"], ["q"], ["Down"], ["w"], ["Down"], ["0", "\x1b[7mreply0\x1b[0m"], ["q"]]) {
+    const steps = [
+      ["w", "全部", "reply0"], ["Down", "全部", "reply1"],
+      ["q", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
+      ["w", "全部", "reply0"], ["Down", "全部", "reply1"],
+      // Pressing the shown tab's key again puts the selection back on its first card; the next ↓ still moves one card.
+      ["w", "全部", "reply0"], ["Down", "全部", "reply1"], ["Down", "全部", "reply2"],
+      // `0` reopens the panel on 待回覆 with the band's question selected, wherever the ring was before.
+      ["0", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
+      ["q", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
+    ];
+    for (const [i, [key, tab, card]] of steps.entries()) {
       terminal.tmux("send-keys", "-t", "fixture:0.0", key);
-      let inverted = [];
-      const onSelected = () => inverted.length > 0 && inverted.every(part => part.includes("║")) && inverted.some(part => part.includes(card));
       const deadline = Date.now() + 5_000;
-      do {
+      let state = read();
+      while (Date.now() < deadline && !settled(state, tab, card)) {
         await new Promise(resolve => setTimeout(resolve, 100));
-        const lines = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
-        // The panel's part of each row: after its dock divider; the prompt's own cursor block sits left of it.
-        inverted = lines.filter(line => line.indexOf("│", 40) >= 0).map(line => line.slice(line.indexOf("│", 40) + 1)).filter(part => part.includes("\x1b[7m"));
-      } while (Date.now() < deadline && !onSelected());
-      assert.ok(onSelected(), `${key} 後反白落在未選中的卡：${JSON.stringify(inverted)}`);
+        state = read();
+      }
+      assert.ok(settled(state, tab, card), `第 ${i + 1} 步 ${key} 後應在「${tab}」選中 ${card}，焦點反白在它的名字上：${JSON.stringify(state)}`);
+      // Re-read once the delayed re-focus has had its frames: the ring must not drift off the selected card.
+      await new Promise(resolve => setTimeout(resolve, 600));
+      state = read();
+      assert.ok(settled(state, tab, card), `第 ${i + 1} 步 ${key} 之後焦點漂移：${JSON.stringify(state)}`);
     }
   } finally {
     await terminal.close();
