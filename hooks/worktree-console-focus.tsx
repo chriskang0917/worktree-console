@@ -42,12 +42,12 @@ const REPO_MIN = 4
 const SENT_MAX = 50
 const MISS_TOAST = 3
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
-const LETTERS = 'abcdefghijklmnopqrstuvwxyz'
 const FOOTER = 'qwer 切分頁　1-9,0/↑↓ 選卡片'
 // Rows of the pane above the cards: the tab row and its gap.
 const CHROME = 2
 // The keys line after the last card and the gap above it, drawn only once the cards are scrolled to the end.
 const FOOT = 2
+const CARD_ROWS = 5
 
 const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean }[] = [
   { id: 'pending', key: 'q', label: '待回覆', pick: s => s.pending },
@@ -59,6 +59,7 @@ const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean
 const STATUS_BG: Record<Status, string> = { 等待回應: '#3b3624', 等待授權: '#3e2a2a', 回覆完畢: '#26323f', 執行中: '#263a2d', 閒置: '#303030' }
 const STAGE_BG: Record<string, string> = { 未開工: '#303030', 規劃中: '#352c40', 實作中: '#24363a', '已 push': '#28382c' }
 const TAG_FG = '#c8c8c8'
+const CORNER_FG = '#6a6a6a'
 const EMPTY = '目前沒有符合條件的 session'
 const EMPTY_BORDER = '#4a4a4a'
 
@@ -74,31 +75,12 @@ function cut(text: string, max: number): string {
   return `${out}…`
 }
 
-function lineCount(text: string, w: number): number {
-  return text.split('\n').reduce((n, para) => {
-    let lines = 1
-    let used = 0
-    for (const tok of para.match(/[\u2e80-\uffff]|[^\s\u2e80-\uffff]+|\s+/g) ?? []) {
-      const tw = width(tok)
-      if (used + tw <= w) used += tw
-      else if (/^\s/.test(tok)) (lines += 1), (used = 0)
-      else if (tw <= w) (lines += 1), (used = tw)
-      else {
-        if (used > 0) lines += 1
-        lines += Math.ceil(tw / w) - 1
-        used = tw % w || w
-      }
-    }
-    return n + lines
-  }, 0)
-}
-
 let focus: Focus = { active: false }
 let tab: Tab = 'pending'
 let sel: string | null = null
 let top = 0
 let follow = true
-let frame: { cols: number; avail: number } | null = null
+let frame: { avail: number } | null = null
 let ring: string[] = []
 let held: number | null = null
 let known: Set<string> | null = null
@@ -117,7 +99,6 @@ function rowsOf(t: Tab): Session[] {
   return [byKey(focus.current), ...queueOf()].filter((s): s is Session => !!s)
 }
 
-const optionsText = (s: Session) => s.options.map((o, j) => `${LETTERS[j]}. ${o}`).join('　')
 const chosenOf = (rows: Session[]) => (rows.some(r => r.key === sel) ? sel : (rows[0]?.key ?? null))
 
 // 待回覆 numbers the queue as the band does (the question on screen gets none); the other tabs number by place.
@@ -127,25 +108,23 @@ function numberOf(t: Tab, i: number): string | undefined {
   return n < 0 ? undefined : DIGITS[n]
 }
 
-// A card's rows as drawn: frame, header, gap, question, options, gap, corner line; plus its repo rule outside 待回覆.
-function blockRows(rows: Session[], i: number, first: number, cols: number): number {
+// A card's rows as drawn: frame, header, question, corner line; plus its repo rule outside 待回覆.
+function blockRows(rows: Session[], i: number, first: number): number {
   const r = rows[i]!
-  const inner = Math.max(1, cols - 6)
-  const card = 6 + lineCount(r.question, inner) + (r.options.length > 0 ? lineCount(optionsText(r), inner) : 0)
   const rule = tab !== 'pending' && (i === first || r.repo !== rows[i - 1]!.repo) ? (i === first ? 1 : 2) : 0
-  return card + rule
+  return CARD_ROWS + rule
 }
 
-function fits(rows: Session[], from: number, to: number, cols: number, avail: number, extra = 0): boolean {
+function fits(rows: Session[], from: number, to: number, avail: number, extra = 0): boolean {
   let used = extra
-  for (let i = from; i <= to; i++) used += blockRows(rows, i, from, cols)
+  for (let i = from; i <= to; i++) used += blockRows(rows, i, from)
   return used <= avail
 }
 
 function endOf(rows: Session[], from: number): number {
   if (!frame) return rows.length
   let end = Math.min(rows.length, from + 1)
-  while (end < rows.length && fits(rows, from, end, frame.cols, frame.avail)) end += 1
+  while (end < rows.length && fits(rows, from, end, frame.avail)) end += 1
   return end
 }
 
@@ -153,7 +132,7 @@ function endOf(rows: Session[], from: number): number {
 function lastTop(rows: Session[]): number {
   if (!frame) return 0
   let last = Math.max(0, rows.length - 1)
-  while (last > 0 && fits(rows, last - 1, rows.length - 1, frame.cols, frame.avail, FOOT)) last -= 1
+  while (last > 0 && fits(rows, last - 1, rows.length - 1, frame.avail, FOOT)) last -= 1
   return last
 }
 
@@ -164,7 +143,7 @@ function clampTop(rows: Session[]) {
 function reveal(rows: Session[], i: number) {
   if (!frame || i < 0) return
   if (i < top) top = i
-  while (top < i && !fits(rows, top, i, frame.cols, frame.avail)) top += 1
+  while (top < i && !fits(rows, top, i, frame.avail)) top += 1
   if (i === rows.length - 1) top = Math.max(top, lastTop(rows))
 }
 
@@ -355,7 +334,7 @@ export const register: Register = on => {
     const dock = e.props.placement === 'dock'
     const rows = rowsOf(tab)
     const chosen = chosenOf(rows)
-    frame = dock ? { cols, avail: Math.max(1, e.props.scroll.bodyRows - CHROME) } : null
+    frame = dock ? { avail: Math.max(1, e.props.scroll.bodyRows - CHROME) } : null
     if (chosen !== sel) (sel = chosen), (follow = true)
     if (follow) reveal(rows, rows.findIndex(r => r.key === chosen))
     follow = false
@@ -403,16 +382,13 @@ export const register: Register = on => {
             </Box>
             <Text backgroundColor={STAGE_BG[r.stage] ?? '#303030'} color={TAG_FG} wrap="truncate-end">{` ${r.stage} `}</Text>
           </Box>
-          <Box marginTop={1}>
-            <Text wrap="wrap" bold={isSel}>{r.question}</Text>
-          </Box>
-          {r.options.length > 0 && <Text wrap="wrap">{optionsText(r)}</Text>}
-          <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
+          <Text dimColor wrap="truncate-end">{cut(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
+          <Box flexDirection="row" justifyContent="space-between">
             <Box key={`corner:${r.key}`}>
-              <Text dimColor wrap="truncate-end">{repo || ' '}</Text>
+              <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>
             </Box>
             <Box key={`summary:${r.key}`}>
-              <Text dimColor wrap="truncate-end">{summary}</Text>
+              <Text color={CORNER_FG} wrap="truncate-end">{summary}</Text>
             </Box>
           </Box>
         </Box>
