@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { statusCell } from './status-view.ts'
+import { focusBandRows } from './worktree-console-focus.tsx'
 
 const PLUGIN = 'worktree-console'
 const PANE = 'worktree-console-pending'
@@ -1561,22 +1562,51 @@ test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱�
   }
 })
 
-test('refined：長問題填滿焦點框行數預算時仍保留操作與其他', async ($, on) => {
-  const w = world({ ...focusOf('perm', ['focusui']), sessions: SESSIONS.map(c => c.tag === 'perm' ? { ...c, question: '問'.repeat(500) } : c) })
+const longBandQuestion = `第一行\n\n${'問'.repeat(500)}\n最後一行`
+const longBandQueue = Array.from({ length: 5 }, (_, i) => ({ tag: `排隊名稱${i}abcdefghijk`, isNew: true }))
+
+test('refined：80 與 46 欄先保留換行操作列，長多行問題只取得剩餘行數', () => {
+  for (const cols of [80, 46]) {
+    const rows = focusBandRows({ cols, maxRows: 10, question: longBandQuestion, queue: longBandQueue, hiddenCount: 2 })
+    expect(rows.actions).toBe(1)
+    expect(rows.keys).toBe(cols === 80 ? 3 : 2)
+    expect(rows.question).toBe(cols === 80 ? 3 : 4)
+    expect(rows.margin + rows.separator + rows.header + rows.actions + rows.keys + rows.question).toBeLessThanOrEqual(10)
+    expect(rows.questionText.startsWith('第一行\n\n')).toBe(true)
+    expect(rows.questionText.endsWith('…')).toBe(true)
+    expect(rows.questionText.includes('最後一行')).toBe(false)
+    const short = focusBandRows({ cols, maxRows: 10, question: '第一行\n\n最後一行', queue: longBandQueue, hiddenCount: 2 })
+    expect(short.question).toBe(3)
+    expect(short.questionText).toBe('第一行\n\n最後一行')
+    const wrapped = focusBandRows({ cols, maxRows: 10, question: '問'.repeat(40), queue: longBandQueue, hiddenCount: 2 })
+    expect(wrapped.question).toBe(2)
+    expect(wrapped.questionText).toBe('問'.repeat(40))
+  }
+})
+
+test('refined：長多行問題與五個長排隊名稱仍畫出操作與 0 面板', async ($, on) => {
+  const many = [...longBandQueue.map(q => card(q.tag)), card('隱藏一'), card('隱藏二')]
+  const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [card('perm', { question: longBandQuestion }), ...many] })
+  w.focus.queue = many.map(c => ({ key: c.key, isNew: true }))
   appearanceConfig.set(w, { appearance: 'refined', motion: false })
   await start($, on, w)
   for (const cols of [80, 46]) {
-    const maxRows = 10
-    const ui = await $.ui.mount({ ...band(cols, maxRows), surface: 'terminal' })
-    const question = (await texts(ui)).find((text: string) => text.startsWith('問'))!
-    expect(question.endsWith('…')).toBe(true)
-    const cells = [...question].reduce((n, c) => n + (c === '問' ? 2 : 1), 0)
-    const questionRows = Math.ceil(cells / (cols - 6))
-    expect(questionRows).toBe(maxRows - 5)
-    const root = await ui.drawn()
-    expect(root.props.marginTop + 1 + 1 + questionRows + 1 + 1).toBeLessThanOrEqual(maxRows)
-    expect((await labels(ui)).includes('9: 顯示問題')).toBe(true)
-    expect((await texts(ui)).includes('其他 ')).toBe(true)
+    const ui = await $.ui.mount({ ...band(cols, 10), surface: 'terminal' })
+    const drawn = await ui.drawn()
+    const buttons: string[] = []
+    type Drawn = { type: string; props: { hotkey?: string; label?: string }; children?: (Drawn | string)[] }
+    const visit = (node: Drawn | string) => {
+      if (typeof node === 'string') return
+      if (node.type === 'Button') buttons.push(`${node.props.hotkey ?? ''}: ${node.props.label}`)
+      for (const child of node.children ?? []) visit(child)
+    }
+    visit(drawn)
+    expect(buttons).toContain('9: 顯示問題')
+    expect(buttons).toContain('8: 延後處理')
+    expect(buttons).toContain('0: 面板')
+    expect(buttons).toContain(`1: ${longBandQueue[0]!.tag} ✨`)
+    expect((await texts(ui)).includes(`＋${cols === 80 ? 2 : 6} · `)).toBe(true)
+    expect((await texts(ui)).find((text: string) => text.startsWith('第一行'))?.endsWith('…')).toBe(true)
     await ui.unmount()
   }
 })

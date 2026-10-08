@@ -65,16 +65,70 @@ const CORNER_FG = '#6a6a6a'
 const EMPTY = '目前沒有符合條件的 session'
 const EMPTY_BORDER = '#4a4a4a'
 
-const width = (t: string) => [...t].reduce((n, c) => n + (c.codePointAt(0)! > 0x2e80 ? 2 : 1), 0)
+function lineCount(text: string, w: number): number {
+  return text.split('\n').reduce((n, para) => {
+    let lines = 1
+    let used = 0
+    for (const tok of para.match(/[\u2e80-\uffff]|[^\s\u2e80-\uffff]+|\s+/g) ?? []) {
+      const tw = columns(tok)
+      if (used + tw <= w) used += tw
+      else if (/^\s/.test(tok)) (lines += 1), (used = 0)
+      else if (tw <= w) (lines += 1), (used = tw)
+      else {
+        if (used > 0) lines += 1
+        lines += Math.ceil(tw / w) - 1
+        used = tw % w || w
+      }
+    }
+    return n + lines
+  }, 0)
+}
 
-function cut(text: string, max: number): string {
-  if (width(text) <= max) return text
-  let out = ''
-  for (const c of text) {
-    if (width(out + c) > max - 1) break
-    out += c
+export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, hasCurrent = true }: {
+  cols: number
+  maxRows: number
+  question: string
+  queue: { tag: string; isNew: boolean }[]
+  hiddenCount: number
+  hasCurrent?: boolean
+}) {
+  const inner = Math.max(1, cols - 6)
+  const nameLimit = Math.max(1, cols < 60 ? cols - 26 : 20)
+  const visible = queue.slice(0, cols < 60 ? 1 : QUEUE_MAX)
+  const hidden = hiddenCount + queue.length - visible.length
+  const queueLabels = visible.map(q => `${truncateColumns(q.tag, nameLimit)}${q.isNew ? ' ✨' : ''}`)
+  // Reserve four cells for the hotkey decoration, independent of its terminal style.
+  const keyWidths = [2, ...(visible.length ? [5] : []), ...queueLabels.map(label => columns(label) + 7), ...(hidden ? [columns(`＋${hidden} · `)] : []), 8]
+  const keyLines: { index: number; width: number }[][] = [[]]
+  let used = 0
+  for (const [index, size] of keyWidths.entries()) {
+    if (used > 0 && used + size > cols - 2) {
+      keyLines.push([])
+      used = 0
+    }
+    keyLines[keyLines.length - 1]!.push({ index, width: size })
+    used += size
   }
-  return `${out}…`
+  const keys = keyLines.length
+  const actions = hasCurrent ? Math.ceil((2 + 12 + (queue.length || hiddenCount ? 15 : 0)) / Math.max(1, cols - 2)) : 0
+  const margin = 1
+  const separator = 1
+  const header = 1
+  const available = Math.max(0, maxRows - margin - separator - header - actions - keys)
+  const questionRows = hasCurrent ? Math.min(lineCount(question, inner), available) : 0
+  let questionText = questionRows ? question : ''
+  if (questionRows && lineCount(question, inner) > questionRows) {
+    const chars = [...question]
+    let low = 0
+    let high = chars.length
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2)
+      if (lineCount(chars.slice(0, mid).join('') + '…', inner) <= questionRows) low = mid
+      else high = mid - 1
+    }
+    questionText = chars.slice(0, low).join('') + '…'
+  }
+  return { margin, separator, header, actions, keys, question: questionRows, questionText, queueLabels, keyLines }
 }
 
 let focus: Focus = { active: false }
@@ -256,7 +310,7 @@ async function apply($: EngineInterface, next: Focus, pressed = false) {
     const live = [next.current, ...(next.queue ?? []).map(q => q.key)].filter((k): k is string => !!k)
     for (const q of next.queue ?? []) {
       const s = next.sessions?.find(x => x.key === q.key)
-      if (known && s && !known.has(q.key)) $.ui.toast(`${s.tag} 進排隊：${cut(s.question.replace(/\s+/g, ' '), TOAST_MAX)}`)
+      if (known && s && !known.has(q.key)) $.ui.toast(`${s.tag} 進排隊：${truncateColumns(s.question.replace(/\s+/g, ' '), TOAST_MAX)}`)
     }
     known = new Set(live)
     // A stop that left the band before /focus-show ran was not printed; the console announces it again once it is back.
@@ -415,8 +469,8 @@ export const register: Register = on => {
     visibleKeys = rows.slice(top, end).map(r => r.key)
     syncAnimation($)
     ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
-    const tabStart = TABS.slice(0, TABS.findIndex(x => x.id === tab)).reduce((n, x) => n + width(`${x.key}: ${x.label} ${rowsOf(x.id).length}`) + 2, 0)
-    const tabWidth = Math.min(Math.max(0, cols - tabStart), width(`${TABS.find(x => x.id === tab)!.key}: ${TABS.find(x => x.id === tab)!.label} ${rows.length}`))
+    const tabStart = TABS.slice(0, TABS.findIndex(x => x.id === tab)).reduce((n, x) => n + columns(`${x.key}: ${x.label} ${rowsOf(x.id).length}`) + 2, 0)
+    const tabWidth = Math.min(Math.max(0, cols - tabStart), columns(`${TABS.find(x => x.id === tab)!.key}: ${TABS.find(x => x.id === tab)!.label} ${rows.length}`))
     const tabs = (
       <Box key="tabs" flexDirection="row" columnGap={2} marginBottom={modern ? 0 : 1}>
         {TABS.map(x => (
@@ -442,11 +496,11 @@ export const register: Register = on => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
       const cell = statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
-      const tagRoom = modern ? inner - 12 - (hidden ? 10 : 0) : inner - width(` ${r.status} `) - width(` ${r.stage} `) - 3 - (hidden ? width('取消封存') + 2 : 0)
-      const tag = cut(r.tag, Math.max(1, tagRoom))
-      const summary = cut(r.summary, modern ? cols <= 36 ? 15 : SUMMARY_MAX : Math.min(SUMMARY_MAX, inner))
-      const room = inner - width(summary) - CORNER_GAP - (modern && r.stage !== '—' ? columns(r.stage) + 3 : 0)
-      const repo = tab === 'pending' && room >= REPO_MIN && !(modern && cols <= 36) ? cut(r.repo, room) : ''
+      const tagRoom = modern ? inner - 12 - (hidden ? 10 : 0) : inner - columns(` ${r.status} `) - columns(` ${r.stage} `) - 3 - (hidden ? columns('取消封存') + 2 : 0)
+      const tag = truncateColumns(r.tag, Math.max(1, tagRoom))
+      const summary = truncateColumns(r.summary, modern ? cols <= 36 ? 15 : SUMMARY_MAX : Math.min(SUMMARY_MAX, inner))
+      const room = inner - columns(summary) - CORNER_GAP - (modern && r.stage !== '—' ? columns(r.stage) + 3 : 0)
+      const repo = tab === 'pending' && room >= REPO_MIN && !(modern && cols <= 36) ? truncateColumns(r.repo, room) : ''
       const stage = <Text backgroundColor={STAGE_BG[r.stage] ?? '#303030'} color={TAG_FG} wrap="truncate-end">{` ${r.stage} `}</Text>
       return (
         <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} borderStyle={isSel ? 'double' : 'round'} borderColor={modern ? isSel ? theme.accent : theme.border : isSel ? 'cyanBright' : '#7a7a7a'} paddingX={2}>
@@ -461,7 +515,7 @@ export const register: Register = on => {
             </Box>
             {!modern && stage}
           </Box>
-          <Text dimColor={!modern} color={modern ? theme.dim : undefined} wrap="truncate-end">{cut(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
+          <Text dimColor={!modern} color={modern ? theme.dim : undefined} wrap="truncate-end">{truncateColumns(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
           <Box flexDirection="row" justifyContent="space-between">
             <Box key={`corner:${r.key}`}>
               {modern ? <><Text color={theme.dim} wrap="truncate-end">{repo}</Text>{repo && r.stage !== '—' && <Text color={theme.dim}> · </Text>}{r.stage !== '—' && <Text color={theme.muted}>{r.stage}</Text>}</> : <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>}
@@ -475,7 +529,7 @@ export const register: Register = on => {
     }
     const empty = (
       <Box key="empty" width={cols} borderStyle="round" borderColor={modern ? theme.border : EMPTY_BORDER} paddingY={1}>
-        <Text dimColor>{`${' '.repeat(Math.max(0, Math.floor((cols - 2 - width(EMPTY)) / 2)))}${EMPTY}`}</Text>
+        <Text dimColor>{`${' '.repeat(Math.max(0, Math.floor((cols - 2 - columns(EMPTY)) / 2)))}${EMPTY}`}</Text>
       </Box>
     )
     const body = rows.slice(top, end).flatMap((r, j) => {
@@ -485,7 +539,7 @@ export const register: Register = on => {
         const tail = ` 共 ${sessions().filter(x => x.repo === r.repo).length} 個`
         out.push(
           <Box key={`repo:${r.repo}`} flexShrink={0} marginTop={j === 0 ? 0 : 1}>
-            <Text dimColor={!modern} color={modern ? theme.dim : undefined} wrap="truncate-end">{`── ${r.repo} ${'─'.repeat(Math.max(2, cols - width(r.repo) - width(tail) - 4))}${tail}`}</Text>
+            <Text dimColor={!modern} color={modern ? theme.dim : undefined} wrap="truncate-end">{`── ${r.repo} ${'─'.repeat(Math.max(2, cols - columns(r.repo) - columns(tail) - 4))}${tail}`}</Text>
           </Box>,
         )
       }
@@ -551,9 +605,16 @@ export const register: Register = on => {
       const cols = e.props.bodyColumns
       const cell = cur && statusCell(cur.status, animationTick, { primary: cur.key === primaryKey(), animated: appearance.motion })
       const others = queue.slice(0, cols < 60 ? 1 : QUEUE_MAX)
-      const room = Math.max(1, cols - 6) * Math.max(1, e.props.maxRows - 5)
+      const budget = focusBandRows({ cols, maxRows: e.props.maxRows, question: cur?.question ?? '', queue, hiddenCount: fullQueue.length - queue.length, hasCurrent: !!cur })
       const rail = <Text color={cell ? theme[cell.color] : theme.dim}>│ </Text>
       const label = `── 待回覆 ${cur ? 1 : 0}/${fullQueue.length + (cur ? 1 : 0)} `
+      const keyItems = [
+        rail,
+        ...(others.length ? [<Text color={theme.dim}>其他 </Text>] : []),
+        ...others.map((q, i) => <Box key={`other:${i}`} flexDirection="row"><Button key={`queue:${i}`} hotkey={String(i + 1)} label={budget.queueLabels[i]!} plain dimColor onPress={() => act($, ['focus-pick', q.key])} /><Text color={theme.dim}> · </Text></Box>),
+        ...(fullQueue.length > others.length ? [<Text color={theme.dim}>{`＋${fullQueue.length - others.length} · `}</Text>] : []),
+        <Button key="pane" hotkey="0" label="面板" plain onPress={() => void openPane($)} />,
+      ]
       return (
         <Box flexDirection="column" marginTop={1}>
           <Text color={theme.border}>{label + '─'.repeat(Math.max(0, cols - columns(label)))}</Text>
@@ -561,14 +622,12 @@ export const register: Register = on => {
             {rail}
             {cur && cell ? <Box flexDirection="row"><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}  `}</Text><Button key="show-tag" label={truncateColumns(cur.tag, Math.max(1, cols - 14))} plain onPress={() => void show($, cur.tag, cur.key)} /></Box> : <Text color={theme.dim}>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>}
           </Box>
-          {cur && <Box flexDirection="row" paddingLeft={2}>{rail}<Text key="question" color={theme.fg} wrap="wrap">{cut(cur.question, room)}</Text></Box>}
-          {cur && <Box flexDirection="row" paddingLeft={2}>{rail}<Button key="show" hotkey="9" label="顯示問題" plain onPress={() => void show($, cur.tag, cur.key)} />{queue.length > 0 && <Box flexDirection="row"><Text color={theme.dim}> · </Text><Button key="later" hotkey="8" label="延後處理" plain onPress={() => act($, ['focus-later'])} /></Box>}</Box>}
-          <Box key="keys" flexDirection="row" paddingLeft={2} flexWrap="wrap">
-            {rail}
-            {others.length > 0 && <Text color={theme.dim}>其他 </Text>}
-            {others.map((q, i) => <Box key={`other:${i}`} flexDirection="row"><Button key={`queue:${i}`} hotkey={String(i + 1)} label={`${cut(q.tag, Math.max(1, cols < 60 ? cols - 26 : 20))}${q.isNew ? ' ✨' : ''}`} plain dimColor onPress={() => act($, ['focus-pick', q.key])} /><Text color={theme.dim}> · </Text></Box>)}
-            {fullQueue.length > others.length && <Text color={theme.dim}>{`＋${fullQueue.length - others.length} · `}</Text>}
-            <Button key="pane" hotkey="0" label="面板" plain onPress={() => void openPane($)} />
+          {cur && budget.question > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.question} flexShrink={0} overflow="hidden">{rail}<Box width={Math.max(1, cols - 6)} flexShrink={0}><Text key="question" color={theme.fg} wrap="wrap">{budget.questionText}</Text></Box></Box>}
+          {cur && <Box flexDirection="row" paddingLeft={2} height={budget.actions} flexShrink={0}>{rail}<Button key="show" hotkey="9" label="顯示問題" plain onPress={() => void show($, cur.tag, cur.key)} />{queue.length > 0 && <Box flexDirection="row"><Text color={theme.dim}> · </Text><Button key="later" hotkey="8" label="延後處理" plain onPress={() => act($, ['focus-later'])} /></Box>}</Box>}
+          <Box key="keys" flexDirection="column" height={budget.keys} flexShrink={0}>
+            {budget.keyLines.map((items, row) => <Box key={`keys:${row}`} flexDirection="row" paddingLeft={2} height={1} flexShrink={0}>
+              {items.map(item => <Box key={`key:${item.index}`} width={item.width} flexShrink={0}>{keyItems[item.index]}</Box>)}
+            </Box>)}
           </Box>
           <Box height={0} overflow="hidden">{queue.slice(others.length).map((q, j) => <Button key={`queue:${others.length + j}`} hotkey={String(others.length + j + 1)} label="" plain onPress={() => act($, ['focus-pick', q.key])} />)}</Box>
         </Box>
@@ -590,7 +649,7 @@ export const register: Register = on => {
         )}
         {cur && (
           <Text key="question" wrap="wrap">
-            {cut(cur.question, room)}
+            {truncateColumns(cur.question, room)}
           </Text>
         )}
         <Box key="keys" flexDirection="row" flexWrap="wrap" columnGap={2}>
