@@ -1603,35 +1603,6 @@ test('refined：超過五筆排隊仍顯示完整隱藏數', async ($, on) => {
   }
 })
 
-test('refined：39 欄分頁尾端計數不溢出到選取標頭，名稱維持完整', async ($, on) => {
-  const current = card('redesign-v7', { status: '回覆完畢' })
-  const pendingCards = [current, ...queued(5)]
-  const cards = [...pendingCards, ...queued(6).map((c, i) => ({ ...c, key: `idle${i}@1`, tag: `idle${i}`, pending: false, status: '執行中' }))]
-  const w = world({ ...focusOf(current.tag, pendingCards.slice(1).map(c => c.tag)), sessions: cards })
-  appearanceConfig.set(w, { appearance: 'refined', motion: false })
-  await start($, on, w)
-  await openPane($)
-  for (const cols of [39, 46, 70, 80]) {
-    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
-    const root = await ui.drawn() as CardDrawn
-    const tabs = root.children!.find((node): node is CardDrawn => typeof node !== 'string' && node.props?.key === 'tabs')!
-    const buttons = tabs.children!
-    let used = 0
-    const painted = buttons.map(button => {
-      const text = drawnText(button)
-      const lines = cardLines(button, Math.max(1, cols - used))
-      used += cardWidth(text) + 2
-      return tabs.props?.overflow === 'hidden' ? lines.slice(0, tabs.props.height) : lines
-    })
-    expect(painted.flatMap(lines => lines.slice(1))).toEqual([])
-    const [selected] = await mountedCards(ui)
-    const header = cardLines(selected!.children![0]!, cols - 6).join('')
-    expect(header).toBe('   ↩ 已回覆  redesign-v7')
-    expect(header).not.toMatch(/\s\d$/)
-    await ui.unmount()
-  }
-})
-
 test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱且不超寬', async ($, on) => {
   const cards = [card('abcdefghijklmnopqrstuvwxyzA'), card('abcdefghijklmnopq'), card('ABCDEFGHIJKLMNOPQ', { archived: true, pending: false }), card('ABCDEFG', { archived: true, pending: false })]
   const w = world({ ...focusOf(cards[0]!.tag, [cards[1]!.tag]), sessions: cards })

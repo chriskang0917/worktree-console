@@ -7,7 +7,7 @@
 - Corrected narrow-card header regression fixtures and drawn-tree lookup so both normal and archived cards are checked for complete names and full-row width at 46 and 36 columns.
 - Only the primary question alternates ◆/◇ every 900ms. Every visible authorization ◆ breathes together (1.2 seconds blocked, 0.6 seconds dim), while its label and focus-band rail retain the blocked color. Rendering updates only when the visible animation frame changes; working sessions and errors remain static.
 - Refined cards show stage values after the repo in the bottom row at every width, without a repeated label or the 59/60-column layout switch. Names can use 62 columns in an 80-column panel; classic appearance is unchanged.
-- Fixed refined tab labels wrapping out of their row in narrow panels: the trailing idle count could paint a stray digit over the first card header. Tab painting is now clipped to one row; card names and headers are unchanged.
+- 修正 refined 窄版分頁列：不足 46 欄時僅縮短未選分頁為快捷鍵與計數，所選分頁保留完整名稱與計數，底線同步對齊；維持單行以防計數覆畫首卡標頭。46 欄以上及 classic 不變。回歸測試直接檢查隔離 tmux 中的真實終端畫面，不再以元件樹模擬裁切。
 
 ## 1.1.0
 

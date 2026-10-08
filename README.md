@@ -127,6 +127,8 @@ npm test
 
 Run tests inside a herdr tab as `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`. The focus band and `focus-show` tests run with `claude plugin test .` and `claude plugin test mods/focus-show`.
 
+真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。
+
 To try a local checkout without replacing your installed copy:
 
 ```sh
