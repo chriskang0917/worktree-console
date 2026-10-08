@@ -352,6 +352,10 @@ function showTab(t: Tab) {
 }
 
 const focusSel = ($: EngineInterface) => sel && void $.ui.focus({ requestId: PANE, key: `name:${sel}` }).catch(() => {})
+// The ring resolves a key against the drawing on screen and keeps only the index, so a focus asked before a tab's
+// new drawing lands on whatever takes that index there (an unselected card's number). Re-ask on each drawing until the
+// held index is the selected name, a few times at most.
+let focusAfterDraw = 0
 
 async function openPane($: EngineInterface, t: Tab = 'pending') {
   await loadPreferences($)
@@ -476,6 +480,10 @@ export const register: Register = on => {
     visibleKeys = rows.slice(top, end).map(r => r.key)
     syncAnimation($)
     ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
+    if (focusAfterDraw > 0) {
+      if (sel && held !== null && ring[held] === `name:${sel}`) focusAfterDraw = 0
+      else (focusAfterDraw -= 1), $.clock.after(0, () => (focusSel($), $.ui.invalidate('ui.render')))
+    }
     // Keep the selected label intact; only unselected labels shorten below 46 columns.
     const tabLabels = TABS.map(x => `${modern && cols < 46 && x.id !== tab ? '' : `${x.label} `}${rowsOf(x.id).length}`)
     const tabIndex = TABS.findIndex(x => x.id === tab)
@@ -492,8 +500,8 @@ export const register: Register = on => {
             dimColor={x.id !== tab}
             onPress={() => {
               showTab(x.id)
+              focusAfterDraw = 5
               $.ui.invalidate('ui.render')
-              focusSel($)
             }}
           />
         ))}
