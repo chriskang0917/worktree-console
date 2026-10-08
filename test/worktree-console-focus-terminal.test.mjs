@@ -168,3 +168,122 @@ test("真實終端：切分頁、重按同一分頁與上下移動後，選中�
     await terminal.close();
   }
 });
+
+// A task as the task-list CLI stores it, timed against now so the panel's relative times read the same in every run.
+function todoTask(now) {
+  const ago = minutes => new Date(now - minutes * 60_000).toISOString();
+  const group = (id, title, status, order) => ({ id, kind: "group", title, status, order });
+  const leaf = (id, parentId, title, status, order, extra = {}) => ({ id, ...(parentId ? { parentId } : {}), kind: "leaf", title, status, order, ...extra });
+  return {
+    schemaVersion: 2, title: "面板改版",
+    items: [
+      group("g1", "面板待辦分頁", "doing", 0),
+      leaf("c1", "g1", "確認 hotkey", "waiting", 0),
+      leaf("c2", "g1", "畫摘要列", "doing", 1, { blockedBy: ["c4"] }),
+      leaf("c3", "g1", "寫測試", "done", 2),
+      group("g2", "資料讀取與錯誤處理", "doing", 1),
+      leaf("c4", "g2", "讀檔", "blocked", 0),
+      leaf("c5", "g2", "解析", "queued", 1),
+      leaf("c6", "g2", "錯誤提示", "queued", 2),
+      leaf("c7", "g2", "輪詢", "review", 3),
+      leaf("c8", "g2", "快取", "queued", 4),
+      leaf("r1", null, "整理 README", "queued", 2),
+      group("g3", "store 交易", "done", 3),
+      leaf("c10", "g3", "commit 流程", "done", 0),
+    ],
+    reports: [{ id: "rep1", itemId: "c3", ack: false }, { id: "rep2", itemId: "c10", ack: true }],
+    events: [
+      { revision: 0, occurredAt: ago(120), command: "建立任務" },
+      { revision: 1, occurredAt: ago(90), command: "item move", result: { id: "c5" } },
+      { revision: 2, occurredAt: ago(3), command: "report submit", result: { id: "rep1", status: "review" } },
+      { revision: 3, occurredAt: ago(2), command: "report accept", result: { id: "rep2" } },
+    ],
+  };
+}
+
+const cells = text => [...text].reduce((n, c) => n + (c.codePointAt(0) > 0x2e80 ? 2 : 1), 0);
+
+// 39 is the narrowest docked pane (the dock starts at 110 terminal columns); 36 is covered by the mount kit test.
+for (const cols of [80, 46, 39]) {
+  test(`真實終端：${cols} 欄的待辦分頁每列一行不換行，t 排最後並有底線，頁尾是 qwert`, { timeout: 30_000 }, async () => {
+    // The dock takes a share of the terminal, not a fixed 71 columns, once the terminal is wide.
+    const terminal = await terminalFixture({ counts: [2, 3, 0, 0], columns: { 80: 180, 46: 117, 39: 110 }[cols], task: todoTask(Date.now()) });
+    try {
+      await terminal.open();
+      const frame = await terminal.press("t", frame => panel(frame).some(line => line.startsWith("時間線")));
+      const lines = panel(frame);
+      const row = lines.findIndex(line => line.startsWith("q:"));
+      assert.match(lines[row], cols < 80 ? /^q: 2  w: 3  e: 0  r: 0  t: 待辦 3$/ : /  r: 閒置 0  t: 待辦 3$/);
+      assert.equal([...lines[row + 1]].length, cols, "確認面板的實際欄寬");
+      const body = lines.slice(row + 2);
+      assert.deepEqual(body.filter(line => cells(line) > cols), [], "每列都在欄寬內");
+      assert.ok(body.map(line => line.trim()).includes(cols <= 45 ? "qwert 切分頁 · Enter 展開／收合" : "qwert 切分頁 · ↑↓ 選項目 · Enter 展開／收合"), body.join("\n"));
+      const summary = { 80: "◆ 1 待回答 · ! 1 受阻 · ◇ 1 待驗收 · ▶ 1 進行 · ○ 4 待辦 · ★ 1 未核對", 46: "◆ 1 · ! 1 · ◇ 1 · ▶ 1 · ○ 4 · ★ 1", 39: "◆ 1 · ! 1 · ◇ 1 · ▶ 1 · ○ 4 · ★ 1" }[cols];
+      assert.equal(body[0], summary);
+      assert.ok(body.includes("│  ╰─ 還有 2 項"), body.join("\n"));
+      if (cols < 46) {
+        assert.ok(body.includes("│    完成 1/3 項 · 3 分鐘前"), body.join("\n"));
+        // Above 36 columns the dependency stays on the child's row, cut to what is left of it.
+        assert.ok(body.includes("│  ├─ ▶ 畫摘要列  前置 資料讀取與錯誤…"), body.join("\n"));
+      } else {
+        const groups = body.filter(line => /^[├╰]─ .* 完成 \d/.test(line));
+        assert.equal(groups.length, 2, body.join("\n"));
+        assert.equal(new Set(groups.map(line => cells(line))).size, 1, "完成數與時間在同一欄對齊");
+        assert.ok(body.includes("│  ├─ ▶ 畫摘要列  前置 資料讀取與錯誤處理/讀檔"), body.join("\n"));
+      }
+      if (process.env.WTC_TODO_EVIDENCE) fs.writeFileSync(path.join(process.env.WTC_TODO_EVIDENCE, `todo-tab-w${cols}.txt`), `${lines.join("\n")}\n`);
+    } finally {
+      await terminal.close();
+    }
+  });
+}
+
+test("真實終端：切到待辦再切回卡片分頁，選取與焦點反白都跟著選中的項目，↓ 不被吞掉", { timeout: 90_000 }, async () => {
+  const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 151, task: todoTask(Date.now()) });
+  const plain = text => text.replace(/\x1b\[[0-9;]*m/g, "");
+  // The shown tab (the label over the ━ underline), the framed card's name and every inverse run in the panel.
+  const read = () => {
+    const parts = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n").map(line => line.indexOf("│", 40) < 0 ? "" : line.slice(line.indexOf("│", 40) + 1));
+    const text = parts.map(plain);
+    const row = text.findIndex(line => line.startsWith("q:"));
+    const mark = (text[row + 1] ?? "").indexOf("━");
+    let start = 0;
+    const tab = (text[row] ?? "").trimEnd().split(/  (?=[qwert]:)/).find(segment => {
+      const hit = mark >= start && mark < start + cells(segment);
+      start += cells(segment) + 2;
+      return hit;
+    })?.replace(/^[qwert]: (\S+).*$/, "$1");
+    const framed = text.find(line => line.startsWith("║") && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
+    const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: text[i].startsWith("║"), label: plain(m[1]).trim() }))).filter(run => run.label);
+    return { tab, framed, inverse };
+  };
+  // Card tabs: the framed card is the selected one and carries the only inverse. 待辦: the only inverse is the selected row.
+  const settled = (state, tab, item) => state.tab === tab && state.inverse.length > 0
+    && (tab === "待辦" ? state.inverse.every(run => run.label === item) : state.framed === item && state.inverse.every(run => run.framed && run.label === item));
+  try {
+    await terminal.open();
+    const steps = [
+      ["w", "全部", "reply0"], ["Down", "全部", "reply1"],
+      ["t", "待辦", "面板待辦分頁"], ["Down", "待辦", "資料讀取與錯誤處理"],
+      ["w", "全部", "reply0"], ["Down", "全部", "reply1"],
+      // Pressing 待辦's key again goes back to its first row; ↓ still moves one row.
+      ["t", "待辦", "面板待辦分頁"], ["t", "待辦", "面板待辦分頁"], ["Down", "待辦", "資料讀取與錯誤處理"],
+      ["q", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
+    ];
+    for (const [i, [key, tab, item]] of steps.entries()) {
+      terminal.tmux("send-keys", "-t", "fixture:0.0", key);
+      const deadline = Date.now() + 5_000;
+      let state = read();
+      while (Date.now() < deadline && !settled(state, tab, item)) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        state = read();
+      }
+      assert.ok(settled(state, tab, item), `第 ${i + 1} 步 ${key} 後應在「${tab}」選中 ${item}，焦點反白只在它上面：${JSON.stringify(state)}`);
+      await new Promise(resolve => setTimeout(resolve, 600));
+      state = read();
+      assert.ok(settled(state, tab, item), `第 ${i + 1} 步 ${key} 之後焦點漂移：${JSON.stringify(state)}`);
+    }
+  } finally {
+    await terminal.close();
+  }
+});

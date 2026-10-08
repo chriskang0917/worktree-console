@@ -14,6 +14,7 @@
 - Provide English task-list documentation and descriptions while retaining Traditional Chinese runtime output and generated task READMEs; include the MIT licence notice and Chris Kang credit in the installable plugin.
 - Add task-list schema v2 with v1 migration, collapsed completed items, a 20-event timeline, and independent outstanding-evidence/activity reminders.
 - Automatically compact eligible old events above 1,000 entries or 2 MiB, retaining the latest 200 and seven days; preserve immutable snapshots, event segments, checksums, cold-command deduplication, paginated history, verification, and forward-only restore.
+- The refined focus panel gains a read-only 待辦 tab (`t`, footer `qwert`) while task-mode.json names a task: a status summary, groups toned by their most urgent open item with progress and last activity, collapsible children, a completed fold and a plain-language timeline. It reads the task folder directly, so it works without the task-list plugin; with no task, and in classic, the panel is unchanged.
 - Add preview-first task close/archive with `--yes`, unresolved-work safeguards, durable report/attachment relocation and reference mappings; never automatically delete task history.
 
 ## 1.1.0

@@ -20,8 +20,15 @@ export function focusFixture(counts, summaries = []) {
     sessions: [...queue, ...make("work", all - pending, { status: "執行中" }), ...make("archive", hidden, { archived: true }), ...make("idle", idle, { status: "閒置" })] };
 }
 
-export async function terminalFixture({ counts, summaries, columns = 120, socket = `wtcfix8-test-${process.pid}`, appearance = "refined", source = process.env.WTC_FOCUS_SOURCE } = {}) {
+// `task` is a task-state.json the 待辦 tab reads from a real folder outside the console home, as task-mode.json names it.
+export async function terminalFixture({ counts, summaries, columns = 120, socket = `wtcfix8-test-${process.pid}`, appearance = "refined", source = process.env.WTC_FOCUS_SOURCE, task } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wtcfix8-"));
+  const taskDir = task && fs.mkdtempSync(path.join(os.tmpdir(), "wtctask-"));
+  if (task) {
+    fs.writeFileSync(path.join(taskDir, "task-state.json"), JSON.stringify(task));
+    fs.mkdirSync(path.join(home, ".config/worktree-console"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".config/worktree-console/task-mode.json"), JSON.stringify({ task: taskDir }));
+  }
   fs.mkdirSync(path.join(home, ".claude"));
   fs.writeFileSync(path.join(home, ".claude/.claude.json"), JSON.stringify({
     hasCompletedOnboarding: true, lastOnboardingVersion: "2.1.294",
@@ -33,7 +40,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
   fs.mkdirSync(path.join(plugin, "hooks"));
   fs.writeFileSync(path.join(plugin, ".claude-plugin/plugin.json"), JSON.stringify({ name: "worktree-console", version: "1.0.0" }));
   fs.writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ modules: ["./worktree-console-focus.tsx"] }));
-  for (const name of ["worktree-console-focus.tsx", "console-theme.ts", "status-view.ts"])
+  for (const name of ["worktree-console-focus.tsx", "console-theme.ts", "status-view.ts", "todo-view.ts"])
     fs.copyFileSync(name === "worktree-console-focus.tsx" && source ? source : path.join(root, "hooks", name), path.join(plugin, "hooks", name));
   const input = path.join(home, "input");
   fs.mkdirSync(path.join(input, ".claude-plugin"), { recursive: true });
@@ -41,7 +48,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
   fs.writeFileSync(path.join(input, ".claude-plugin/plugin.json"), JSON.stringify({ name: "fixture-input", version: "1.0.0" }));
   fs.writeFileSync(path.join(input, "hooks/hooks.json"), JSON.stringify({ modules: ["./fixture.tsx"] }));
   fs.writeFileSync(path.join(input, "hooks/fixture.tsx"), `export const register = on => {
-  on('fs.read', async () => ({ value: ${JSON.stringify(JSON.stringify({ appearance, motion: false }))} }))
+  on('fs.read', async ($, e, next) => ${task ? `e.path.startsWith(${JSON.stringify(`${taskDir}/`)}) || e.path.endsWith('/task-mode.json') ? next(e) : ` : ""}({ value: ${JSON.stringify(JSON.stringify({ appearance, motion: false }))} }))
   on('env.get', async (_$, e) => ({ value: e.name === 'ORCA_TERMINAL_HANDLE' ? 'fixture-only' : e.name === 'HOME' ? ${JSON.stringify(home)} : undefined }))
   on('process.run', async () => ({ value: { exitCode: 0, stdout: ${JSON.stringify(JSON.stringify(focusFixture(counts, summaries)))}, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
 }
@@ -85,7 +92,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
           const start = lines[row].indexOf("q:");
           const tabs = lines[row].slice(start).trimEnd();
           const segmentStart = tabs.indexOf(`${key}:`);
-          const segment = tabs.slice(segmentStart).split(/  (?=[qwer]:)/)[0];
+          const segment = tabs.slice(segmentStart).split(/  (?=[qwert]:)/)[0];
           const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
           const markerStart = width(tabs.slice(0, segmentStart));
           // Each row is cut at its own sidebar divider: wide characters left of it can shift string indexes between rows.
@@ -104,6 +111,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
       spawnSync("tmux", ["-L", socket, "kill-server"]);
       await delay(500);
       fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      if (taskDir) fs.rmSync(taskDir, { recursive: true, force: true });
     },
   };
 }

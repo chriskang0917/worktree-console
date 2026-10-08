@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { loadAppearance, THEMES, type Appearance, type ConsoleTheme } from './console-theme.ts'
-import { statusCell, columns, truncateColumns } from './status-view.ts'
+import { statusCell, columns, truncateColumns, TASK_STATUS_VIEW } from './status-view.ts'
+import { clockText, isSettledItem, liveRootCount, parseTaskMode, parseTaskState, parseTaskView, todoKeyOf, todoRows, type TaskState, type TaskView, type TodoRow } from './todo-view.ts'
 
 type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
 
@@ -30,7 +31,7 @@ type Focus = {
   sessions?: Session[]
 }
 
-type Tab = 'pending' | 'all' | 'hidden' | 'idle'
+type Tab = 'pending' | 'all' | 'hidden' | 'idle' | 'todo'
 
 const POLL_MS = 5_000
 const IDLE_EVERY = 3
@@ -57,6 +58,9 @@ const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean
   { id: 'hidden', key: 'e', label: '封存', pick: s => s.archived },
   { id: 'idle', key: 'r', label: '閒置', pick: s => s.status === '閒置' },
 ]
+const TODO_TAB = { id: 'todo', key: 't', label: '待辦' } as const
+const TODO_FOOTER = 'qwert 切分頁 · ↑↓ 選項目 · Enter 展開／收合'
+const TODO_FOOTER_NARROW = 'qwert 切分頁 · Enter 展開／收合'
 
 const STATUS_BG: Record<Status, string> = { 等待回應: '#3b3624', 等待授權: '#3e2a2a', 回覆完畢: '#26323f', 執行中: '#263a2d', 閒置: '#303030' }
 const STAGE_BG: Record<string, string> = { 未開工: '#303030', 規劃中: '#352c40', 實作中: '#24363a', 已推送: '#28382c' }
@@ -158,6 +162,75 @@ let visibleKeys: string[] = []
 let bandKey: string | null = null
 const refined = () => appearance.appearance === 'refined'
 const warned = new Set<string>()
+let paneOpen = false
+let taskPath: string | null = null
+let taskState: TaskState | null = null
+let taskView: TaskView = { completed: false, timelineLimit: 20 }
+let taskReadAt = ''
+// null while the last read worked; else the time of the last good read, '' when there never was one.
+let taskStale: string | null = null
+let completedOpen = false
+let timelineOpen = true
+const collapsedGroups = new Set<string>()
+const allChildrenShown = new Set<string>()
+let todoSel: string | null = null
+let todoKeys: string[] = []
+let todoRowCount = 0
+const hasTodoTab = () => refined() && taskPath !== null
+const tabsOf = (): { id: Tab; key: string; label: string }[] => (hasTodoTab() ? [...TABS, TODO_TAB] : TABS)
+const todoLayout = (cols: number, now: number) => ({ state: taskState, cols, now, staleSince: taskStale, collapsed: collapsedGroups, showAllChildren: allChildrenShown, completedOpen, timelineOpen, timelineLimit: taskView.timelineLimit })
+
+// The 待辦 tab reads the selected task straight from its folder: the task-list plugin need not be installed beside the console.
+async function loadTask($: EngineInterface) {
+  const home = await $.env.get('WORKTREE_CONSOLE_HOME') || `${await $.env.get('HOME')}/.config/worktree-console`
+  let path: string | null = null
+  if (refined()) {
+    try { path = parseTaskMode(await $.fs.read(`${home}/task-mode.json`)) } catch {}
+  }
+  if (path !== taskPath) {
+    taskPath = path
+    taskState = null
+    taskStale = null
+    completedOpen = false
+    timelineOpen = true
+    collapsedGroups.clear()
+    allChildrenShown.clear()
+    todoSel = null
+    todoKeys = []
+    if (path === null && tab === 'todo') showTab('pending')
+  }
+  if (path === null) return
+  try {
+    const state = parseTaskState(await $.fs.read(`${path}/task-state.json`))
+    const view = parseTaskView(await $.fs.read(`${path}/.console/config.json`).catch(() => null))
+    if (!taskState) completedOpen = view.completed
+    taskState = state
+    taskView = view
+    taskReadAt = clockText(new Date(await $.clock.now()))
+    taskStale = null
+  } catch {
+    taskStale = taskState ? taskReadAt : ''
+  }
+}
+
+function toggleTodo(row: TodoRow) {
+  if (row.kind === 'root') {
+    if (collapsedGroups.has(row.id)) collapsedGroups.delete(row.id)
+    else collapsedGroups.add(row.id)
+  } else if (row.kind === 'more') allChildrenShown.add(row.groupId)
+  else if (row.kind === 'completed') completedOpen = !completedOpen
+  else if (row.kind === 'timeline') timelineOpen = !timelineOpen
+}
+
+// The 待辦 tab scrolls the same `top` as the card tabs, counted in rows: each of its rows is one line.
+const lastTodoTop = () => (frame ? Math.max(0, todoRowCount + FOOT - frame.avail) : 0)
+const clampTodoTop = () => (top = Math.max(0, Math.min(top, lastTodoTop())))
+function revealTodo(line: number) {
+  if (!frame || line < 0) return
+  if (line < top) top = line
+  else if (line >= top + frame.avail) top = line - frame.avail + 1
+}
+
 async function loadPreferences($: EngineInterface) {
   const home = await $.env.get('WORKTREE_CONSOLE_HOME') || `${await $.env.get('HOME')}/.config/worktree-console`
   const warnings: string[] = []
@@ -214,6 +287,7 @@ const primaryKey = () => {
 
 // 待回覆 always follows the band: the question on screen first, then the queue in order.
 function rowsOf(t: Tab): Session[] {
+  if (t === 'todo') return []
   if (t !== 'pending') return sessions().filter(TABS.find(x => x.id === t)!.pick)
   return [byKey(focus.current), ...queueOf()].filter((s): s is Session => !!s)
 }
@@ -335,6 +409,7 @@ async function poll($: EngineInterface) {
   try {
     next = JSON.parse((await run($, ['focus', ...(sessionId ? ['--session', sessionId] : [])])).stdout)
   } catch {}
+  if (paneOpen) await loadTask($)
   await apply($, next)
 }
 
@@ -349,6 +424,8 @@ function showTab(t: Tab) {
   sel = t === 'pending' ? (focus.current ?? null) : (rowsOf(t)[0]?.key ?? null)
   top = 0
   follow = true
+  // focusSel runs before the next render, so the first selectable row is found here; its key depends on neither width nor time.
+  if (t === 'todo') todoSel = todoRows(todoLayout(80, 0)).map(todoKeyOf).find(key => key !== undefined) ?? null
 }
 
 // The ring resolves a key against the drawing on screen and keeps only the index, so a focus asked before a tab's
@@ -366,8 +443,9 @@ const startRepin = () => ((repin = true), (repinTries = 0))
 async function focusSel($: EngineInterface, at: number) {
   if (at !== drawing) return
   const pane = (await $.ui.panes().catch(() => [])).find(p => p.id === PANE)
-  if (!sel || !pane?.isFocused) return void (repin = false)
-  const want = `name:${sel}`
+  // The 待辦 tab has no cards: it pins its selected row, and with nothing selectable there the re-pin just ends.
+  const want = tab === 'todo' ? todoSel : sel && `name:${sel}`
+  if (!want || !pane?.isFocused) return void (repin = false)
   const res = await $.ui.focus({ requestId: PANE, key: want }).catch(() => ({ deny: 'failed' }))
   if (!res.deny && at === drawing) return void ((held = ring.indexOf(want)), (repin = false))
   if (res.deny && ++repinTries >= REPIN_TRIES) return void (repin = false)
@@ -376,6 +454,8 @@ async function focusSel($: EngineInterface, at: number) {
 
 async function openPane($: EngineInterface, t: Tab = 'pending') {
   await loadPreferences($)
+  await loadTask($)
+  paneOpen = true
   showTab(t)
   $.ui.invalidate('ui.render')
   const opened = await $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
@@ -441,14 +521,31 @@ export const register: Register = on => {
 
   // The engine walks ↑↓ one Button back or forth through the pane, keeping its place by index: a step from where it held is one card up or down.
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    const m = /^(num|name):(.+)$/.exec(e.element ?? '')
-    const rows = rowsOf(tab)
-    const chosen = chosenOf(rows)
     const n = ring.length
     const to = ring.indexOf(e.element ?? '')
     const from = held !== null && held < n ? held : null
     const dir =
       e.origin.kind !== 'person' || to < 0 ? 0 : from === null ? (to === 0 ? 1 : to === n - 1 ? -1 : 0) : to === (from + 1) % n ? 1 : to === (from - 1 + n) % n ? -1 : 0
+    if (tab === 'todo') {
+      const i = todoSel ? todoKeys.indexOf(todoSel) : -1
+      // As on the card tabs: while re-pinning, the engine re-asserting what it last held keeps the selected row.
+      const repinning = e.origin.kind !== 'person' && repin && i >= 0 && !(e.element ?? '').startsWith('tab:')
+      const target = repinning ? todoSel : dir !== 0 && i >= 0 ? todoKeys[Math.max(0, Math.min(todoKeys.length - 1, i + dir))] : todoKeys.find(key => key === e.element)
+      if (!target) {
+        const res = await next(e)
+        if (!res.deny) held = to < 0 ? null : to
+        return res
+      }
+      todoSel = target
+      follow = true
+      $.ui.invalidate('ui.render')
+      const res = await next({ ...e, element: target })
+      if (!res.deny) held = ring.indexOf(target)
+      return res
+    }
+    const m = /^(num|name):(.+)$/.exec(e.element ?? '')
+    const rows = rowsOf(tab)
+    const chosen = chosenOf(rows)
     const i = rows.findIndex(r => r.key === chosen)
     // While a new drawing is being re-pinned, the engine re-asserts the card it last held (reopening the pane does): keep the selection.
     const repinning = !!m && e.origin.kind !== 'person' && repin && i >= 0
@@ -470,6 +567,12 @@ export const register: Register = on => {
   // The pane keeps its own window over the cards, the keys line riding after the last one: the wheel moves a card, a page key a screenful.
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (!focus.active || !frame) return next(e)
+    if (tab === 'todo') {
+      top += Math.sign(e.by) * (!e.pointer && Math.abs(e.by) >= e.bodyRows ? frame.avail : 1)
+      clampTodoTop()
+      $.ui.invalidate('ui.render')
+      return {}
+    }
     const rows = rowsOf(tab)
     const page = !e.pointer && Math.abs(e.by) >= e.bodyRows
     top += Math.sign(e.by) * (page ? Math.max(1, endOf(rows, top) - top) : 1)
@@ -480,6 +583,7 @@ export const register: Register = on => {
 
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE) {
+      paneOpen = false
       visibleKeys = []
       syncAnimation($)
     }
@@ -496,24 +600,31 @@ export const register: Register = on => {
     const rows = rowsOf(tab)
     const chosen = chosenOf(rows)
     frame = dock ? { avail: Math.max(1, e.props.scroll.bodyRows - CHROME) } : null
-    if (chosen !== sel) (sel = chosen), (follow = true)
-    if (follow) reveal(rows, rows.findIndex(r => r.key === chosen))
-    follow = false
-    clampTop(rows)
+    // The 待辦 tab keeps its own selection and settles `top` and `follow` against its rows below.
+    if (tab !== 'todo') {
+      if (chosen !== sel) (sel = chosen), (follow = true)
+      if (follow) reveal(rows, rows.findIndex(r => r.key === chosen))
+      follow = false
+      clampTop(rows)
+    }
     const end = endOf(rows, top)
     visibleKeys = rows.slice(top, end).map(r => r.key)
     syncAnimation($)
-    ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
+    const tabList = tabsOf()
+    ring = [...tabList.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
     const at = (drawing += 1)
     if (repin) $.clock.after(FRAME_MS, () => void focusSel($, at))
     // Keep the selected label intact; only unselected labels shorten below 46 columns.
-    const tabLabels = TABS.map(x => `${modern && cols < 46 && x.id !== tab ? '' : `${x.label} `}${rowsOf(x.id).length}`)
-    const tabIndex = TABS.findIndex(x => x.id === tab)
-    const tabStart = TABS.slice(0, tabIndex).reduce((n, x, i) => n + columns(`${x.key}: ${tabLabels[i]}`) + 2, 0)
-    const tabWidth = Math.min(Math.max(0, cols - tabStart), columns(`${TABS[tabIndex]!.key}: ${tabLabels[tabIndex]}`))
+    const tabCount = (x: { id: Tab }) => (x.id === 'todo' ? liveRootCount(taskState) : rowsOf(x.id).length)
+    // With the fifth tab (待辦) the row can outgrow 46 columns too; it never wraps, so it shortens the same way. Without it the row stays as it was.
+    const tabsFit = !hasTodoTab() || tabList.reduce((n, x, i) => n + columns(`${x.key}: ${x.label} ${tabCount(x)}`) + (i ? 2 : 0), 0) <= cols
+    const tabLabels = tabList.map(x => `${modern && (cols < 46 || !tabsFit) && x.id !== tab ? '' : `${x.label} `}${tabCount(x)}`)
+    const tabIndex = tabList.findIndex(x => x.id === tab)
+    const tabStart = tabList.slice(0, tabIndex).reduce((n, x, i) => n + columns(`${x.key}: ${tabLabels[i]}`) + 2, 0)
+    const tabWidth = Math.min(Math.max(0, cols - tabStart), columns(`${tabList[tabIndex]!.key}: ${tabLabels[tabIndex]}`))
     const tabs = (
       <Box key="tabs" flexDirection="row" columnGap={2} marginBottom={modern ? 0 : 1} height={modern ? 1 : undefined} flexShrink={modern ? 0 : undefined} overflow={modern ? 'hidden' : undefined}>
-        {TABS.map((x, i) => (
+        {tabList.map((x, i) => (
           <Button
             key={`tab:${x.id}`}
             hotkey={x.key}
@@ -529,6 +640,124 @@ export const register: Register = on => {
         ))}
       </Box>
     )
+    if (tab === 'todo') {
+      const todo = todoRows(todoLayout(cols, await $.clock.now()))
+      const keyed = todo.flatMap((row, line) => {
+        const key = todoKeyOf(row)
+        return key ? [{ key, line }] : []
+      })
+      if (!keyed.some(k => k.key === todoSel)) {
+        const settled = todoSel?.startsWith('todo:') && isSettledItem(taskState, todoSel.slice('todo:'.length))
+        const earlier = todoSel ? todoKeys.slice(0, Math.max(0, todoKeys.indexOf(todoSel))).reverse() : []
+        todoSel = (settled && keyed.some(k => k.key === 'todo:completed') ? 'todo:completed' : earlier.find(key => keyed.some(k => k.key === key))) ?? keyed[0]?.key ?? null
+        follow = true
+        // The engine still holds the vanished row's index, which now names another Button: pin the new selection after this drawing.
+        if (!repin) {
+          startRepin()
+          $.clock.after(FRAME_MS, () => void focusSel($, at))
+        }
+      }
+      todoKeys = keyed.map(k => k.key)
+      todoRowCount = todo.length
+      if (follow) revealTodo(keyed.find(k => k.key === todoSel)?.line ?? -1)
+      follow = false
+      clampTodoTop()
+      ring = [...tabList.map(x => `tab:${x.id}`), ...todoKeys]
+      const todoEnd = frame ? Math.min(todo.length, top + frame.avail) : todo.length
+      const press = (row: TodoRow, key: string) => () => {
+        todoSel = key
+        follow = true
+        toggleTodo(row)
+        $.ui.invalidate('ui.render')
+      }
+      const toggle = (row: TodoRow, key: string, dim: boolean, label: string) => (
+        <Button key={key} label={label} plain dimColor={dim} autoFocus={todoSel === key ? true : undefined} onPress={press(row, key)} />
+      )
+      const line = (row: TodoRow, index: number) => {
+        const lineKey = `todo:line:${index}`
+        const box = { key: lineKey, flexDirection: 'row' as const, height: 1, flexShrink: 0, overflow: 'hidden' as const }
+        const indent = (last: boolean) => <Text color={theme.border}>{last ? '   ' : '│  '}</Text>
+        switch (row.kind) {
+          case 'note':
+            return <Box {...box}><Text color={theme.dim}>{row.text}</Text></Box>
+          case 'blank':
+            return <Box {...box}><Text> </Text></Box>
+          case 'gap':
+            return <Box {...box}><Text color={theme.border}>│</Text></Box>
+          case 'summary':
+            return (
+              <Box {...box}>
+                {!row.parts.length && <Text color={theme.dim}>沒有未完成項目</Text>}
+                {row.parts.map((part, i) => {
+                  const cell = TASK_STATUS_VIEW[part.status]
+                  return <Box key={`summary:${part.status}`} flexDirection="row">{i > 0 && <Text color={theme.dim}> · </Text>}<Text color={theme[cell.color]}>{cell.glyph}</Text><Text color={theme.fg}>{` ${part.count}`}</Text>{part.label && <Text color={theme.dim}>{` ${part.label}`}</Text>}</Box>
+                })}
+                {row.stars > 0 && <Box key="summary:stars" flexDirection="row"><Text color={theme.dim}> · </Text><Text color={theme.waiting}>★</Text><Text color={theme.fg}>{` ${row.stars}`}</Text>{row.starLabel && <Text color={theme.dim}>{` ${row.starLabel}`}</Text>}</Box>}
+              </Box>
+            )
+          case 'root': {
+            const cell = TASK_STATUS_VIEW[row.tone]
+            return (
+              <Box {...box}>
+                <Text color={theme.border}>{row.last ? '╰─ ' : '├─ '}</Text>
+                <Text color={theme[cell.color]}>{`${cell.glyph} `}</Text>
+                {row.key ? toggle(row, row.key, row.dim, row.title) : <Text color={row.dim ? theme.dim : theme.fg}>{row.title}</Text>}
+                {row.key && <Text color={theme.dim}>{row.open ? ' ▾' : ' ▸'}</Text>}
+                {row.star && <Text color={theme.waiting}>{row.star}</Text>}
+                {row.cluster && <Text color={theme.dim}>{`${' '.repeat(row.pad)}${row.cluster}`}</Text>}
+              </Box>
+            )
+          }
+          case 'meta':
+            return <Box {...box}><Text color={theme.border}>{row.last ? '     ' : '│    '}</Text><Text color={theme.dim}>{row.text}</Text></Box>
+          case 'child': {
+            const cell = TASK_STATUS_VIEW[row.status]
+            return (
+              <Box {...box}>
+                {indent(row.last)}
+                <Text color={row.rail ? theme[TASK_STATUS_VIEW[row.rail].color] : theme.border}>{row.lastChild ? '╰─ ' : '├─ '}</Text>
+                <Text color={theme[cell.color]}>{`${cell.glyph} `}</Text>
+                <Text color={row.dim ? theme.dim : theme.fg}>{row.title}</Text>
+                {row.star && <Text color={theme.waiting}>{row.star}</Text>}
+                {row.dependency && <Text color={theme.dim}>{`  ${row.dependency}`}</Text>}
+              </Box>
+            )
+          }
+          case 'dependency':
+            return <Box {...box}><Text color={theme.dim}>{`${row.last ? '   ' : '│  '}${row.lastChild ? ' ' : '│'}    ${row.text}`}</Text></Box>
+          case 'more':
+            return <Box {...box}>{indent(row.last)}<Text color={theme.border}>{'╰─ '}</Text>{toggle(row, row.key, true, row.text)}</Box>
+          case 'completed':
+          case 'timeline':
+            return <Box {...box}>{toggle(row, row.key, true, row.text)}</Box>
+        }
+      }
+      // Rows scrolled out keep their buttons, zero rows tall, so the ring keeps its places as on the card tabs.
+      const offscreen = (boxKey: string, part: TodoRow[]) => (
+        <Box key={boxKey} height={0} flexShrink={0} overflow="hidden">
+          {part.flatMap(row => {
+            const key = todoKeyOf(row)
+            return key ? [<Button key={key} label="" plain onPress={press(row, key)} />] : []
+          })}
+        </Box>
+      )
+      return (
+        <Box flexDirection="column" height={dock ? e.props.scroll.bodyRows : undefined}>
+          {tabs}
+          <Text color={theme.border}>{'─'.repeat(Math.min(cols, tabStart))}<Text color={theme.accent}>{'━'.repeat(tabWidth)}</Text>{'─'.repeat(Math.max(0, cols - tabStart - tabWidth))}</Text>
+          <Box key="todos" flexDirection="column" flexShrink={1} overflow="hidden">
+            {offscreen('todo:above', todo.slice(0, top))}
+            {todo.slice(top, todoEnd).map((row, i) => line(row, top + i))}
+            {offscreen('todo:below', todo.slice(todoEnd))}
+          </Box>
+          {top >= lastTodoTop() && (
+            <Box key="footer" flexShrink={0} marginTop={1} paddingLeft={1}>
+              <Text color={theme.dim}>{cols <= 45 ? TODO_FOOTER_NARROW : TODO_FOOTER}</Text>
+            </Box>
+          )}
+        </Box>
+      )
+    }
     const hidden = tab === 'hidden'
     const press = (r: Session) => (hidden ? unarchiveCard($, r) : printCard($, r))
     const inner = Math.max(1, cols - 6)
@@ -615,7 +844,7 @@ export const register: Register = on => {
         </Box>
         {top >= lastTop(rows) && (
           <Box key="footer" flexShrink={0} marginTop={1} paddingLeft={1}>
-            <Text dimColor={!modern} color={modern ? theme.dim : undefined}>{modern ? 'qwer 切分頁 · 1-9,0/↑↓ 選卡片' : FOOTER}</Text>
+            <Text dimColor={!modern} color={modern ? theme.dim : undefined}>{modern ? `${hasTodoTab() ? 'qwert' : 'qwer'} 切分頁 · 1-9,0/↑↓ 選卡片` : FOOTER}</Text>
           </Box>
         )}
       </Box>

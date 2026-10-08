@@ -51,7 +51,7 @@ const STATS = '等待回應 3 | 等待授權 1 | 回覆完畢 1 | 執行中 1 | 
 const keyOf = (tag: string) => `${tag}@1`
 const stopId = (key: string) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36)
 
-type World = { focus: any; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
+type World = { focus: any; files?: Record<string, string | null>; now?: number; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
 const appearanceConfig = new WeakMap<World, AppearanceConfig>()
 
@@ -109,8 +109,13 @@ const hint = { plugin: PLUGIN, component: 'PromptHint' as const, props: { isDraf
 
 async function start($: any, on: On, world: World, env: Record<string, string> = { ORCA_TERMINAL_HANDLE: 'term_self' }) {
   mock.env(on, env)
-  const clock = mock.clock(on, { now: 1_000 })
-  on('fs.read', async () => ({ value: JSON.stringify(appearanceConfig.get(world) ?? { appearance: 'classic' }) }))
+  const clock = mock.clock(on, { now: world.now ?? 1_000 })
+  // `files` stands for files outside the console's config.json; null is one that cannot be read.
+  on('fs.read', async (_$, e) => {
+    const text = world.files?.[e.path]
+    if (text === null) throw new Error(`ENOENT ${e.path}`)
+    return { value: text ?? JSON.stringify(appearanceConfig.get(world) ?? { appearance: 'classic' }) }
+  })
   fakeConsole(on, world)
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('ui.toast', async (_$, e) => {
@@ -1770,6 +1775,356 @@ test('refined：長多行問題與五個長排隊名稱仍畫出操作與 0 面�
     expect(buttons).toContain(`1: ${longBandQueue[0]!.tag} ✨`)
     expect((await texts(ui)).includes(`＋${cols === 80 ? 2 : 6} · `)).toBe(true)
     expect((await texts(ui)).find((text: string) => text.startsWith('第一行'))?.endsWith('…')).toBe(true)
+    await ui.unmount()
+  }
+})
+
+// 待辦 tab: the task lives in its own folder outside the console home, as task-mode.json names it.
+const TASK = '/tmp/外部任務'
+const TASK_ENV = { ORCA_TERMINAL_HANDLE: 'term_self', WORKTREE_CONSOLE_HOME: HOME }
+const NOW = Date.parse('2026-10-08T05:30:00Z')
+const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString()
+const hhmm = (at: number) => { const d = new Date(at); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
+const group = (id: string, title: string, status: string, order: number) => ({ id, kind: 'group', title, status, order })
+const leaf = (id: string, parentId: string | null, title: string, status: string, order: number, extra: object = {}) => ({ id, ...(parentId ? { parentId } : {}), kind: 'leaf', title, status, order, ...extra })
+const taskItems = () => [
+  group('g1', '面板待辦分頁', 'doing', 0),
+  leaf('c1', 'g1', '確認 hotkey', 'waiting', 0),
+  leaf('c2', 'g1', '畫摘要列', 'doing', 1, { blockedBy: ['c4'] }),
+  leaf('c3', 'g1', '寫測試', 'done', 2),
+  leaf('c11', 'g1', '舊做法', 'cancelled', 3),
+  group('g2', '資料讀取', 'doing', 1),
+  leaf('c4', 'g2', '讀檔', 'blocked', 0),
+  leaf('c5', 'g2', '解析', 'queued', 1),
+  leaf('c6', 'g2', '錯誤提示', 'queued', 2),
+  leaf('c7', 'g2', '輪詢', 'review', 3),
+  leaf('c8', 'g2', '快取', 'queued', 4),
+  leaf('c9', 'g2', '時間格式', 'parked', 5),
+  leaf('r1', null, '整理 README', 'queued', 2),
+  group('g3', 'store 交易', 'done', 3),
+  leaf('c10', 'g3', 'commit 流程', 'done', 0),
+]
+const taskState = (extra: object = {}) => ({
+  schemaVersion: 2,
+  title: '面板改版',
+  items: taskItems(),
+  // c3 carries two unchecked reports: ★ counts reports, not starred items.
+  reports: [{ id: 'rep1', itemId: 'c3', ack: false }, { id: 'rep0', itemId: 'c3', ack: false, history: true }, { id: 'rep2', itemId: 'c10', ack: true }],
+  events: [
+    { revision: 0, occurredAt: ago(120), command: '建立任務' },
+    { revision: 1, occurredAt: ago(100), command: 'item add', result: { id: 'g1' } },
+    { revision: 2, occurredAt: ago(90), command: 'item move', result: { id: 'c5' } },
+    { revision: 3, occurredAt: ago(3), command: 'report submit', result: { id: 'rep1', history: false, status: 'review' } },
+    { revision: 4, occurredAt: ago(2), command: 'report accept', result: { id: 'rep2' } },
+  ],
+  ...extra,
+})
+function taskWorld(state: object | null = taskState(), config: object | null = null) {
+  const w = world(pending())
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  w.now = NOW
+  w.files = {
+    [`${HOME}/task-mode.json`]: JSON.stringify({ tasksDir: '/tmp/tasks', task: TASK }),
+    [`${TASK}/task-state.json`]: state && JSON.stringify(state),
+    [`${TASK}/.console/config.json`]: config && JSON.stringify(config),
+  }
+  return w
+}
+const setTask = (w: World, state: object | null) => (w.files![`${TASK}/task-state.json`] = state && JSON.stringify(state))
+const todoLines = async (ui: any): Promise<string[]> => (await ui.findAll({ type: 'Box' })).filter((b: any) => /^todo:line:\d+$/.test(b.key ?? '')).map((b: any) => b.text as string)
+const todoChosen = async (ui: any) => (await ui.findAll({ type: 'Button' })).find((b: any) => b.props.autoFocus)?.key
+const tabLabels = async (ui: any) => (await ui.findAll({ type: 'Button' })).filter((b: any) => b.key.startsWith('tab:')).map((b: any) => `${b.props.hotkey}: ${b.props.label}`)
+const lineNode = async (ui: any, text: string) => {
+  const root = await ui.drawn()
+  const lines = (await ui.findAll({ type: 'Box' })).filter((b: any) => /^todo:line:\d+$/.test(b.key ?? ''))
+  return findKey(root, lines.find((b: any) => b.text === text)?.key)
+}
+// ↑↓ as the engine moves them: one Button back or forth from where the ring holds, landing where the hooks send it.
+function todoArrows($: any, ui: any, w: World) {
+  let at: number | null = null
+  const buttons = async () => (await ui.findAll({ type: 'Button' })).map((b: any) => b.key) as string[]
+  return async (dir: 1 | -1) => {
+    const keys = await buttons()
+    if (at === null) at = keys.indexOf(w.focused.at(-1)!)
+    const n = keys.length
+    await $.ui.focus({ component: 'Pane', requestId: PANE, plugin: PLUGIN, element: keys[at >= 0 && at < n ? (at + dir + n) % n : dir === 1 ? 0 : n - 1], origin: { kind: 'person' } } as any)
+    at = (await buttons()).indexOf(w.focused.at(-1)!)
+  }
+}
+
+test('待辦：task-mode.json 沒有任務時沒有 t 分頁、頁尾仍是 qwer；有任務時 t 排最後、其他分頁頁尾改 qwert；classic 有任務也不變', async ($, on) => {
+  const w = taskWorld()
+  w.files![`${HOME}/task-mode.json`] = JSON.stringify({ tasksDir: '/tmp/tasks' })
+  await start($, on, w, TASK_ENV)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect(await tabLabels(ui)).toEqual(['q: 待回覆 5', 'w: 全部 6', 'e: 封存 1', 'r: 閒置 1'])
+  expect(await footerLines(ui)).toEqual(['qwer 切分頁 · 1-9,0/↑↓ 選卡片'])
+  await ui.unmount()
+
+  w.files![`${HOME}/task-mode.json`] = JSON.stringify({ task: TASK })
+  await openPane($)
+  const withTask = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect(await tabLabels(withTask)).toEqual(['q: 待回覆 5', 'w: 全部 6', 'e: 封存 1', 'r: 閒置 1', 't: 待辦 3'])
+  expect(await footerLines(withTask)).toEqual(['qwert 切分頁 · 1-9,0/↑↓ 選卡片'])
+  await withTask.unmount()
+
+  appearanceConfig.set(w, { appearance: 'classic' })
+  await openPane($)
+  const classic = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect(await tabLabels(classic)).toEqual(['q: 待回覆 5', 'w: 全部 6', 'e: 封存 1', 'r: 閒置 1'])
+  expect(await footerLines(classic)).toEqual([FOOTER_TEXT])
+  await classic.unmount()
+})
+
+test('待辦：摘要只算末端項目，★ 數是未核對的報告數；80 欄全標籤、46 欄只留急件與未核對、36 欄不留標籤；本分頁沒有數字鍵', async ($, on) => {
+  const small = {
+    ...taskState(),
+    items: [group('g1', '交付', 'doing', 0), leaf('c1', 'g1', '確認範圍', 'waiting', 0), leaf('c2', 'g1', '實作', 'queued', 1), leaf('r1', null, '驗收', 'review', 1), group('g9', '空的大項', 'queued', 2)],
+    reports: [{ id: 'rep1', itemId: 'c2', ack: false }, { id: 'rep2', itemId: 'c2', ack: false }, { id: 'rep3', itemId: 'r1', ack: true }],
+  }
+  const w = taskWorld(small)
+  await start($, on, w, TASK_ENV)
+  await openPane($)
+  for (const [cols, summary] of [
+    [80, '◆ 1 待回答 · ◇ 1 待驗收 · ○ 2 待辦 · ★ 2 未核對'],
+    [46, '◆ 1 待回答 · ◇ 1 待驗收 · ○ 2 · ★ 2 未核對'],
+    [36, '◆ 1 · ◇ 1 · ○ 2 · ★ 2'],
+  ] as const) {
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    await ui.press({ key: 'tab:todo' })
+    expect((await todoLines(ui)).slice(0, 2)).toEqual([summary, ' '])
+    expect((await ui.find({ key: 'tab:todo' }))?.props.label).toBe('待辦 3')
+    expect((await ui.findAll({ type: 'Button' })).filter((b: any) => /^[0-9]$/.test(b.props.hotkey ?? ''))).toEqual([])
+    expect(await footerLines(ui)).toEqual([cols <= 45 ? 'qwert 切分頁 · Enter 展開／收合' : 'qwert 切分頁 · ↑↓ 選項目 · Enter 展開／收合'])
+    await ui.unmount()
+  }
+  // Every status at once does not fit 46 columns with labels: they go before the ★ count is cut off.
+  setTask(w, taskState())
+  await openPane($)
+  const crowded = await $.ui.mount({ ...pane(46), surface: 'terminal' })
+  await crowded.press({ key: 'tab:todo' })
+  expect((await todoLines(crowded))[0]).toBe('◆ 1 · ! 1 · ◇ 1 · ▶ 1 · ○ 4 · = 1 · ★ 2')
+  await crowded.unmount()
+  setTask(w, { ...taskState(), items: [group('g1', '交付', 'done', 0), leaf('c1', 'g1', '確認範圍', 'done', 0)], reports: [] })
+  await openPane($)
+  const settled = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  await settled.press({ key: 'tab:todo' })
+  expect((await todoLines(settled))[0]).toBe('沒有未完成項目')
+  await settled.unmount()
+})
+
+test('待辦：大項圖示是最急的未完成子項、待回答與受阻大項的子項軌道跟著上色；完成數與時間對齊在右側；超過 4 個子項只留急件並收成「還有 N 項」', async ($, on) => {
+  const w = taskWorld()
+  await start($, on, w, TASK_ENV)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  await ui.press({ key: 'tab:todo' })
+  const lines = await todoLines(ui)
+  expect(lines.slice(2, 15)).toEqual([
+    expect.stringMatching(/^├─ ◆ 面板待辦分頁 ▾ +完成 1\/3 項   3 分鐘前$/),
+    '│  ├─ ◆ 確認 hotkey',
+    '│  ├─ ▶ 畫摘要列  前置 資料讀取/讀檔',
+    '│  ╰─ ✓ 寫測試 ★',
+    '│',
+    expect.stringMatching(/^├─ ! 資料讀取 ▾ +完成 0\/6 項   1 小時前$/),
+    '│  ├─ ! 讀檔',
+    '│  ├─ ○ 解析',
+    '│  ├─ ◇ 輪詢',
+    '│  ╰─ 還有 3 項',
+    '│',
+    '╰─ ○ 整理 README',
+    '已完成 2 項 ▸',
+  ])
+  expect([lines[2]!, lines[7]!].map(cells)).toEqual([80, 80])
+  const first = await lineNode(ui, lines[2]!)
+  expect(first.children[1].props.color).toBe('yellow')
+  expect((await lineNode(ui, '│  ├─ ◆ 確認 hotkey')).children[1].props.color).toBe('yellow')
+  expect((await lineNode(ui, '│  ├─ ! 讀檔')).children[1].props.color).toBe('redBright')
+  expect((await lineNode(ui, '╰─ ○ 整理 README')).children[0].props.color).toBe('gray')
+  expect((await ui.find({ key: 'todo:more:g2' }))?.props.dimColor).toBe(true)
+  expect((await ui.find({ key: 'todo:g1' }))?.props.dimColor).toBe(false)
+  await ui.unmount()
+})
+
+test('待辦：Enter 收合大項、↑↓ 走過大項、還有 N 項、已完成、時間線；輪詢後選取與收合跟著項目，消失時退到上一列、完成時落到已完成', async ($, on) => {
+  const w = taskWorld()
+  const clock = await start($, on, w, TASK_ENV)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  await ui.press({ key: 'tab:todo' })
+  expect(await todoChosen(ui)).toBe('todo:g1')
+  const arrow = todoArrows($, ui, w)
+  const walked = []
+  for (let i = 0; i < 4; i++) {
+    await arrow(1)
+    walked.push(await todoChosen(ui))
+  }
+  expect(walked).toEqual(['todo:g2', 'todo:more:g2', 'todo:completed', 'todo:timeline'])
+  await arrow(-1)
+  await arrow(-1)
+  await arrow(-1)
+  await arrow(-1)
+  expect(await todoChosen(ui)).toBe('todo:g1')
+
+  await ui.press({ key: 'todo:g1' })
+  const collapsed = await todoLines(ui)
+  expect(collapsed[2]).toMatch(/^├─ ◆ 面板待辦分頁 ▸ ★1 +完成 1\/3 項   3 分鐘前$/)
+  expect(collapsed[3]).toBe('│')
+  expect(await todoChosen(ui)).toBe('todo:g1')
+
+  setTask(w, taskState({ items: [group('g0', '新的大項', 'queued', -1), ...taskItems()] }))
+  await clock.advance(5_000)
+  const polled = await todoLines(ui)
+  expect(polled[2]).toMatch(/^├─ ○ 新的大項 ▾ +完成 0\/0 項 +$/)
+  expect(polled[4]).toMatch(/^├─ ◆ 面板待辦分頁 ▸ ★1/)
+  expect(await todoChosen(ui)).toBe('todo:g1')
+  expect((await ui.find({ key: 'tab:todo' }))?.props.label).toBe('待辦 4')
+
+  await ui.press({ key: 'todo:more:g2' })
+  expect((await todoLines(ui)).filter(line => line.startsWith('│  ') && line.includes('還有'))).toEqual([])
+  expect(await todoChosen(ui)).toBe('todo:g2')
+
+  const done = (item: any) => (item.id === 'g2' || item.parentId === 'g2' ? { ...item, status: 'done' } : item)
+  setTask(w, taskState({ items: [group('g0', '新的大項', 'queued', -1), ...taskItems().map(done)] }))
+  await clock.advance(5_000)
+  expect(await todoChosen(ui)).toBe('todo:completed')
+  await ui.unmount()
+})
+
+test('待辦：滾輪一次移一列；↑↓ 選到畫面外的列時捲進來，捲到底才畫頁尾', async ($, on) => {
+  const w = taskWorld()
+  await start($, on, w, TASK_ENV)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80, 12), surface: 'terminal' })
+  await ui.press({ key: 'tab:todo' })
+  const first = await todoLines(ui)
+  expect(first).toHaveLength(10)
+  await $.ui.scroll({ component: 'Pane', requestId: PANE, offset: 0, by: 1, bodyRows: 12, contentRows: 12, origin: { kind: 'person' } })
+  expect((await todoLines(ui)).slice(0, 9)).toEqual(first.slice(1))
+  expect(await footerLines(ui)).toBeNull()
+  const arrow = todoArrows($, ui, w)
+  for (let i = 0; i < 4; i++) await arrow(1)
+  expect(await todoChosen(ui)).toBe('todo:timeline')
+  expect(await todoLines(ui)).toContain('時間線 · 5 ▾')
+  await $.ui.scroll({ component: 'Pane', requestId: PANE, offset: 0, by: 12, bodyRows: 12, contentRows: 12, origin: { kind: 'person' } })
+  expect((await todoLines(ui)).at(-1)).toBe(`${hhmm(NOW - 2 * 60_000)} commit 流程 · 驗收通過`)
+  expect(await footerLines(ui)).toEqual(['qwert 切分頁 · ↑↓ 選項目 · Enter 展開／收合'])
+  await ui.unmount()
+})
+
+test('待辦：已完成為 0 時不畫；展開後完成大項標題轉暗、子項全顯示，進行中大項也補回完成與取消的子項；config 設 expanded 時一開始就展開', async ($, on) => {
+  const live = taskItems().filter(item => item.status !== 'done' && item.id !== 'g3')
+  const w = taskWorld(taskState({ items: live, reports: [] }))
+  const clock = await start($, on, w, TASK_ENV)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  await ui.press({ key: 'tab:todo' })
+  expect((await todoLines(ui)).some(line => line.startsWith('已完成'))).toBe(false)
+  expect(await ui.find({ key: 'todo:completed' })).toBeFalsy()
+
+  setTask(w, taskState())
+  await clock.advance(5_000)
+  await ui.press({ key: 'todo:completed' })
+  const open = await todoLines(ui)
+  const fold = open.indexOf('已完成 2 項 ▾')
+  expect(open.slice(fold + 1, fold + 3)).toEqual([expect.stringMatching(/^╰─ ✓ store 交易 ▾ +完成 1\/1 項   2 分鐘前$/), '   ╰─ ✓ commit 流程'])
+  expect((await ui.find({ key: 'todo:g3' }))?.props.dimColor).toBe(true)
+  expect((await lineNode(ui, '   ╰─ ✓ commit 流程')).children[3].props.color).toBe('gray')
+  expect(open).toContain('│  ╰─ × 舊做法')
+  await ui.unmount()
+})
+
+test('待辦：config.json 的 view.completed 是 expanded 時已完成一開始就展開，view.timelineLimit 限制時間線筆數', async ($, on) => {
+  const w = taskWorld(taskState(), { view: { completed: 'expanded', timelineLimit: 2 } })
+  await start($, on, w, TASK_ENV)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  await ui.press({ key: 'tab:todo' })
+  const lines = await todoLines(ui)
+  expect(lines).toContain('已完成 2 項 ▾')
+  expect(lines.slice(lines.indexOf('時間線 · 5 ▾') + 1)).toEqual(['較早 3 筆未顯示', `${hhmm(NOW - 3 * 60_000)} 寫測試 · 送驗收`, `${hhmm(NOW - 2 * 60_000)} commit 流程 · 驗收通過`])
+  await ui.unmount()
+})
+
+test('待辦：時間線由舊到新、用中文動作與項目名稱，不露出指令、id 或 JSON；別天加日期；Enter 收起', async ($, on) => {
+  const yesterday = NOW - 26 * 3_600_000
+  const w = taskWorld(taskState({
+    events: [
+      ...taskState().events,
+      { revision: 5, occurredAt: ago(1), command: 'report submit', result: { id: 'rep0', status: 'blocked' } },
+      { revision: 6, occurredAt: ago(1), command: 'item weird', result: { id: 'c4' } },
+      { revision: -1, occurredAt: new Date(yesterday).toISOString(), command: 'migrate', result: { schemaVersion: 2 } },
+    ],
+  }))
+  await start($, on, w, TASK_ENV)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  await ui.press({ key: 'tab:todo' })
+  const lines = await todoLines(ui)
+  const timeline = lines.slice(lines.indexOf('時間線 · 8 ▾') + 1)
+  const d = new Date(yesterday)
+  expect(timeline).toEqual([
+    `${d.getMonth() + 1}/${d.getDate()} ${hhmm(yesterday)} 面板改版 · 升級格式`,
+    `${hhmm(NOW - 120 * 60_000)} 面板改版 · 建立任務`,
+    `${hhmm(NOW - 100 * 60_000)} 面板待辦分頁 · 新增`,
+    `${hhmm(NOW - 90 * 60_000)} 解析 · 移動`,
+    `${hhmm(NOW - 3 * 60_000)} 寫測試 · 送驗收`,
+    `${hhmm(NOW - 2 * 60_000)} commit 流程 · 驗收通過`,
+    `${hhmm(NOW - 60_000)} 寫測試 · 交付未過`,
+    `${hhmm(NOW - 60_000)} 讀檔 · 更新`,
+  ])
+  expect(timeline.join('\n')).not.toMatch(/item|report|rep\d|c\d|\{/)
+  await ui.press({ key: 'todo:timeline' })
+  expect((await todoLines(ui)).at(-1)).toBe('時間線 · 8 ▸')
+  await ui.unmount()
+})
+
+test('待辦：任務檔從沒讀到時只畫一列提示；讀到過之後讀不到就保留上次資料並標出時間', async ($, on) => {
+  const w = taskWorld(null)
+  const clock = await start($, on, w, TASK_ENV)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  await ui.press({ key: 'tab:todo' })
+  expect(await todoLines(ui)).toEqual(['讀不到任務清單，請執行 task-todos 檢查'])
+  expect((await ui.find({ key: 'tab:todo' }))?.props.label).toBe('待辦 0')
+  setTask(w, taskState())
+  await clock.advance(5_000)
+  const readAt = hhmm(NOW + 5_000)
+  w.files![`${TASK}/task-state.json`] = '{"schemaVersion":'
+  await clock.advance(5_000)
+  const lines = await todoLines(ui)
+  expect(lines.slice(0, 2)).toEqual([`讀不到任務清單，顯示 ${readAt} 的資料`, '◆ 1 待回答 · ! 1 受阻 · ◇ 1 待驗收 · ▶ 1 進行 · ○ 4 待辦 · = 1 停泊 · ★ 2 未核對'])
+  expect((await ui.find({ key: 'tab:todo' }))?.props.label).toBe('待辦 3')
+  await ui.unmount()
+})
+
+test('待辦：46 欄標題縮短但列寬不變；36 欄完成數與時間換到延續列、前置換到自己的列；沒有一列超過欄寬', async ($, on) => {
+  const long = taskItems().map(item => (item.id === 'g2' ? { ...item, title: '資料讀取與錯誤處理以及輪詢快取' } : item))
+  const w = taskWorld(taskState({ items: long }))
+  await start($, on, w, TASK_ENV)
+  await openPane($)
+  for (const cols of [80, 46, 36]) {
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    await ui.press({ key: 'tab:todo' })
+    const lines = await todoLines(ui)
+    expect(lines.filter(line => cells(line) > cols)).toEqual([])
+    if (cols === 46) {
+      expect(lines.filter(line => line.includes('完成 0/6 項'))).toEqual([expect.stringMatching(/^├─ ! 資料讀取與錯誤… ▾ +完成 0\/6 項   1 小時前$/)])
+      expect(cells(lines.find(line => line.includes('完成 0/6 項'))!)).toBe(46)
+    }
+    if (cols === 36) {
+      // 停泊 is the least urgent count and gives way so ★ stays on the row.
+      expect(lines[0]).toBe('◆ 1 · ! 1 · ◇ 1 · ▶ 1 · ○ 4 · ★ 2')
+      expect(lines.slice(2, 8)).toEqual([
+        '├─ ◆ 面板待辦分頁 ▾',
+        '│    完成 1/3 項 · 3 分鐘前',
+        '│  ├─ ◆ 確認 hotkey',
+        '│  ├─ ▶ 畫摘要列',
+        '│  │    前置 資料讀取與錯誤處理以及…',
+        '│  ╰─ ✓ 寫測試 ★',
+      ])
+    }
     await ui.unmount()
   }
 })
