@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The focus panel now defaults to a refined appearance with compact status icons, terminal-native neutral colors, responsive stage labels, and optional animation. Configure `appearance`, `theme: neutral`, and `motion` in `config.json`; choose `appearance: classic` to keep the original look and shortcuts.
+- Fixed refined focus-band hidden queue counts and question-height budgeting; narrow card headers no longer reserve unused trailing spaces.
+- Corrected narrow-card header regression fixtures and drawn-tree lookup so both normal and archived cards are checked for complete names and full-row width at 46 and 36 columns.
+- Only the primary question alternates ◆/◇ every 900ms. Every visible authorization ◆ breathes together (1.2 seconds blocked, 0.6 seconds dim), while its label and focus-band rail retain the blocked color. Rendering updates only when the visible animation frame changes; working sessions and errors remain static.
+- Refined cards show stage values after the repo in the bottom row at every width, without a repeated label or the 59/60-column layout switch. Names can use 62 columns in an 80-column panel; classic appearance is unchanged.
+
 ## 1.1.0
 
 - Focus pane cards keep only one line for the question: grey, never bold even when chosen, cut with `…` when too long, and no options. The repo / ticket line at the bottom is a darker grey.

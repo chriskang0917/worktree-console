@@ -1,4 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { loadAppearance, THEMES, type Appearance } from './console-theme.ts'
+import { statusCell, columns, truncateColumns } from './status-view.ts'
 
 type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
 
@@ -88,10 +90,66 @@ let tick = 0
 let sessionId = ''
 const sent: string[] = []
 const misses = new Map<string, number>()
+let appearance: Appearance = { appearance: 'refined', theme: 'neutral', motion: true }
+let animation: { cancel(): void } | null = null
+let animationTick = 0
+let visibleKeys: string[] = []
+let bandKey: string | null = null
+const refined = () => appearance.appearance === 'refined'
+const warned = new Set<string>()
+async function loadPreferences($: EngineInterface) {
+  const home = await $.env.get('WORKTREE_CONSOLE_HOME') || `${await $.env.get('HOME')}/.config/worktree-console`
+  const warnings: string[] = []
+  let text = '{}'
+  try { text = await $.fs.read(`${home}/config.json`) } catch {}
+  appearance = loadAppearance(text, warnings)
+  for (const message of warnings) {
+    if (!warned.has(message)) {
+      warned.add(message)
+      $.ui.toast(message)
+    }
+  }
+}
+
+function visibleAnimationFrame(tick: number): number {
+  const primary = primaryKey()
+  let frame = 0
+  for (const session of sessions()) {
+    if (!visibleKeys.includes(session.key) && bandKey !== session.key) continue
+    if (session.status === '等待授權') {
+      frame |= 4
+      if (statusCell(session.status, tick).glyphColor === 'dim') frame |= 1
+    } else if (session.status === '等待回應' && session.key === primary) {
+      frame |= 8
+      if (statusCell(session.status, tick, { primary: true }).glyph === '◇') frame |= 2
+    }
+  }
+  return frame
+}
+
+function syncAnimation($: EngineInterface) {
+  const moving = refined() && appearance.motion && focus.active && visibleAnimationFrame(animationTick) !== 0
+  if (!moving) {
+    animation?.cancel()
+    animation = null
+    animationTick = 0
+  } else if (!animation) {
+    animation = $.clock.every(150, () => {
+      const previous = visibleAnimationFrame(animationTick)
+      animationTick += 1
+      if (visibleAnimationFrame(animationTick) !== previous) $.ui.invalidate('ui.render')
+    })
+  }
+}
 
 const sessions = () => focus.sessions ?? []
 const byKey = (key: string | null | undefined) => sessions().find(s => s.key === key) ?? null
 const queueOf = () => (focus.queue ?? []).flatMap(q => (byKey(q.key) ? [{ ...byKey(q.key)!, isNew: q.isNew }] : []))
+const primaryKey = () => {
+  const current = byKey(focus.current)
+  if (current?.status === '等待回應' || current?.status === '等待授權') return current.key
+  return queueOf().find(s => s.status === '等待回應' || s.status === '等待授權')?.key ?? null
+}
 
 // 待回覆 always follows the band: the question on screen first, then the queue in order.
 function rowsOf(t: Tab): Session[] {
@@ -206,6 +264,7 @@ async function apply($: EngineInterface, next: Focus, pressed = false) {
     for (const k of misses.keys()) if (k !== next.current) misses.delete(k)
   }
   focus = next
+  syncAnimation($)
   if (next.active) await announce($, next, pressed)
   $.ui.invalidate('ui.render')
 }
@@ -234,7 +293,9 @@ function showTab(t: Tab) {
 const focusSel = ($: EngineInterface) => sel && void $.ui.focus({ requestId: PANE, key: `name:${sel}` }).catch(() => {})
 
 async function openPane($: EngineInterface, t: Tab = 'pending') {
+  await loadPreferences($)
   showTab(t)
+  $.ui.invalidate('ui.render')
   return $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
 }
 
@@ -265,12 +326,13 @@ async function unarchiveCard($: EngineInterface, s: Session) {
 
 const countsText = () => {
   const count = (s: Status) => sessions().filter(x => !x.archived && x.status === s).length
-  return `執行中 ${count('執行中')}  回覆完畢 ${count('回覆完畢')}`
+  return refined() ? `工作中 ${count('執行中')} · 已回覆 ${count('回覆完畢')}` : `執行中 ${count('執行中')}  回覆完畢 ${count('回覆完畢')}`
 }
 
 // The worktree-console focus band: polls `console.mjs focus`, draws the question on screen, the queue, the side pane and the counts.
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    await loadPreferences($)
     if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || (await $.env.get('HERDR_ENV')) === '1') {
       sessionId = await $.session.id().catch(() => '')
       void poll($)
@@ -327,10 +389,20 @@ export const register: Register = on => {
     return {}
   })
 
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE) {
+      visibleKeys = []
+      syncAnimation($)
+    }
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     if (!focus.active) return <Text dimColor>中控台沒有在專注模式</Text>
     const cols = e.props.bodyColumns
+    const modern = refined()
+    const theme = THEMES[appearance.theme]
     const dock = e.props.placement === 'dock'
     const rows = rowsOf(tab)
     const chosen = chosenOf(rows)
@@ -340,9 +412,13 @@ export const register: Register = on => {
     follow = false
     clampTop(rows)
     const end = endOf(rows, top)
+    visibleKeys = rows.slice(top, end).map(r => r.key)
+    syncAnimation($)
     ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
+    const tabStart = TABS.slice(0, TABS.findIndex(x => x.id === tab)).reduce((n, x) => n + width(`${x.key}: ${x.label} ${rowsOf(x.id).length}`) + 2, 0)
+    const tabWidth = Math.min(Math.max(0, cols - tabStart), width(`${TABS.find(x => x.id === tab)!.key}: ${TABS.find(x => x.id === tab)!.label} ${rows.length}`))
     const tabs = (
-      <Box key="tabs" flexDirection="row" columnGap={2} marginBottom={1}>
+      <Box key="tabs" flexDirection="row" columnGap={2} marginBottom={modern ? 0 : 1}>
         {TABS.map(x => (
           <Button
             key={`tab:${x.id}`}
@@ -365,37 +441,40 @@ export const register: Register = on => {
     const card = (r: Session, i: number) => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
-      const tagRoom = inner - width(` ${r.status} `) - width(` ${r.stage} `) - 3 - (hidden ? width('取消封存') + 2 : 0)
+      const cell = statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
+      const tagRoom = modern ? inner - 12 - (hidden ? 10 : 0) : inner - width(` ${r.status} `) - width(` ${r.stage} `) - 3 - (hidden ? width('取消封存') + 2 : 0)
       const tag = cut(r.tag, Math.max(1, tagRoom))
-      const summary = cut(r.summary, Math.min(SUMMARY_MAX, inner))
-      const room = inner - width(summary) - CORNER_GAP
-      const repo = tab === 'pending' && room >= REPO_MIN ? cut(r.repo, room) : ''
+      const summary = cut(r.summary, modern ? cols <= 36 ? 15 : SUMMARY_MAX : Math.min(SUMMARY_MAX, inner))
+      const room = inner - width(summary) - CORNER_GAP - (modern && r.stage !== '—' ? columns(r.stage) + 3 : 0)
+      const repo = tab === 'pending' && room >= REPO_MIN && !(modern && cols <= 36) ? cut(r.repo, room) : ''
+      const stage = <Text backgroundColor={STAGE_BG[r.stage] ?? '#303030'} color={TAG_FG} wrap="truncate-end">{` ${r.stage} `}</Text>
       return (
-        <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} borderStyle={isSel ? 'double' : 'round'} borderColor={isSel ? 'cyanBright' : '#7a7a7a'} paddingX={2}>
+        <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} borderStyle={isSel ? 'double' : 'round'} borderColor={modern ? isSel ? theme.accent : theme.border : isSel ? 'cyanBright' : '#7a7a7a'} paddingX={2}>
           <Box flexDirection="row" justifyContent="space-between">
             <Box flexDirection="row">
-              {num && <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} />}
-              {hidden && <Text>{`${tag}  `}</Text>}
+              {modern ? <Box key={`number:${r.key}`} width={2} flexShrink={0} overflow="hidden">{num ? <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} /> : <Text>  </Text>}</Box> : num && <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} />}
+              {modern && <Box flexDirection="row"><Box key={`status:${r.key}`} width={8} flexShrink={0}><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}`}</Text></Box><Text>  </Text></Box>}
+              {hidden && <Text bold={modern} color={modern ? theme.fg : undefined}>{`${tag}  `}</Text>}
               <Button key={`name:${r.key}`} label={hidden ? '取消封存' : tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} />
-              <Text>  </Text>
-              <Text backgroundColor={STATUS_BG[r.status]} color={TAG_FG} wrap="truncate-end">{` ${r.status} `}</Text>
+              {!modern && <Text>  </Text>}
+              {!modern && <Text backgroundColor={STATUS_BG[r.status]} color={TAG_FG} wrap="truncate-end">{` ${r.status} `}</Text>}
             </Box>
-            <Text backgroundColor={STAGE_BG[r.stage] ?? '#303030'} color={TAG_FG} wrap="truncate-end">{` ${r.stage} `}</Text>
+            {!modern && stage}
           </Box>
-          <Text dimColor wrap="truncate-end">{cut(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
+          <Text dimColor={!modern} color={modern ? theme.dim : undefined} wrap="truncate-end">{cut(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
           <Box flexDirection="row" justifyContent="space-between">
             <Box key={`corner:${r.key}`}>
-              <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>
+              {modern ? <><Text color={theme.dim} wrap="truncate-end">{repo}</Text>{repo && r.stage !== '—' && <Text color={theme.dim}> · </Text>}{r.stage !== '—' && <Text color={theme.muted}>{r.stage}</Text>}</> : <Text color={CORNER_FG} wrap="truncate-end">{repo || ' '}</Text>}
             </Box>
-            <Box key={`summary:${r.key}`}>
-              <Text color={CORNER_FG} wrap="truncate-end">{summary}</Text>
+            <Box key={`summary:${r.key}`} flexDirection={modern ? 'row' : undefined}>
+              <Text color={modern ? theme.muted : CORNER_FG} wrap="truncate-end">{summary}</Text>
             </Box>
           </Box>
         </Box>
       )
     }
     const empty = (
-      <Box key="empty" width={cols} borderStyle="round" borderColor={EMPTY_BORDER} paddingY={1}>
+      <Box key="empty" width={cols} borderStyle="round" borderColor={modern ? theme.border : EMPTY_BORDER} paddingY={1}>
         <Text dimColor>{`${' '.repeat(Math.max(0, Math.floor((cols - 2 - width(EMPTY)) / 2)))}${EMPTY}`}</Text>
       </Box>
     )
@@ -406,7 +485,7 @@ export const register: Register = on => {
         const tail = ` 共 ${sessions().filter(x => x.repo === r.repo).length} 個`
         out.push(
           <Box key={`repo:${r.repo}`} flexShrink={0} marginTop={j === 0 ? 0 : 1}>
-            <Text dimColor wrap="truncate-end">{`── ${r.repo} ${'─'.repeat(Math.max(2, cols - width(r.repo) - width(tail) - 4))}${tail}`}</Text>
+            <Text dimColor={!modern} color={modern ? theme.dim : undefined} wrap="truncate-end">{`── ${r.repo} ${'─'.repeat(Math.max(2, cols - width(r.repo) - width(tail) - 4))}${tail}`}</Text>
           </Box>,
         )
       }
@@ -428,6 +507,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" height={dock ? e.props.scroll.bodyRows : undefined}>
         {tabs}
+        {modern && <Text color={theme.border}>{'─'.repeat(Math.min(cols, tabStart))}<Text color={theme.accent}>{'━'.repeat(tabWidth)}</Text>{'─'.repeat(Math.max(0, cols - tabStart - tabWidth))}</Text>}
         <Box key="cards" flexDirection="column" flexShrink={1} overflow="hidden">
           {offscreen('above', rows.slice(0, top), 0)}
           {rows.length === 0 ? empty : body}
@@ -435,7 +515,7 @@ export const register: Register = on => {
         </Box>
         {top >= lastTop(rows) && (
           <Box key="footer" flexShrink={0} marginTop={1} paddingLeft={1}>
-            <Text dimColor>{FOOTER}</Text>
+            <Text dimColor={!modern} color={modern ? theme.dim : undefined}>{modern ? 'qwer 切分頁 · 1-9,0/↑↓ 選卡片' : FOOTER}</Text>
           </Box>
         )}
       </Box>
@@ -449,11 +529,51 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (!focus.active || e.props.hasSurvey) return next(e)
+    if (!focus.active || e.props.hasSurvey) {
+      bandKey = null
+      syncAnimation($)
+      return next(e)
+    }
     const cur = byKey(focus.current)
-    const queue = queueOf().slice(0, QUEUE_MAX)
-    if (!cur && queue.length === 0 && !focus.waiting) return next(e)
+    const fullQueue = queueOf()
+    const queue = fullQueue.slice(0, QUEUE_MAX)
+    if (!cur && queue.length === 0 && !focus.waiting) {
+      bandKey = null
+      syncAnimation($)
+      return next(e)
+    }
     const { Box, Text, Button } = $.ui.resolve(e)
+    const modern = refined()
+    const theme = THEMES[appearance.theme]
+    bandKey = cur?.key ?? null
+    syncAnimation($)
+    if (modern) {
+      const cols = e.props.bodyColumns
+      const cell = cur && statusCell(cur.status, animationTick, { primary: cur.key === primaryKey(), animated: appearance.motion })
+      const others = queue.slice(0, cols < 60 ? 1 : QUEUE_MAX)
+      const room = Math.max(1, cols - 6) * Math.max(1, e.props.maxRows - 5)
+      const rail = <Text color={cell ? theme[cell.color] : theme.dim}>│ </Text>
+      const label = `── 待回覆 ${cur ? 1 : 0}/${fullQueue.length + (cur ? 1 : 0)} `
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={theme.border}>{label + '─'.repeat(Math.max(0, cols - columns(label)))}</Text>
+          <Box flexDirection="row" paddingLeft={2}>
+            {rail}
+            {cur && cell ? <Box flexDirection="row"><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}  `}</Text><Button key="show-tag" label={truncateColumns(cur.tag, Math.max(1, cols - 14))} plain onPress={() => void show($, cur.tag, cur.key)} /></Box> : <Text color={theme.dim}>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>}
+          </Box>
+          {cur && <Box flexDirection="row" paddingLeft={2}>{rail}<Text key="question" color={theme.fg} wrap="wrap">{cut(cur.question, room)}</Text></Box>}
+          {cur && <Box flexDirection="row" paddingLeft={2}>{rail}<Button key="show" hotkey="9" label="顯示問題" plain onPress={() => void show($, cur.tag, cur.key)} />{queue.length > 0 && <Box flexDirection="row"><Text color={theme.dim}> · </Text><Button key="later" hotkey="8" label="延後處理" plain onPress={() => act($, ['focus-later'])} /></Box>}</Box>}
+          <Box key="keys" flexDirection="row" paddingLeft={2} flexWrap="wrap">
+            {rail}
+            {others.length > 0 && <Text color={theme.dim}>其他 </Text>}
+            {others.map((q, i) => <Box key={`other:${i}`} flexDirection="row"><Button key={`queue:${i}`} hotkey={String(i + 1)} label={`${cut(q.tag, Math.max(1, cols < 60 ? cols - 26 : 20))}${q.isNew ? ' ✨' : ''}`} plain dimColor onPress={() => act($, ['focus-pick', q.key])} /><Text color={theme.dim}> · </Text></Box>)}
+            {fullQueue.length > others.length && <Text color={theme.dim}>{`＋${fullQueue.length - others.length} · `}</Text>}
+            <Button key="pane" hotkey="0" label="面板" plain onPress={() => void openPane($)} />
+          </Box>
+          <Box height={0} overflow="hidden">{queue.slice(others.length).map((q, j) => <Button key={`queue:${others.length + j}`} hotkey={String(others.length + j + 1)} label="" plain onPress={() => act($, ['focus-pick', q.key])} />)}</Box>
+        </Box>
+      )
+    }
     const room = Math.max(1, e.props.bodyColumns - 2) * Math.max(1, e.props.maxRows - 3)
     return (
       <Box flexDirection="column" paddingLeft={2} marginTop={1}>
