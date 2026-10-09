@@ -97,7 +97,7 @@ During an interview the new session reads your `## 需求訪談` section, asks y
 
 ## Appearance
 
-The focus panel uses the `refined` appearance by default: compact status icons and a matching focus band. Each status has its own colour (工作中 green, 待回答 yellow, 待授權 bright magenta, 已回覆 bright cyan, 異常 bright red, 閒置 grey). The stage is a quiet grey tag at the right of the card header from 46 columns up, and the first item of the bottom row below that; 未開工 is not shown. Keyboard shortcuts and session data are unchanged.
+The focus panel uses the `refined` appearance by default: compact status icons and a matching focus band. Each status has its own colour (工作中 green, 待回答 yellow, 待授權 bright magenta, 已回覆 bright cyan, 異常 bright red, 閒置 grey). The stage is a quiet grey tag at the right of the card header from 46 columns up, and the first item of the bottom row below that; 未開工 is not shown. The focus band's name is no longer focusable or clickable; use `9: 顯示問題` to show the question. Other keyboard shortcuts and session data are unchanged.
 
 Add these keys to your existing `~/.config/worktree-console/config.json` (or `$WORKTREE_CONSOLE_HOME/config.json`); keep any other settings:
 
