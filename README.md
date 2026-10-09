@@ -71,6 +71,8 @@ claude plugin install task-list@worktree-console
 
 Installing the plugin makes its task-writing skill available, with text todo graphs on by default. No enable command or Linear/Focus dependency is required. See [task-list](./plugins/task-list/README.md) for the standalone CLI, storage, evidence submission, and acceptance. Disable or uninstall it through `claude plugin`; task data is retained.
 
+Uninstalling task-list does not remove the console's 待辦 tab. To hide it, remove `task` from `task-mode.json` in `~/.config/worktree-console/` (or `$WORKTREE_CONSOLE_HOME`), or switch `appearance` to `classic` in the console's `config.json`.
+
 Its [documentation](./plugins/task-list/README.md) is in English; runtime output and generated task READMEs remain in Traditional Chinese. The installable plugin includes the [MIT licence notice](./plugins/task-list/LICENSE) crediting Chris Kang.
 
 Task-list collapses completed work, displays the latest 20 events, and automatically compacts older events into permanent, checksum-verified history. Explicit `task close` previews evidence archival; `--yes` applies only after outstanding work and unread reports are resolved. See the companion's [cleanup commands](./plugins/task-list/README.md#collapse-compact-and-close).
