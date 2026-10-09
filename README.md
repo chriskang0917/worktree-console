@@ -1,4 +1,4 @@
-> **Language note:** the skills, their prompts and everything the console prints are in Traditional Chinese (zh-TW). This README is in English; translation is planned.
+> **Language note:** the console's skills, prompts and runtime output are in Traditional Chinese (zh-TW). This README is in English.
 
 <h1 align="center">worktree-console</h1>
 
@@ -61,6 +61,24 @@ Open Claude Code in an Orca or herdr tab inside one of your repos, then:
 
 State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
 
+## Install task-list (optional)
+
+Local task lists ship as a separate companion plugin; the main console has no task CLI or task hooks.
+
+```sh
+claude plugin install task-list@worktree-console
+```
+
+Installing the plugin makes its task-writing skill available, with text todo graphs on by default. No enable command or Linear/Focus dependency is required. See [task-list](./plugins/task-list/README.md) for the standalone CLI, storage, evidence submission, and acceptance. Disable or uninstall it through `claude plugin`; task data is retained.
+
+Uninstalling task-list does not remove the console's 待辦 tab. To hide it, remove `task` from `task-mode.json` in `~/.config/worktree-console/` (or `$WORKTREE_CONSOLE_HOME`), or switch `appearance` to `classic` in the console's `config.json`.
+
+Its [documentation](./plugins/task-list/README.md) is in English; runtime output and generated task READMEs remain in Traditional Chinese. The installable plugin includes the [MIT licence notice](./plugins/task-list/LICENSE) crediting Chris Kang.
+
+Task-list collapses completed work, displays the latest 20 events, and automatically compacts older events into permanent, checksum-verified history. Explicit `task close` previews evidence archival; `--yes` applies only after outstanding work and unread reports are resolved. See the companion's [cleanup commands](./plugins/task-list/README.md#collapse-compact-and-close).
+
+When a task is selected, the refined focus panel adds a read-only 待辦 tab (`t`) with that task's groups, progress and recent timeline.
+
 ## Customizing the console prompt
 
 Every time the console starts, it reads one prompt file in full and follows it. The built-in one is nearly empty. To use your own:
@@ -95,6 +113,28 @@ During an interview the new session reads your `## 需求訪談` section, asks y
 
 `templates/prompt.md` is a complete working example: what to ask about, how to write testable acceptance criteria, and the goal file layout.
 
+## Appearance
+
+The focus panel uses the `refined` appearance by default: compact status icons and a matching focus band. Each status has its own colour (工作中 green, 待回答 yellow, 待授權 bright magenta, 已回覆 bright cyan, 異常 bright red, 閒置 grey). The stage is a quiet grey tag at the right of the card header from 46 columns up, and the first item of the bottom row below that; 未開工 is not shown. The focus band's name is no longer focusable or clickable; use `9: 顯示問題` to show the question. Other keyboard shortcuts and session data are unchanged.
+
+Add these keys to your existing `~/.config/worktree-console/config.json` (or `$WORKTREE_CONSOLE_HOME/config.json`); keep any other settings:
+
+```json
+{
+  "appearance": "refined",
+  "theme": "neutral",
+  "motion": true
+}
+```
+
+- **appearance:** `refined` (default) or `classic`. Choose `classic` for the original panel and focus band; it ignores the theme.
+- **theme:** `neutral` uses terminal colors and leaves foreground text in your terminal's default color. No other palettes are included.
+- **motion:** `true` (default) alternates ◆/◇ every 900ms only for the primary question. The current item takes priority, otherwise the first queued question or authorization request does. Every visible authorization ◆ breathes in sync: 1.2 seconds in the blocked color, then 0.6 seconds dim; the label and focus-band rail keep the blocked color. Working sessions and errors stay still. `false` keeps all icons at their initial frame and disables the animation timer.
+
+Settings load when the session starts and each time the panel opens, so reopen the panel to apply edits. Missing settings use the defaults; an unknown value falls back to its default with one toast per distinct invalid value in the session.
+
+The refined panel calls running sessions **工作中**, questions **待回答**, authorization requests **待授權**, and answered sessions **已回覆**. These are display labels only; the conversation board retains its original status wording. The host controls button typography and hotkey colors; clickable names and keys retain its native styling.
+
 ## Development
 
 ```sh
@@ -104,6 +144,8 @@ npm test
 ```
 
 Run tests inside a herdr tab as `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`. The focus band and `focus-show` tests run with `claude plugin test .` and `claude plugin test mods/focus-show`.
+
+真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。
 
 To try a local checkout without replacing your installed copy:
 

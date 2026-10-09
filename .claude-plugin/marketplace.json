@@ -15,6 +15,11 @@
       "name": "focus-show",
       "source": "./mods/focus-show",
       "description": "專注模式的 /focus-show：把橫條目前這題的完整回報直接印到對話，不經模型（搭配 worktree-console 的專注橫條使用）。"
+    },
+    {
+      "name": "task-list",
+      "source": "./plugins/task-list",
+      "description": "Standalone local task lists, completion evidence and review, and text todo graphs; ready after installation, without the console or Linear."
     }
   ]
 }
