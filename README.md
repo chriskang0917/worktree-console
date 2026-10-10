@@ -95,6 +95,28 @@ During an interview the new session reads your `## 需求訪談` section, asks y
 
 `templates/prompt.md` is a complete working example: what to ask about, how to write testable acceptance criteria, and the goal file layout.
 
+## Appearance
+
+The focus panel uses the `refined` appearance by default: compact status icons and a matching focus band. Each status has its own colour (工作中 green, 待回答 yellow, 待授權 bright magenta, 已回覆 bright cyan, 異常 bright red, 閒置 grey). The stage is a quiet grey tag at the right of the card header from 46 columns up, and the first item of the bottom row below that; 未開工 is not shown. The focus band's name is no longer focusable or clickable; use `9: 顯示問題` to show the question. Other keyboard shortcuts and session data are unchanged.
+
+Add these keys to your existing `~/.config/worktree-console/config.json` (or `$WORKTREE_CONSOLE_HOME/config.json`); keep any other settings:
+
+```json
+{
+  "appearance": "refined",
+  "theme": "neutral",
+  "motion": true
+}
+```
+
+- **appearance:** `refined` (default) or `classic`. Choose `classic` for the original panel and focus band; it ignores the theme.
+- **theme:** `neutral` uses terminal colors and leaves foreground text in your terminal's default color. No other palettes are included.
+- **motion:** `true` (default) alternates ◆/◇ every 900ms only for the primary question. The current item takes priority, otherwise the first queued question or authorization request does. Every visible authorization ◆ breathes in sync: 1.2 seconds in the blocked color, then 0.6 seconds dim; the label and focus-band rail keep the blocked color. Working sessions and errors stay still. `false` keeps all icons at their initial frame and disables the animation timer.
+
+Settings load when the session starts and each time the panel opens, so reopen the panel to apply edits. Missing settings use the defaults; an unknown value falls back to its default with one toast per distinct invalid value in the session.
+
+The refined panel calls running sessions **工作中**, questions **待回答**, authorization requests **待授權**, and answered sessions **已回覆**. These are display labels only; the conversation board retains its original status wording. The host controls button typography and hotkey colors; clickable names and keys retain its native styling.
+
 ## Development
 
 ```sh
@@ -104,6 +126,8 @@ npm test
 ```
 
 Run tests inside a herdr tab as `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`. The focus band and `focus-show` tests run with `claude plugin test .` and `claude plugin test mods/focus-show`.
+
+真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。
 
 To try a local checkout without replacing your installed copy:
 

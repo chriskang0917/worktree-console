@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { statusCell } from './status-view.ts'
+import { focusBandRows } from './worktree-console-focus.tsx'
 
 const PLUGIN = 'worktree-console'
 const PANE = 'worktree-console-pending'
@@ -50,6 +52,8 @@ const keyOf = (tag: string) => `${tag}@1`
 const stopId = (key: string) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36)
 
 type World = { focus: any; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
+type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
+const appearanceConfig = new WeakMap<World, AppearanceConfig>()
 
 const focusOf = (current: string, queue: string[], extra: object = {}) => ({
   active: true,
@@ -106,6 +110,7 @@ const hint = { plugin: PLUGIN, component: 'PromptHint' as const, props: { isDraf
 async function start($: any, on: On, world: World, env: Record<string, string> = { ORCA_TERMINAL_HANDLE: 'term_self' }) {
   mock.env(on, env)
   const clock = mock.clock(on, { now: 1_000 })
+  on('fs.read', async () => ({ value: JSON.stringify(appearanceConfig.get(world) ?? { appearance: 'classic' }) }))
   fakeConsole(on, world)
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('ui.toast', async (_$, e) => {
@@ -1197,4 +1202,574 @@ test('↑↓ onto a card out of view scrolls the pane until that card shows whol
   expect(await chosenTag(ui)).toBe('perm')
   expect(await drawnTags(ui)).toEqual(['perm', 'q0', 'q1'])
   await ui.unmount()
+})
+
+test('refined：46 欄以上階段是標頭右側灰色小標，更窄移到底列最前；未開工與無階段不顯示', async ($, on) => {
+  const name = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  const cards = [card('短名', { repo: 'claude-personal' }), card(name), card('無進度', { stage: '—' }), card('沒開工', { stage: '未開工' })]
+  const w = world({ ...focusOf('短名', [name, '無進度', '沒開工']), sessions: cards })
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  for (const cols of [80, 60, 59, 46, 45, 39, 36]) {
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    const header = cols >= 46
+    const stage = await ui.find({ key: `stage:${cards[0]!.key}` })
+    expect(stage?.text).toBe(header ? '實作中' : undefined)
+    if (header) expect((await ui.find({ type: 'Text', text: '實作中' }))?.props.color).toBe('gray')
+    expect(await ui.find({ key: `stage:${cards[2]!.key}` })).toBeUndefined()
+    expect(await ui.find({ key: `stage:${cards[3]!.key}` })).toBeUndefined()
+    expect((await ui.find({ key: `card:${cards[3]!.key}` }))!.text).not.toContain('未開工')
+    for (const c of cards) {
+      expect((await ui.find({ key: `card:${c.key}` }))!.text).not.toContain('階段')
+      expect((await ui.find({ key: `summary:${c.key}` }))!.text).not.toContain('實作中')
+    }
+    const corner = (await ui.find({ key: `corner:${cards[0]!.key}` }))!.text
+    if (header) expect(corner).toBe('claude-personal')
+    else if (cols === 36) expect(corner).toBe('實作中')
+    else expect(corner).toMatch(/^實作中 · claude/)
+    expect((await ui.find({ key: `corner:${cards[2]!.key}` }))!.text).not.toContain('·')
+    await ui.unmount()
+  }
+})
+
+// The mount kit exposes the drawn tree, not terminal cells. Lay out the card's
+// text/box subset so a vertically stacked corner or wrapped hotkey is observable.
+type CardDrawn = { type: string; props?: { key?: string; hotkey?: string; label?: string; width?: number; height?: number; overflow?: string; borderStyle?: string; paddingX?: number; flexDirection?: string; marginTop?: number }; children?: (CardDrawn | string)[] }
+const drawnText = (node: CardDrawn | string): string => typeof node === 'string' ? node : node.type === 'Button'
+  ? `${node.props?.hotkey ? `${node.props.hotkey}: ` : ''}${node.props?.label ?? ''}`
+  : (node.children ?? []).map(drawnText).join('')
+const cardLines = (node: CardDrawn | string, width: number): string[] => {
+  if (typeof node === 'string' || node.type !== 'Box') {
+    const text = drawnText(node)
+    const lines = ['']
+    for (const char of text) {
+      if (char === '\n') lines.push('')
+      else {
+        if (cardWidth(lines[lines.length - 1]!) + cardWidth(char) > width) lines.push('')
+        lines[lines.length - 1] += char
+      }
+    }
+    return lines
+  }
+  const props = node.props ?? {}
+  const children = node.children ?? []
+  const border = props.borderStyle ? 1 : 0
+  const room = (props.width ?? width) - 2 * (border + (props.paddingX ?? 0))
+  let lines: string[]
+  if (props.flexDirection === 'row') {
+    const parts = children.map(child => {
+      const natural = Math.max(1, ...cardLines(child, room).map(cardWidth))
+      return cardLines(child, typeof child === 'string' ? natural : child.props?.width ?? natural)
+    })
+    lines = Array.from({ length: Math.max(1, ...parts.map(part => part.length)) }, (_, row) => parts.map(part => {
+      const size = Math.max(...part.map(cardWidth))
+      return (part[row] ?? '') + ' '.repeat(Math.max(0, size - cardWidth(part[row] ?? '')))
+    }).join(''))
+  } else lines = children.flatMap(child => cardLines(child, room))
+  return [...Array(props.marginTop ?? 0).fill(''), ...Array(border).fill(''), ...lines, ...Array(border).fill('')]
+}
+const mountedCards = async (ui: { drawn(): Promise<CardDrawn> }): Promise<CardDrawn[]> => {
+  const root = await ui.drawn()
+  const cards = root.children!.find((node): node is CardDrawn => typeof node !== 'string' && node.props?.key === 'cards')!
+  return cards.children!.filter((node): node is CardDrawn => typeof node !== 'string' && !!node.props?.key?.startsWith('card:'))
+}
+
+// The colour a terminal paints a run with: the innermost Text holding exactly that text, coloured by itself or its nearest coloured ancestor.
+type Painted = { type: string; props?: { color?: string; bold?: boolean }; children?: (Painted | string)[] }
+const plain = (node: Painted | string): string => typeof node === 'string' ? node : (node.children ?? []).map(plain).join('')
+function paintOf(root: Painted, text: string): { color?: string; bold?: boolean } | undefined {
+  let found: { color?: string; bold?: boolean } | undefined
+  const walk = (node: Painted | string, color: string | undefined, bold: boolean | undefined) => {
+    if (typeof node === 'string') return
+    const c = node.type === 'Text' ? (node.props?.color ?? color) : color
+    const b = node.type === 'Text' ? (node.props?.bold ?? bold) : bold
+    if (node.type === 'Text' && plain(node) === text) found = { color: c, bold: b }
+    for (const child of node.children ?? []) walk(child, c, b)
+  }
+  walk(root, undefined, undefined)
+  return found
+}
+
+test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段小標也是 dim 且不加粗', async ($, on) => {
+  const c = card('甲', { repo: 'frontend', summary: '現場報工端埋' })
+  const w = world({ ...focusOf('甲', []), sessions: [c] })
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect(paintOf(await ui.drawn(), '現場報工端埋')?.color).toBe('gray')
+  const stage = await ui.find({ type: 'Text', text: '實作中' })
+  expect(stage?.props.color).toBe('gray')
+  expect(stage?.props.bold).toBeFalsy()
+  await ui.unmount()
+})
+
+for (const cols of [36, 46, 70, 80]) {
+  test(`refined：${cols} 欄 repo／階段／長摘要底列只佔一行`, async ($, on) => {
+    const c = card('甲', { repo: 'frontend', summary: '現場報工端埋-posthog-完整摘要' })
+    const w = world({ ...focusOf('甲', []), sessions: [c] })
+    appearanceConfig.set(w, { appearance: 'refined', motion: false })
+    await start($, on, w)
+    await openPane($)
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    const [drawn] = await mountedCards(ui)
+    const lines = cardLines(drawn!.children!.at(-1)!, cols - 6).filter(line => line.trim())
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain(cols === 36 ? '實作中' : cols < 46 ? '實作中 · frontend' : 'frontend')
+    if (cols >= 46) expect(lines[0]).not.toContain('實作中')
+    expect(lines[0]).toContain('現場報工端埋')
+    expect(lines[0]).toContain('…')
+    expect(cardWidth(lines[0]!)).toBeLessThanOrEqual(cols - 6)
+    if (cols === 36) expect(lines[0]).not.toContain('frontend')
+    await ui.unmount()
+  })
+
+  for (const options of [[], ['繼續', '停止']]) {
+    test(`refined：${cols} 欄${options.length ? '有選項' : '無選項'}未選卡與選中卡等高、問題緊接標頭只佔一行、不顯示選項、編號後留一格`, async ($, on) => {
+      const cards = ['甲', '乙'].map(tag => card(tag, { repo: 'frontend', status: '回覆完畢', question: '要繼續嗎？', options }))
+      const w = world({ ...focusOf('甲', ['乙']), sessions: cards })
+      appearanceConfig.set(w, { appearance: 'refined', motion: false })
+      await start($, on, w)
+      await openPane($)
+      const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+      const [selected, other] = await mountedCards(ui)
+      const a = cardLines(selected!, cols)
+      const b = cardLines(other!, cols)
+      expect(b).toHaveLength(a.length)
+      expect(a).toHaveLength(5)
+      expect(a[2]).toBe('要繼續嗎？')
+      expect(b[2]).toBe('要繼續嗎？')
+      expect(a.join('\n')).not.toContain('繼續 ·')
+      expect(b[1]).toContain('1: ↩ 已回覆')
+      expect(a[1]!.indexOf('↩')).toBe(b[1]!.indexOf('↩'))
+      await arrowTo($, '乙')
+      const swapped = await mountedCards(ui)
+      expect(cardLines(swapped[0]!, cols)).toHaveLength(a.length)
+      expect(cardLines(swapped[1]!, cols)).toHaveLength(b.length)
+      await ui.unmount()
+    })
+  }
+}
+
+test('refined：只有焦點框的名稱加粗；摘要只有開頭的數字提亮，字中數字與狀態字都不加粗', async ($, on) => {
+  const cards = [card('甲', { repo: 'frontend', summary: '1 未核對', status: '等待授權' }), card('乙', { repo: 'frontend', summary: '面板 v2 改版', status: '回覆完畢' }), card('丙', { summary: '123456789012345678901234 項', archived: true, pending: false })]
+  const w = world({ ...focusOf('甲', ['乙']), sessions: cards })
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  const all = await ui.findAll({ type: 'Text' })
+  const root = await ui.drawn()
+  expect(all.some((x: any) => x.text === '1')).toBe(true)
+  const lead = paintOf(root, '1')
+  expect(lead).toBeDefined()
+  expect(lead!.color).toBeUndefined()
+  expect(lead!.bold).toBeFalsy()
+  expect(paintOf(root, ' 未核對')?.color).toBe('gray')
+  expect(all.some((x: any) => x.text === '2')).toBe(false)
+  expect(paintOf(await ui.drawn(), '面板 v2 改版')?.color).toBe('gray')
+  expect(all.filter((x: any) => x.props.bold)).toEqual([])
+  await ui.press({ key: 'tab:all' })
+  expect((await ui.findAll({ type: 'Text' })).filter((x: any) => x.props.bold)).toEqual([])
+  expect(paintOf(await ui.drawn(), 'frontend')?.color).toBeUndefined()
+  await ui.press({ key: 'tab:hidden' })
+  expect((await ui.findAll({ type: 'Text' })).map((x: any) => x.text)).toContain('丙  ')
+  expect((await ui.findAll({ type: 'Text' })).filter((x: any) => x.props.bold)).toEqual([])
+  await ui.unmount()
+  const narrow = await $.ui.mount({ ...pane(36), surface: 'terminal' })
+  const cut = (await narrow.find({ key: `summary:${cards[2]!.key}` }))!.text
+  expect(cut).toMatch(/^\d+…$/)
+  expect(paintOf(await narrow.drawn(), cut)?.color).toBe('gray')
+  await narrow.unmount()
+  const focusBand = await $.ui.mount({ ...band(80), surface: 'terminal' })
+  const bandTexts = await focusBand.findAll({ type: 'Text' })
+  expect(bandTexts.filter((x: any) => x.props.bold).map((x: any) => x.text)).toEqual(['甲'])
+  expect(await focusBand.find({ key: 'show-tag' })).toBeUndefined()
+  await focusBand.press({ key: 'show' })
+  expect(w.shown.at(-1)).toMatch(/^甲/)
+  await focusBand.unmount()
+})
+
+test('refined：六種狀態與未知值保留正確圖標、文字及狀態色', async ($, on) => {
+  const cases = [
+    ['執行中', '✳ 工作中', 'green'], ['等待回應', '◆ 待回答', 'yellow'],
+    ['等待授權', '◆ 待授權', 'magentaBright'], ['回覆完畢', '↩ 已回覆', 'cyanBright'],
+    ['閒置', '- 閒置', 'gray'], ['session 異常，需手動排程', '! 異常', 'redBright'],
+    ['未知狀態內容', '? 未知…', 'gray'],
+  ] as const
+  expect(new Set(cases.slice(0, 4).map(c => c[2])).size).toBe(4)
+  expect(new Set(cases.slice(0, 6).filter(c => c[0] !== '閒置').map(c => c[2])).size).toBe(5)
+  const cards = cases.map(([status], i) => card(`狀態${i}`, { status }))
+  const w = world({ ...focusOf('狀態0', cards.slice(1).map(c => c.tag)), sessions: cards })
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  for (const [status, text, color] of cases) {
+    const row = await ui.find({ key: `status:${cards[cases.findIndex(c => c[0] === status)]!.key}` })
+    expect(row?.text).toContain(text)
+    expect((await ui.find({ type: 'Text', text: ` ${statusCell(status, 0).label}` }))?.props.color).toBe(color)
+  }
+  await ui.unmount()
+})
+
+test('refined：neutral 使用終端色，無效設定只提示一次且每次開面板重讀', async ($, on) => {
+  const w = world(pending())
+  const config: AppearanceConfig = { appearance: 'refined', theme: 'neutral', motion: false }
+  appearanceConfig.set(w, config)
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('cyan')
+  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.borderColor).toBe('gray')
+  const original = await cardTags(ui)
+  config.theme = '不存在'
+  await openPane($)
+  expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('cyan')
+  expect(await cardTags(ui)).toEqual(original)
+  await openPane($)
+  expect(w.toasts).toEqual(['config.json 的 theme 不認得：不存在，改用 neutral'])
+  await ui.unmount()
+})
+
+test('refined：只有工作中可見時不開動畫計時器', async ($, on) => {
+  const cards = [card('a', { status: '執行中', pending: false }), card('b', { status: '執行中', pending: false })]
+  const w = world({ ...focusOf('a', []), sessions: cards })
+  appearanceConfig.set(w, { appearance: 'refined' })
+  let invalidations = 0
+  on('ui.invalidate', async (_$, e, next) => { invalidations += 1; return next(e) })
+  const clock = await start($, on, w)
+  await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  const before = invalidations
+  await clock.advance(1_800)
+  expect(invalidations).toBe(before)
+  for (const c of cards) expect((await ui.find({ key: `card:${c.key}` }))?.text).toContain('✳ 工作中')
+  await ui.unmount()
+})
+
+test('refined：所有可見待授權同拍呼吸，文字不變暗，關閉 motion 停止', async ($, on) => {
+  const w = world({ ...focusOf('perm', ['另一授權', 'focusui']), sessions: [...SESSIONS, card('另一授權', { status: '等待授權' })] })
+  const config: AppearanceConfig = { appearance: 'refined' }
+  appearanceConfig.set(w, config)
+  let invalidations = 0
+  on('ui.invalidate', async (_$, e, next) => { invalidations += 1; return next(e) })
+  const clock = await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  const focusBand = await $.ui.mount({ ...band(80), surface: 'terminal' })
+  const before = invalidations
+  await clock.advance(1_050)
+  expect(invalidations).toBe(before)
+  await clock.advance(150)
+  expect(invalidations).toBe(before + 1)
+  for (const tag of ['perm', '另一授權']) expect((await ui.find({ key: `status:${keyOf(tag)}` }))?.text).toContain('◆ 待授權')
+  expect((await ui.findAll({ type: 'Text', text: '◆' })).map(t => t.props.color)).toEqual(['gray', 'gray', 'yellow'])
+  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
+  expect((await focusBand.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
+  expect((await focusBand.find({ type: 'Text', text: '│ ' }))?.props.color).toBe('magentaBright')
+  expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
+  await clock.advance(600)
+  expect(invalidations).toBe(before + 2)
+  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('magentaBright')
+  config.motion = false
+  await openPane($)
+  const stopped = invalidations
+  await clock.advance(900)
+  expect(invalidations).toBe(stopped)
+  expect((await ui.find({ key: 'status:perm@1' }))?.text).toContain('◆ 待授權')
+  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('magentaBright')
+  await focusBand.unmount()
+  await ui.unmount()
+})
+
+test('狀態圖標：所有待授權只改圖標亮度，待回答只有主要那題換實心空心', () => {
+  for (let tick = 0; tick < 12; tick += 1) {
+    for (const primary of [false, true]) {
+      for (const animated of [false, true]) {
+        expect(statusCell('執行中', tick, { primary, animated }).glyph).toBe('✳')
+        expect(statusCell('session 異常，需手動排程', tick, { primary, animated }).glyph).toBe('!')
+        const authorization = statusCell('等待授權', tick, { primary, animated })
+        expect(authorization.glyph).toBe('◆')
+        expect(authorization.glyphColor).toBe(animated && tick >= 8 ? 'dim' : 'blocked')
+        expect(authorization.color).toBe('blocked')
+        const question = statusCell('等待回應', tick, { primary, animated })
+        expect(question.glyph).toBe(primary && animated && tick >= 6 ? '◇' : '◆')
+        expect(question.glyphColor).toBe('waiting')
+      }
+    }
+  }
+})
+
+test('refined：主要待回答和非主要待授權共用時鐘，只在可見影格改變時更新', async ($, on) => {
+  const w = world(focusOf('focusui', ['perm']))
+  appearanceConfig.set(w, { appearance: 'refined' })
+  let invalidations = 0
+  on('ui.invalidate', async (_$, e, next) => { invalidations += 1; return next(e) })
+  const clock = await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(46), surface: 'terminal' })
+  const before = invalidations
+  await clock.advance(900)
+  expect(invalidations).toBe(before + 1)
+  expect((await ui.find({ key: 'status:focusui@1' }))?.text).toContain('◇ 待回答')
+  await clock.advance(300)
+  expect(invalidations).toBe(before + 2)
+  expect((await ui.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
+  await clock.advance(600)
+  expect(invalidations).toBe(before + 3)
+  expect((await ui.find({ key: 'status:focusui@1' }))?.text).toContain('◆ 待回答')
+  await ui.unmount()
+})
+
+test('refined：主要題目不可見時，可見待授權仍呼吸；classic 不動', async ($, on) => {
+  const cards = [card('工作中', { status: '執行中', pending: false }), card('perm', { status: '等待授權', pending: false })]
+  const w = world({ ...focusOf('工作中', []), sessions: cards })
+  const config: AppearanceConfig = { appearance: 'refined' }
+  appearanceConfig.set(w, config)
+  const clock = await start($, on, w)
+  await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
+  const ui = await $.ui.mount({ ...pane(36), surface: 'terminal' })
+  await clock.advance(1_200)
+  expect((await ui.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
+  expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
+  config.appearance = 'classic'
+  await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
+  await clock.advance(1_800)
+  expect((await ui.find({ type: 'Text', text: ' 等待授權 ' }))?.props.backgroundColor).toBe('#3e2a2a')
+  expect(await ui.find({ type: 'Text', text: '◆' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('refined：焦點框待回覆分隔線、授權色左線、不重複階段，單題沒有延後', async ($, on) => {
+  const w = world(focusOf('perm', ['focusui']))
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  const clock = await start($, on, w)
+  const ui = await $.ui.mount({ ...band(46), surface: 'terminal' })
+  expect((await texts(ui)).some((t: string) => t.includes('待回覆 1/2'))).toBe(true)
+  expect((await ui.find({ type: 'Text', text: '│ ' }))?.props.color).toBe('magentaBright')
+  expect((await texts(ui)).some((t: string) => t.includes('實作中'))).toBe(false)
+  expect((await labels(ui)).some((t: string) => t.includes('1: focusui'))).toBe(true)
+  w.focus = focusOf('perm', [])
+  await clock.advance(5_000)
+  expect(await ui.find({ key: 'later' })).toBeUndefined()
+  expect(await ui.find({ key: 'pane' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('refined：計數改用工作中與已回覆，選中問題不加粗', async ($, on) => {
+  const w = world(pending())
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  const h = await $.ui.mount({ ...hint, surface: 'terminal' })
+  expect(w.hints.at(-1)).toBe('工作中 1 · 已回覆 1')
+  await h.unmount()
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: 'Bash rm -rf build' }))?.props.bold).toBeFalsy()
+  await ui.unmount()
+})
+
+test('refined：編號與焦點框一致，選排隊卡後目前題不編號', async ($, on) => {
+  const w = world(pending())
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect(await ui.find({ key: 'num:perm@1' })).toBeUndefined()
+  expect((await ui.find({ key: 'num:focusui@1' }))?.props.hotkey).toBe('1')
+  await ui.press({ key: 'num:focusui@1' })
+  expect(w.calls.some(c => c[0] === 'focus-pick' && c[1] === keyOf('focusui'))).toBe(true)
+  expect(await ui.find({ key: 'num:focusui@1' })).toBeUndefined()
+  expect((await ui.find({ key: 'num:perm@1' }))?.props.hotkey).toBe('1')
+  await ui.unmount()
+})
+
+test('refined：上下選卡不切換問題，Enter 才顯示選中的題目', async ($, on) => {
+  const w = world(pending())
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  const arrow = arrows($, ui, w)
+  await arrow(1)
+  expect(await chosenTag(ui)).toBe('focusui')
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  await ui.press({ key: 'name:focusui@1' })
+  expect(w.shown.at(-1)).toBe('focusui')
+  await ui.unmount()
+})
+
+test('refined：四個分頁維持上游篩選與選中第一張卡', async ($, on) => {
+  const w = world(pending())
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  for (const [key, tags] of [
+    ['tab:all', ['focusui', 'logging', 'tune', 'PROJ-6668', 'upgrade#2', 'perm']],
+    ['tab:hidden', ['PROJ-6650']], ['tab:idle', ['chart']],
+    ['tab:pending', ['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2']],
+  ] as const) {
+    await ui.press({ key })
+    expect(await drawnTags(ui)).toEqual([...tags])
+    expect(await chosenTag(ui)).toBe(tags[0])
+  }
+  await ui.unmount()
+})
+
+test('refined：捲動移動卡片窗口，畫面外編號仍可選到整張卡', async ($, on) => {
+  const many = queued(10)
+  const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [...SESSIONS, ...many] })
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80, 26), surface: 'terminal' })
+  expect(await drawnTags(ui)).toEqual(['perm', 'q0', 'q1', 'q2'])
+  await $.ui.scroll({ component: 'Pane', requestId: PANE, offset: 0, by: 1, bodyRows: 26, contentRows: 26, origin: { kind: 'person' } })
+  expect(await drawnTags(ui)).toEqual(['q0', 'q1', 'q2', 'q3'])
+  await ui.press({ key: 'num:q8@1' })
+  expect(await chosenTag(ui)).toBe('q8')
+  expect(await drawnTags(ui)).toContain('q8')
+  await ui.unmount()
+})
+
+test('refined：主要待回答每 900ms 閃爍，其餘問題維持實心圖標', async ($, on) => {
+  const w = world(focusOf('focusui', ['logging']))
+  appearanceConfig.set(w, { appearance: 'refined' })
+  const clock = await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect((await ui.find({ key: 'status:focusui@1' }))?.text).toContain('◆ 待回答')
+  expect((await ui.find({ key: 'status:logging@1' }))?.text).toContain('◆ 待回答')
+  await clock.advance(900)
+  expect((await ui.find({ key: 'status:focusui@1' }))?.text).toContain('◇ 待回答')
+  await clock.advance(900)
+  expect((await ui.find({ key: 'status:focusui@1' }))?.text).toContain('◆ 待回答')
+  await ui.unmount()
+})
+
+test('refined：未設定欄位使用預設外觀，無效 appearance 與 motion 各提示一次', async ($, on) => {
+  const w = world(pending())
+  const config: AppearanceConfig = {}
+  appearanceConfig.set(w, config)
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect((await ui.find({ key: 'card:perm@1' }))?.text).toContain('◆ 待授權')
+  expect(w.toasts).toEqual([])
+  config.appearance = '錯誤外觀'
+  config.motion = '否'
+  await openPane($)
+  await openPane($)
+  expect(w.toasts).toEqual([
+    'config.json 的 appearance 不認得：錯誤外觀，改用 refined',
+    'config.json 的 motion 不認得：否，改用 true',
+  ])
+  expect((await ui.find({ key: 'card:perm@1' }))?.props.borderColor).toBe('cyan')
+  await ui.unmount()
+})
+
+test('refined：超過五筆排隊仍顯示完整隱藏數', async ($, on) => {
+  const many = queued(10)
+  const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [...SESSIONS, ...many] })
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  for (const cols of [80, 46]) {
+    const ui = await $.ui.mount({ ...band(cols), surface: 'terminal' })
+    expect((await texts(ui)).some((t: string) => t.includes(`＋${cols === 80 ? 5 : 9} · `))).toBe(true)
+    expect((await labels(ui)).filter((t: string) => /^[1-5]:/.test(t))).toHaveLength(5)
+    await ui.unmount()
+  }
+})
+
+test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱且不超寬', async ($, on) => {
+  const cards = [card('abcdefghijklmnopqrst'), card('abcdefghijklmnopq'), card('ABCDEFGHIJ', { archived: true, pending: false }), card('ABCDEFG', { archived: true, pending: false })]
+  const w = world({ ...focusOf(cards[0]!.tag, [cards[1]!.tag]), sessions: cards })
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  await openPane($)
+  for (const cols of [46, 36]) {
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    for (const tab of ['tab:pending', 'tab:hidden']) {
+      await ui.press({ key: tab })
+      const target = cards[(tab === 'tab:hidden' ? 2 : 0) + (cols === 36 ? 1 : 0)]!
+      await arrowTo($, target.tag)
+      const root = await ui.drawn()
+      type Drawn = { type: string; key?: string; props?: { key?: string; width?: number; hotkey?: string; label?: string }; children?: (Drawn | string)[] }
+      const findCard = (node: Drawn | string): Drawn | undefined => {
+        if (typeof node === 'string') return undefined
+        if ((node.key ?? node.props?.key) === `card:${target.key}`) return node
+        for (const child of node.children ?? []) {
+          const found = findCard(child)
+          if (found) return found
+        }
+      }
+      const drawn = findCard(root)
+      expect(drawn).toBeDefined()
+      const row = drawn!.children![0]!
+      const rowText = (node: Drawn | string): string => {
+        if (typeof node === 'string') return node
+        const text = node.type === 'Button' ? `${node.props?.hotkey ?? ''}${node.props?.label ?? ''}` : (node.children ?? []).map(rowText).join('')
+        const cells = [...text].reduce((n, c) => n + (/[\u3000-\u9fff\uff00-\uffef]/u.test(c) ? 2 : 1), 0)
+        return text + ' '.repeat(Math.max(0, (node.props?.width ?? cells) - cells))
+      }
+      const rendered = rowText(row)
+      const name = target.tag
+      expect(rendered.includes(name)).toBe(true)
+      const cells = [...rendered].reduce((n, c) => n + (/[\u3000-\u9fff\uff00-\uffef]/u.test(c) ? 2 : 1), 0)
+      expect(cells).toBeLessThanOrEqual(cols - 6)
+    }
+    await ui.unmount()
+  }
+})
+
+const longBandQuestion = `第一行\n\n${'問'.repeat(500)}\n最後一行`
+const longBandQueue = Array.from({ length: 5 }, (_, i) => ({ tag: `排隊名稱${i}abcdefghijk`, isNew: true }))
+
+test('refined：80 與 46 欄先保留換行操作列，長多行問題只取得剩餘行數', () => {
+  for (const cols of [80, 46]) {
+    const rows = focusBandRows({ cols, maxRows: 10, question: longBandQuestion, queue: longBandQueue, hiddenCount: 2 })
+    expect(rows.actions).toBe(1)
+    expect(rows.keys).toBe(cols === 80 ? 3 : 2)
+    expect(rows.question).toBe(cols === 80 ? 3 : 4)
+    expect(rows.margin + rows.separator + rows.header + rows.actions + rows.keys + rows.question).toBeLessThanOrEqual(10)
+    expect(rows.questionText.startsWith('第一行\n\n')).toBe(true)
+    expect(rows.questionText.endsWith('…')).toBe(true)
+    expect(rows.questionText.includes('最後一行')).toBe(false)
+    const short = focusBandRows({ cols, maxRows: 10, question: '第一行\n\n最後一行', queue: longBandQueue, hiddenCount: 2 })
+    expect(short.question).toBe(3)
+    expect(short.questionText).toBe('第一行\n\n最後一行')
+    const wrapped = focusBandRows({ cols, maxRows: 10, question: '問'.repeat(40), queue: longBandQueue, hiddenCount: 2 })
+    expect(wrapped.question).toBe(2)
+    expect(wrapped.questionText).toBe('問'.repeat(40))
+  }
+})
+
+test('refined：長多行問題與五個長排隊名稱仍畫出操作與 0 面板', async ($, on) => {
+  const many = [...longBandQueue.map(q => card(q.tag)), card('隱藏一'), card('隱藏二')]
+  const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [card('perm', { question: longBandQuestion }), ...many] })
+  w.focus.queue = many.map(c => ({ key: c.key, isNew: true }))
+  appearanceConfig.set(w, { appearance: 'refined', motion: false })
+  await start($, on, w)
+  for (const cols of [80, 46]) {
+    const ui = await $.ui.mount({ ...band(cols, 10), surface: 'terminal' })
+    const drawn = await ui.drawn()
+    const buttons: string[] = []
+    type Drawn = { type: string; props: { hotkey?: string; label?: string }; children?: (Drawn | string)[] }
+    const visit = (node: Drawn | string) => {
+      if (typeof node === 'string') return
+      if (node.type === 'Button') buttons.push(`${node.props.hotkey ?? ''}: ${node.props.label}`)
+      for (const child of node.children ?? []) visit(child)
+    }
+    visit(drawn)
+    expect(buttons).toContain('9: 顯示問題')
+    expect(buttons).toContain('8: 延後處理')
+    expect(buttons).toContain('0: 面板')
+    expect(buttons).toContain(`1: ${longBandQueue[0]!.tag} ✨`)
+    expect((await texts(ui)).includes(`＋${cols === 80 ? 2 : 6} · `)).toBe(true)
+    expect((await texts(ui)).find((text: string) => text.startsWith('第一行'))?.endsWith('…')).toBe(true)
+    await ui.unmount()
+  }
 })
