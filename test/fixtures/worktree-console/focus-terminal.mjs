@@ -20,8 +20,8 @@ export function focusFixture(counts, summaries = []) {
     sessions: [...queue, ...make("work", all - pending, { status: "執行中" }), ...make("archive", hidden, { archived: true }), ...make("idle", idle, { status: "閒置" })] };
 }
 
-export async function terminalFixture({ counts, summaries, columns = 120, socket = `wtcfix8-test-${process.pid}`, appearance = "refined", source = process.env.WTC_FOCUS_SOURCE } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wtcfix8-"));
+export async function terminalFixture({ counts, summaries, columns = 120, socket = `wtc-focus-test-${process.pid}`, appearance = "refined", source = process.env.WTC_FOCUS_SOURCE } = {}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-focus-"));
   fs.mkdirSync(path.join(home, ".claude"));
   fs.writeFileSync(path.join(home, ".claude/.claude.json"), JSON.stringify({
     hasCompletedOnboarding: true, lastOnboardingVersion: "2.1.294",
@@ -58,6 +58,20 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
     "env", "-i", ...Object.entries(env).map(([k, v]) => `${k}=${v}`), "claude", "--plugin-dir", plugin, "--plugin-dir", input, "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--settings", '{"skipDangerousModePermissionPrompt":true}', "--dangerously-skip-permissions"], { encoding: "utf8" });
   assert.equal(launch.status, 0, launch.stderr);
   const capture = () => tmux("capture-pane", "-p", "-t", "fixture:0.0");
+  const plain = text => text.replace(/\x1b\[[0-9;:]*m/g, "");
+  // The prompt row is empty, and inside the panel the framed card's name is the inverse focus run.
+  const ready = () => {
+    const lines = tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
+    const text = lines.map(plain);
+    const prompt = text.find(line => line.startsWith("❯"));
+    if (!prompt || !/^❯\s*(?:│|$)/.test(prompt) || !text.some(line => line.includes("│q:"))) return false;
+    return lines.some((line, i) => {
+      const at = text[i].indexOf("│", 40);
+      if (at < 0 || !text[i].slice(at + 1).startsWith("║")) return false;
+      return /\x1b\[7m[^\x1b]*\S/.test(line);
+    });
+  };
+  const typedZero = () => capture().split("\n").some(line => /^❯\s+0+\s*(?:│|$)/.test(line));
   const waitFor = async (predicate, description) => {
     for (let i = 0; i < 100; i++) {
       const frame = capture();
@@ -70,8 +84,19 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
     home, tmux, capture, waitFor,
     async open() {
       await waitFor(frame => frame.includes("0: 面板"), "等待假資料專注列");
-      tmux("send-keys", "-t", "fixture:0.0", "狀態", "Enter");
-      return waitFor(frame => frame.includes("│q:"), "等待假資料側邊面板");
+      // The band's digits arm only once the engine has laid out its window, some 500ms after it first paints; a `0`
+      // before that stays typed in the prompt (an armed one shows there briefly too, then opens the panel and is wiped).
+      for (let attempt = 0; attempt < 5; attempt++) {
+        tmux("send-keys", "-t", "fixture:0.0", "0");
+        const deadline = Date.now() + 1_500;
+        while (Date.now() < deadline) {
+          if (ready()) return capture();
+          await delay(50);
+        }
+        if (typedZero()) tmux("send-keys", "-t", "fixture:0.0", "C-u");
+        await delay(300);
+      }
+      throw new Error(`按 0 後面板沒有就緒（輸入框為空且選取卡片反白）\n${capture()}`);
     },
     async press(key, expectedContent) {
       tmux("send-keys", "-t", "fixture:0.0", key);

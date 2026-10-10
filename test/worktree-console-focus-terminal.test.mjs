@@ -1,9 +1,16 @@
 import "./fixtures/isolate-env.mjs";
-import test from "node:test";
+import base from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { terminalFixture } from "./fixtures/worktree-console/focus-terminal.mjs";
+
+// Locally a missing tmux skips these with the reason; on CI it fails, so they are never skipped unnoticed.
+const noTmux = spawnSync("tmux", ["-V"]).status !== 0;
+if (noTmux && process.env.CI) {
+  base("真實終端：CI 必須安裝 tmux", () => assert.fail("CI 上找不到 tmux：真實終端測試不能被略過，請在 workflow 安裝 tmux"));
+}
+const skip = noTmux && !process.env.CI ? "本機沒有 tmux，略過真實終端測試" : false;
+const test = (name, options, fn) => base(name, { ...options, skip: noTmux ? skip || "CI 缺 tmux，見上方失敗" : false }, fn);
 
 const tabs = [["q", "待回覆"], ["w", "全部"], ["e", "封存"], ["r", "閒置"]];
 
@@ -21,8 +28,7 @@ function panel(frame) {
 
 for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, [6, 12, 0, 0]], [46, [12, 24, 1, 1]]]) {
   test(`真實終端：${cols} 欄、${counts.join("／")}，四個所選分頁完整且不覆畫標頭`, { timeout: 30_000 }, async () => {
-    const evidence = process.env.WTC_FIX8_EVIDENCE && cols === 39 && counts[0] === 6;
-    const terminal = await terminalFixture({ counts, columns: cols + 71, socket: evidence ? "wtcfix8" : undefined });
+    const terminal = await terminalFixture({ counts, columns: cols + 71 });
     try {
       await terminal.open();
       for (const [index, [key, label]] of tabs.entries()) {
@@ -57,7 +63,6 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
         } else {
           assert.ok(lines.some(line => line.includes("目前沒有符合條件的 session")), lines.join("\n"));
         }
-        if (evidence) fs.writeFileSync(path.join(process.env.WTC_FIX8_EVIDENCE, `fix8-w39-${key}.txt`), `${lines.join("\n")}\n`);
       }
     } finally {
       await terminal.close();
@@ -114,57 +119,68 @@ test("真實終端：neutral 摘要開頭的數字用預設前景色、其餘灰
   }
 });
 
-test("真實終端：切分頁、重按同一分頁與上下移動後，選中卡逐步正確，焦點反白只在選中的卡名上", { timeout: 90_000 }, async () => {
-  const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 151 });
-  const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
-  const plain = text => text.replace(/\x1b\[[0-9;]*m/g, "");
-  // The shown tab (the label over the ━ underline), the framed card's name and every inverse run in the panel.
-  const read = () => {
-    // The panel's part of each row: after its dock divider; the prompt's own cursor block sits left of it.
-    const parts = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n").map(line => line.indexOf("│", 40) < 0 ? "" : line.slice(line.indexOf("│", 40) + 1));
-    const text = parts.map(plain);
-    const row = text.findIndex(line => line.startsWith("q:"));
-    const under = text[row + 1] ?? "";
-    // The underline row is only ─ and ━, one column each.
-    const mark = under.indexOf("━");
-    let start = 0;
-    const tab = (text[row] ?? "").trimEnd().split(/  (?=[qwer]:)/).find(segment => {
-      const hit = mark >= start && mark < start + width(segment);
-      start += width(segment) + 2;
-      return hit;
-    })?.replace(/^[qwer]: (\S+).*$/, "$1");
-    const selected = text.find(line => line.startsWith("║") && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
-    const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: text[i].startsWith("║"), label: plain(m[1]).trim() }))).filter(run => run.label);
-    return { tab, selected, inverse };
-  };
-  const settled = (state, tab, card) => state.tab === tab && state.selected === card && state.inverse.length > 0 && state.inverse.every(run => run.framed && run.label === card);
-  try {
-    await terminal.open();
-    const steps = [
-      ["w", "全部", "reply0"], ["Down", "全部", "reply1"],
-      ["q", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
-      ["w", "全部", "reply0"], ["Down", "全部", "reply1"],
-      // Pressing the shown tab's key again puts the selection back on its first card; the next ↓ still moves one card.
-      ["w", "全部", "reply0"], ["Down", "全部", "reply1"], ["Down", "全部", "reply2"],
-      // `0` reopens the panel on 待回覆 with the band's question selected, wherever the ring was before.
-      ["0", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
-      ["q", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
-    ];
-    for (const [i, [key, tab, card]] of steps.entries()) {
-      terminal.tmux("send-keys", "-t", "fixture:0.0", key);
-      const deadline = Date.now() + 5_000;
-      let state = read();
-      while (Date.now() < deadline && !settled(state, tab, card)) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        state = read();
+test("真實終端：精緻版與經典版切分頁、重按同一分頁與上下移動後，選中卡逐步正確，焦點反白只在選中的卡名上", { timeout: 180_000 }, async () => {
+  for (const appearance of ["refined", "classic"]) {
+    const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 151, appearance });
+    const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
+    const plain = text => text.replace(/\x1b\[[0-9;]*m/g, "");
+    // The shown tab (the label over the ━ underline), the framed card's name and every inverse run in the panel.
+    const read = () => {
+      // The panel's part of each row: after its dock divider; the prompt's own cursor block sits left of it.
+      const parts = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n").map(line => line.indexOf("│", 40) < 0 ? "" : line.slice(line.indexOf("│", 40) + 1));
+      const text = parts.map(plain);
+      const row = text.findIndex(line => line.startsWith("q:"));
+      // Classic has no underline: the shown tab's label keeps the default foreground, the others are grey.
+      if (appearance === "classic") {
+        const cells = foregrounds(parts[row] ?? "");
+        const line = cells.map(c => c.ch).join("");
+        const shown = [...line.matchAll(/[qwer]: (\S+)/g)].find(m => cells[m.index + 3]?.fg === "default")?.[1];
+        const selected = text.find(line => line.startsWith("║") && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
+        const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: text[i].startsWith("║"), label: plain(m[1]).trim() }))).filter(run => run.label);
+        return { tab: shown, selected, inverse };
       }
-      assert.ok(settled(state, tab, card), `第 ${i + 1} 步 ${key} 後應在「${tab}」選中 ${card}，焦點反白在它的名字上：${JSON.stringify(state)}`);
-      // Re-read once the delayed re-focus has had its frames: the ring must not drift off the selected card.
-      await new Promise(resolve => setTimeout(resolve, 600));
-      state = read();
-      assert.ok(settled(state, tab, card), `第 ${i + 1} 步 ${key} 之後焦點漂移：${JSON.stringify(state)}`);
+      const under = text[row + 1] ?? "";
+      // The underline row is only ─ and ━, one column each.
+      const mark = under.indexOf("━");
+      let start = 0;
+      const tab = (text[row] ?? "").trimEnd().split(/  (?=[qwer]:)/).find(segment => {
+        const hit = mark >= start && mark < start + width(segment);
+        start += width(segment) + 2;
+        return hit;
+      })?.replace(/^[qwer]: (\S+).*$/, "$1");
+      const selected = text.find(line => line.startsWith("║") && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
+      const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: text[i].startsWith("║"), label: plain(m[1]).trim() }))).filter(run => run.label);
+      return { tab, selected, inverse };
+    };
+    const settled = (state, tab, card) => state.tab === tab && state.selected === card && state.inverse.length > 0 && state.inverse.every(run => run.framed && run.label === card);
+    try {
+      await terminal.open();
+      const steps = [
+        ["w", "全部", "reply0"], ["Down", "全部", "reply1"],
+        ["q", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
+        ["w", "全部", "reply0"], ["Down", "全部", "reply1"],
+        // Pressing the shown tab's key again puts the selection back on its first card; the next ↓ still moves one card.
+        ["w", "全部", "reply0"], ["Down", "全部", "reply1"], ["Down", "全部", "reply2"],
+        // `0` reopens the panel on 待回覆 with the band's question selected, wherever the ring was before.
+        ["0", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
+        ["q", "待回覆", "reply0"], ["Down", "待回覆", "reply1"],
+      ];
+      for (const [i, [key, tab, card]] of steps.entries()) {
+        terminal.tmux("send-keys", "-t", "fixture:0.0", key);
+        const deadline = Date.now() + 5_000;
+        let state = read();
+        while (Date.now() < deadline && !settled(state, tab, card)) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          state = read();
+        }
+        assert.ok(settled(state, tab, card), `${appearance} 第 ${i + 1} 步 ${key} 後應在「${tab}」選中 ${card}，焦點反白在它的名字上：${JSON.stringify(state)}`);
+        // Re-read once the delayed re-focus has had its frames: the ring must not drift off the selected card.
+        await new Promise(resolve => setTimeout(resolve, 600));
+        state = read();
+        assert.ok(settled(state, tab, card), `${appearance} 第 ${i + 1} 步 ${key} 之後焦點漂移：${JSON.stringify(state)}`);
+      }
+    } finally {
+      await terminal.close();
     }
-  } finally {
-    await terminal.close();
   }
 });

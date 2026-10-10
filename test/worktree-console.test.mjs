@@ -147,7 +147,8 @@ function runEnv(dir) {
     WORKTREE_CONSOLE_LOG_DIR: path.join(tmp, "log"),
     AUTO_HANDOFF_HOME: path.join(tmp, "handoff"),
     CLAUDE_CONFIG_DIR: path.join(tmp, "claude-config"),
-    WATCH_PGREP_PATTERN: `${scripts}/watch\\.mjs|${tmp}/old/watch\\.mjs`,
+    // Only this file's own stand-in old watchers: other test files run watchers from the same scripts at the same time.
+    WATCH_PGREP_PATTERN: `${tmp}/old/watch\\.mjs`,
   };
 }
 
@@ -322,17 +323,18 @@ test("UX1 看板：依 repo 分表，表頭 狀態｜票號｜摘要｜階段｜
   for (const gone of ["PROJ-104", "external-spike", "main"]) assert.ok(!t.by[gone], `${gone} 沒有 session，不該上看板`);
 });
 
-test("狀態看板最後才提示 memory.md 看不懂的條目；沒有就不提", () => {
+test("看板不讀也不改既有的 memory.md：檔案在時輸出與沒有時相同，檔案原封不動", () => {
   const file = path.join(tmp, "log", "memory.md");
+  const without = run("console.mjs", ["board", "--repo", app()]).out;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, ["# 回覆習慣", "", "## 其他", "- 看心情（記住 2026-09-01）", ""].join("\n"));
+  const text = ["# 回覆習慣", "", "## 其他", "- 看心情（記住 2026-09-01）", ""].join("\n");
+  fs.writeFileSync(file, text);
   try {
-    const { lines } = run("console.mjs", ["board", "--repo", app()]);
-    assert.deepEqual(lines.slice(-2), ["", "memory.md 有 1 條看不懂（沒有情境字母或認得的關鍵字），腳本不改不刪"]);
+    assert.equal(run("console.mjs", ["board", "--repo", app()]).out, without);
+    assert.equal(fs.readFileSync(file, "utf8"), text);
   } finally {
     fs.rmSync(file);
   }
-  assert.ok(!run("console.mjs", ["board", "--repo", app()]).out.includes("看不懂"));
 });
 
 test("UX2 看板：一個 session 一列，同 worktree 多 session 各一列標 <票號>#n，不再有縮排子列", () => {
@@ -1289,7 +1291,7 @@ test("只剩背景工作：關閉前檢查照舊看 Orca，mainAgent 是 done �
   assert.match(run("console.mjs", ["close-check", "--path", wt("proj-101-login")], { dir }).lines[0], /^blocked:.*session 執行中/);
 });
 
-const LIST_HEAD = "| 狀態 | 代號 | 問題 | 選項 | 建議 | 你通常會回 |";
+const LIST_HEAD = "| 狀態 | 代號 | 問題 | 選項 | 建議 |";
 
 // The reply list printed after the board: header line, then table rows keyed by code.
 function replyList(out) {
@@ -1337,7 +1339,7 @@ test("待回覆清單：實作中的 ⏸ 列入，問題欄放最後一句；未
   const done = { kind: "done", text: "登入頁改好了。測試也過了。" };
   const list = replyList(pendingBlock([listRow("PROJ-2", session(done))]).join("\n"));
   assert.equal(list.head, "### 📋 待回覆");
-  assert.deepEqual(list.rows, [["⏸ 回覆完畢", "PROJ-2", "測試也過了。", "—", "—", "—"]]);
+  assert.deepEqual(list.rows, [["⏸ 回覆完畢", "PROJ-2", "測試也過了。", "—", "—"]]);
   for (const stage of ["未開工", "規劃中"]) assert.equal(pendingItems([{ ...listRow("PROJ-2", session(done)), stage }]).length, 1, stage);
   assert.equal(pendingItems([{ ...listRow("PROJ-2", session(done)), stage: undefined }]).length, 0, "不知道階段時不列");
 });
@@ -1382,7 +1384,7 @@ test("送出後帶多個代號：仍有題目在等就印只含剩下題目的�
   assert.deepEqual(afterSendLines(rows, new Set(["PROJ-1", "PROJ-2"])), boardLines(rows));
 });
 
-test("清單格式：標題列只有「### 📋 待回覆」，表格欄位依序為狀態、代號、問題、選項、建議、你通常會回；選單每題一列帶圈號，授權是允許／拒絕，空格放—", () => {
+test("清單格式：標題列只有「### 📋 待回覆」，表格欄位依序為狀態、代號、問題、選項、建議；選單每題一列帶圈號，授權是允許／拒絕，空格放—", () => {
   const rows = [
     listRow("PROJ-6923", session({ kind: "waiting", menu: MENU }, { agent: { state: "waiting", toolName: "AskUserQuestion" } })),
     listRow("PROJ-7000", session({ kind: "permission", tool: "Bash", input: "ls" })),
@@ -1391,8 +1393,8 @@ test("清單格式：標題列只有「### 📋 待回覆」，表格欄位依�
   const list = replyList(pendingBlock(rows).join("\n"));
   assert.equal(list.head, "### 📋 待回覆");
   assert.equal(list.columns, LIST_HEAD);
-  assert.ok(list.rows.every((r) => r.length === 6));
-  assert.deepEqual(list.rows.map((r) => r.slice(0, 5)), [
+  assert.ok(list.rows.every((r) => r.length === 5));
+  assert.deepEqual(list.rows, [
     ["💬 等待回應", "PROJ-6923①", "要哪個顏色？", "a 紅／b 綠／c 藍／其他", "b 綠"],
     ["💬 等待回應", "PROJ-6923②", "要哪個尺寸？", "a S／b M／其他", "—"],
     ["🔐 等待授權", "PROJ-7000", "Bash ls", "允許／拒絕", "—"],
@@ -1826,7 +1828,7 @@ test("中控台自己交棒：新中控台 --takeover 接手後只有一支 watc
   const dir = fake(consoleSwap);
   const fresh = spawn(process.execPath, [path.join(scripts, "watch.mjs"), "--takeover"], {
     stdio: "ignore",
-    env: { ...process.env, ORCA_BIN: fakeOrca, FAKE_ORCA_DIR: dir, ...env, AUTO_HANDOFF_HOME: path.join(tmp, "handoff"), WATCH_INTERVAL_MS: "30", WATCH_TIMEOUT_MS: "60000", CLAUDE_PROJECTS_DIR: path.join(tmp, "claude-projects"), WATCH_PGREP_PATTERN: `${scripts}/watch\\.mjs|${old}/watch\\.mjs` },
+    env: { ...process.env, ORCA_BIN: fakeOrca, FAKE_ORCA_DIR: dir, ...env, AUTO_HANDOFF_HOME: path.join(tmp, "handoff"), WATCH_INTERVAL_MS: "30", WATCH_TIMEOUT_MS: "60000", CLAUDE_PROJECTS_DIR: path.join(tmp, "claude-projects"), WATCH_PGREP_PATTERN: `${old}/watch\\.mjs` },
   });
   try {
     await new Promise((r) => setTimeout(r, 200));
@@ -2908,7 +2910,7 @@ test("/goal 中控台各處：進行中時專注排隊列、灰色統計行、�
   assert.deepEqual(fresh(blocks(woke.out).reports).map((r) => r[0]), ["### ⏸ PROJ-101 回覆完畢"]);
 });
 
-test("API 錯誤停下：不用 Orca 給的最後回覆（空的或前一個工具的錯誤輸出），改印對話紀錄裡的錯誤訊息，狀態是回覆完畢", () => {
+test("API 錯誤停下：不用 Orca 給的最後回覆（空的或前一個工具的錯誤輸出），改印對話紀錄裡的錯誤訊息，狀態是回覆完畢", async () => {
   const dir = claudeProjectDir(path.join(tmp, "api-error"));
   fs.mkdirSync(dir, { recursive: true });
   const day = new Date().toISOString().slice(0, 10);
@@ -2929,6 +2931,8 @@ test("API 錯誤停下：不用 Orca 給的最後回覆（空的或前一個工�
   register("term_api_a", [failedTool, refused, tail]);
   register("term_api_b", [refused, tail]);
   register("term_api_c", [refused, assistantText("第 8 題記下了，網址是？")]);
+  // A test just before may have left lib.mjs's 2-second read of the log, from before these registrations.
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
   assert.deepEqual(statusOf("term_api_a", "Exit code 1\n要繼續嗎？"), { kind: "done", text: `⚠️ ${error}` }, "前一個工具的錯誤輸出不當成回覆，也不因問號變成等你回應");
   assert.deepEqual(statusOf("term_api_b", ""), { kind: "done", text: `⚠️ ${error}` });
   assert.equal(statusOf("term_api_c", "第 8 題記下了，網址是？").kind, "waiting", "錯誤之後又正常回覆就照 Orca 的內容");

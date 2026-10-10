@@ -97,7 +97,7 @@ During an interview the new session reads your `## 需求訪談` section, asks y
 
 ## Appearance
 
-The focus panel uses the `refined` appearance by default: compact status icons and a matching focus band. Each status has its own colour (工作中 green, 待回答 yellow, 待授權 bright magenta, 已回覆 bright cyan, 異常 bright red, 閒置 grey). The stage is a quiet grey tag at the right of the card header from 46 columns up, and the first item of the bottom row below that; 未開工 is not shown. The focus band's name is no longer focusable or clickable; use `9: 顯示問題` to show the question. Other keyboard shortcuts and session data are unchanged.
+The focus panel uses the `refined` appearance by default: compact status icons and a matching focus band. Each status has its own colour (工作中 green, 待回答 yellow, 待授權 bright magenta, 已回覆 bright cyan, 異常 bright red, 閒置 grey). The stage is a quiet grey tag at the right of the card header from 46 columns up, and the first item of the bottom row below that; 未開工 is not shown. The focus band's name is no longer focusable or clickable; use `9: 顯示問題` to show the question. In both appearances a tab key (pressed again too) puts the selection and keyboard focus on that tab's first card, ↓ then moves one card from there, and `0` opens the panel on 待回覆 with the band's question selected; the other shortcuts and session data are unchanged.
 
 Add these keys to your existing `~/.config/worktree-console/config.json` (or `$WORKTREE_CONSOLE_HOME/config.json`); keep any other settings:
 
@@ -109,11 +109,11 @@ Add these keys to your existing `~/.config/worktree-console/config.json` (or `$W
 }
 ```
 
-- **appearance:** `refined` (default) or `classic`. Choose `classic` for the original panel and focus band; it ignores the theme.
+- **appearance:** `refined` (default) or `classic`. Choose `classic` for the original look of the panel and focus band; it ignores the theme, and uses the same tab and card focus behaviour as `refined`.
 - **theme:** `neutral` (default, uses terminal colors), `neutral-light`, `dracula`, `gruvbox`, or `light`. `neutral` leaves foreground text in your terminal's default color.
 - **motion:** `true` (default) alternates ◆/◇ every 900ms only for the primary question. The current item takes priority, otherwise the first queued question or authorization request does. Every visible authorization ◆ breathes in sync: 1.2 seconds in the blocked color, then 0.6 seconds dim; the label and focus-band rail keep the blocked color. Working sessions and errors stay still. `false` keeps all icons at their initial frame and disables the animation timer.
 
-Settings load when the session starts and each time the panel opens, so reopen the panel to apply edits. Missing settings use the defaults; an unknown value falls back to its default with one toast per distinct invalid value in the session.
+Settings load when the session starts and each time the panel opens, so reopen the panel to apply edits. Only the console's own tab reads the file. Missing settings use the defaults; an unknown value falls back to its default with one toast per distinct invalid value in the session, and a file that is not valid JSON falls back to all defaults with one toast.
 
 The refined panel calls running sessions **工作中**, questions **待回答**, authorization requests **待授權**, and answered sessions **已回覆**. These are display labels only; the conversation board retains its original status wording. The host controls button typography and hotkey colors; clickable names and keys retain its native styling.
 
@@ -121,7 +121,7 @@ The refined panel calls running sessions **工作中**, questions **待回答**,
 
 Set `theme` in `config.json` to `neutral`, `neutral-light`, `dracula`, `gruvbox`, or `light`, then reopen the panel. `neutral` keeps terminal-native foreground colors and follows Claude Code's panel background. Named themes paint their own panel background: `dracula` — `#282a36`, `gruvbox` — `#282828`, `light` — `#fdf6e3`, `neutral-light` — `#f7f7f5`. Theme changes affect only colors, not session data, layout, or shortcuts. The `classic` appearance ignores the theme and does not paint a background.
 
-The outer panel background covers text, card spacing, and unused rows; inner text rows do not need separate backgrounds. Ink's border cells do not inherit that background. Claude Code's own frame, close row, and tab row remain in its theme colors. The focus band and the rest of the terminal retain their existing backgrounds; pair light palettes with a light Claude Code theme for those surfaces. Both light palettes keep dim text contrast at least 4.5:1 on their panel backgrounds. Dracula uses `#9aa1c2` borders for at least 3:1 contrast on `#282a36`.
+The outer panel background covers text, card spacing, and unused rows; inner text rows do not need separate backgrounds. Ink's border cells do not inherit that background. Claude Code's own frame, close row, and tab row remain in its theme colors. The focus band and the rest of the terminal retain their existing backgrounds; pair light palettes with a light Claude Code theme for those surfaces. Both light palettes keep dim text contrast at least 4.5:1 on their panel backgrounds. Every named theme's card borders keep at least 3:1 contrast on its panel background.
 
 Every palette keeps authorization labels in its blocked color while the ◆ glyph breathes between blocked and dim. Invalid theme names fall back to `neutral` with one toast per distinct invalid value in the session.
 
@@ -135,7 +135,7 @@ npm test
 
 Run tests inside a herdr tab as `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`. The focus band and `focus-show` tests run with `claude plugin test .` and `claude plugin test mods/focus-show`.
 
-真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。
+真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。本機沒有 `tmux` 時這些測試會略過並寫明原因；CI（設了 `CI` 環境變數）上沒有 `tmux` 則直接失敗。CI 由 `.github/workflows/ci.yml` 執行：安裝固定版本的 `@anthropic-ai/claude-code` 與 `tmux`，跑 `npm test`、`claude plugin test .` 與 `claude plugin test mods/focus-show`。
 
 To try a local checkout without replacing your installed copy:
 

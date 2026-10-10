@@ -25,9 +25,9 @@ import { handedOver, keepaliveStep, keepaliveUsage, sessionEntries } from "./kee
 import { sweepDisposable } from "./disposable.mjs";
 import { loadFocus, modsActive } from "./focus.mjs";
 import { answeredStops, commitLog, distillReminder, logEvent, registerConsole, sessionFor } from "./log.mjs";
-import { gitScene } from "./memory.mjs";
+import { gitScene } from "./git-scene.mjs";
 
-// The git scene goes with each stop, so a later reply is learnt under the scene it answered.
+// The git scene goes with each stop.
 const stopEvent = (row, x) => ({ ...stopFields(row, x), scene: gitScene(row.path, row.baseRef) });
 
 const { values } = parseArgs({

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { statusCell } from './status-view.ts'
+import { columns, statusCell } from './status-view.ts'
 import { focusBandRows } from './worktree-console-focus.tsx'
 import { THEMES } from './console-theme.ts'
 
@@ -54,7 +54,7 @@ const stopId = (key: string) => [...key].reduce((h, c) => Math.imul(h ^ c.charCo
 
 type World = { focus: any; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
-const appearanceConfig = new WeakMap<World, AppearanceConfig>()
+const appearanceConfig = new WeakMap<World, AppearanceConfig | string>()
 
 const focusOf = (current: string, queue: string[], extra: object = {}) => ({
   active: true,
@@ -111,7 +111,10 @@ const hint = { plugin: PLUGIN, component: 'PromptHint' as const, props: { isDraf
 async function start($: any, on: On, world: World, env: Record<string, string> = { ORCA_TERMINAL_HANDLE: 'term_self' }) {
   mock.env(on, env)
   const clock = mock.clock(on, { now: 1_000 })
-  on('fs.read', async () => ({ value: JSON.stringify(appearanceConfig.get(world) ?? { appearance: 'classic' }) }))
+  on('fs.read', async () => {
+    const config = appearanceConfig.get(world) ?? { appearance: 'classic' }
+    return { value: typeof config === 'string' ? config : JSON.stringify(config) }
+  })
   fakeConsole(on, world)
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('ui.toast', async (_$, e) => {
@@ -610,46 +613,17 @@ test('on the other tabs a number only chooses the card, Enter or the nickname pr
   await ui.unmount()
 })
 
-test('「狀態」 typed with mods opens the pane on 全部, never reaches the conversation or reply; 「待回覆」 and looser text pass through', async ($, on) => {
+test('「狀態」 typed with mods goes on to the conversation as typed and opens nothing; the pane opens only from 0', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
-  const narrow = await $.ui.mount({ ...band(100), surface: 'terminal' })
-  await narrow.unmount()
-  const opened = await $.prompt.submit({ text: '  狀態 ', wait: false, origin: { kind: 'user' } } as any)
-  expect(opened.drop).toBe('狀態已開在側邊面板')
-  expect(w.opened.at(-1)).toMatchObject({ id: PANE, focus: true })
-  expect(w.calls.some(c => c[0] === 'reply')).toBe(false)
-  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
-  expect((await ui.find({ key: 'tab:all' }))?.props.dimColor).toBe(false)
-  expect((await ui.find({ key: 'tab:pending' }))?.props.dimColor).toBe(true)
-  expect(await cardTags(ui)).toEqual(['focusui', 'logging', 'tune', 'PROJ-6668', 'upgrade#2', 'perm'])
-  await ui.unmount()
-  const count = w.opened.length
-  for (const text of ['待回覆', '看一下狀態', '狀態？']) {
+  for (const text of ['狀態', '  狀態 ', '待回覆']) {
     const res = await $.prompt.submit({ text, wait: false, origin: { kind: 'user' } } as any)
     expect(res.drop).toBeUndefined()
     expect(res.text).toBe(text)
   }
-  expect(w.opened).toHaveLength(count)
-})
-
-test('「狀態」 opening the pane toasts 「memory.md 有 N 條看不懂」 only when memory.md has such entries; nothing in the pane', async ($, on) => {
-  const BAD = 'memory.md 有 1 條看不懂（沒有情境字母或認得的關鍵字），腳本不改不刪'
-  const w = world(pending())
-  const clock = await start($, on, w)
-  await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } } as any)
-  expect(w.toasts).toEqual([])
-  w.focus = { ...pending(), unreadable: BAD }
-  await clock.advance(5_000)
-  expect(w.toasts).toEqual([])
-  const res = await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } } as any)
-  expect(res.drop).toBe('狀態已開在側邊面板')
-  expect(w.toasts).toEqual([BAD])
-  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
-  expect((await texts(ui)).filter((t: string) => t.includes('看不懂'))).toEqual([])
-  await ui.unmount()
-  await $.prompt.submit({ text: '待回覆', wait: false, origin: { kind: 'user' } } as any)
-  expect(w.toasts).toEqual([BAD])
+  expect(w.opened).toEqual([])
+  await openPane($)
+  expect(w.opened.at(-1)).toMatchObject({ id: PANE, focus: true })
 })
 
 test('「狀態」 without mods goes on to the conversation untouched', async ($, on) => {
@@ -881,8 +855,8 @@ test('band 8 with text in the prompt: the text goes on as typed and nothing is d
   await ui.unmount()
 })
 
-test('band: 8 only ever defers, even for a card that still carries old habit or prefill data; nothing goes into the prompt box', async ($, on) => {
-  const w = world({ ...pending(), sessions: SESSIONS.map(s => (s.tag === 'perm' ? { ...s, habit: { text: 'squash、關閉', basis: '你最近 30 天回過 3 次' }, prefill: 'perm squash merge，關閉' } : s)) })
+test('band: 8 only ever defers; nothing goes into the prompt box', async ($, on) => {
+  const w = world(pending())
   const fills: unknown[] = []
   on('prompt.fill', async (_$, e) => {
     fills.push(e)
@@ -895,21 +869,6 @@ test('band: 8 only ever defers, even for a card that still carries old habit or 
   await ui.press({ key: 'later' })
   expect(fills).toEqual([])
   expect(w.calls.at(-1)).toEqual(['focus-later'])
-  await ui.unmount()
-})
-
-test('cards: no 你通常會回 line on any tab, even for a card that carries habit data; no 要記住 or 看不懂 line anywhere in the pane', async ($, on) => {
-  const notes = ['要記住這個習慣嗎？', 'memory.md 有 1 條看不懂（沒有情境字母或認得的關鍵字），腳本不改不刪']
-  const w = world({ ...pending(), notes, sessions: SESSIONS.map(s => (s.tag === 'upgrade#2' ? { ...s, habit: { text: 'squash、關閉', basis: '你最近 30 天回過 3 次' } } : s)) })
-  await start($, on, w)
-  await openPane($)
-  const ui = await $.ui.mount({ ...pane(100), surface: 'terminal' })
-  for (const key of ['tab:pending', 'tab:all', 'tab:hidden', 'tab:idle']) {
-    await ui.press({ key })
-    const all = await texts(ui)
-    expect(all.filter((t: string) => /你通常會回|要記住|看不懂/.test(t))).toEqual([])
-    expect(all.at(-1)).toBe(FOOTER_TEXT)
-  }
   await ui.unmount()
 })
 
@@ -1426,8 +1385,8 @@ test('refined：主題只換顏色，無效設定只提示一次且每次開面�
   expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.borderColor).toBe('#9aa1c2')
   const original = await cardTags(ui)
   for (const [name, accent, border] of [
-    ['neutral', 'cyan', 'gray'], ['neutral-light', '#0f7c8c', '#9a9ea6'],
-    ['dracula', '#8be9fd', '#9aa1c2'], ['gruvbox', '#d5c4a1', '#665c54'], ['light', '#1f7a73', '#93a1a1'],
+    ['neutral', 'cyan', 'gray'], ['neutral-light', '#0f7c8c', '#868a92'],
+    ['dracula', '#8be9fd', '#9aa1c2'], ['gruvbox', '#fbf1c7', '#928374'], ['light', '#1f7a73', '#7f8f90'],
   ]) {
     config.theme = name
     await openPane($)
@@ -1475,10 +1434,10 @@ test('主題：每個主題的工作中、待回答、待授權、已回覆、�
 
 for (const [name, blocked, dim, border] of [
   ['neutral', 'magentaBright', 'gray', 'gray'],
-  ['neutral-light', '#a3267a', '#5f646d', '#9a9ea6'],
+  ['neutral-light', '#a3267a', '#5f646d', '#868a92'],
   ['dracula', '#ffb86c', '#9aa1c2', '#9aa1c2'],
-  ['gruvbox', '#fe8019', '#bdae93', '#665c54'],
-  ['light', '#a34f00', '#586e75', '#93a1a1'],
+  ['gruvbox', '#fe8019', '#bdae93', '#928374'],
+  ['light', '#a34f00', '#586e75', '#7f8f90'],
 ]) {
   test(`refined：${name} 授權圖標呼吸但文字維持授權色，待回覆文字與線條分色`, async ($, on) => {
     const w = world(focusOf('perm', ['focusui']))
@@ -1511,8 +1470,9 @@ test('refined：只有工作中可見時不開動畫計時器', async ($, on) =>
   let invalidations = 0
   on('ui.invalidate', async (_$, e, next) => { invalidations += 1; return next(e) })
   const clock = await start($, on, w)
-  await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
+  await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  await ui.press({ key: 'tab:all' })
   const before = invalidations
   await clock.advance(1_800)
   expect(invalidations).toBe(before)
@@ -1600,14 +1560,16 @@ test('refined：主要題目不可見時，可見待授權仍呼吸；classic �
   const config: AppearanceConfig = { appearance: 'refined' }
   appearanceConfig.set(w, config)
   const clock = await start($, on, w)
-  await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
+  await openPane($)
   const ui = await $.ui.mount({ ...pane(36), surface: 'terminal' })
+  await ui.press({ key: 'tab:all' })
   await clock.advance(1_200)
   expect((await ui.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
   expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
   config.appearance = 'classic'
   config.theme = 'dracula'
-  await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
+  await openPane($)
+  await ui.press({ key: 'tab:all' })
   await clock.advance(1_800)
   expect((await ui.find({ type: 'Text', text: ' 等待授權 ' }))?.props.backgroundColor).toBe('#3e2a2a')
   expect((await ui.find({ key: 'card:工作中@1' }))?.props.borderColor).toBe('cyanBright')
@@ -1725,6 +1687,29 @@ test('refined：主要待回答每 900ms 閃爍，其餘問題維持實心圖標
   await ui.unmount()
 })
 
+test('設定檔：不是中控台的分頁不讀 config.json，設定錯了也不跳提示；成為中控台後才提示一次', async ($, on) => {
+  const w = world({ active: false })
+  appearanceConfig.set(w, { theme: '不存在' })
+  const clock = await start($, on, w)
+  await clock.advance(30_000)
+  expect(w.toasts).toEqual([])
+  w.focus = pending()
+  await clock.advance(15_000)
+  expect(w.toasts).toEqual(['config.json 的 theme 不認得：不存在，改用 neutral'])
+})
+
+test('設定檔：config.json 不是有效的 JSON 時跳一次提示並用預設外觀，重開面板不再重複', async ($, on) => {
+  const w = world(pending())
+  appearanceConfig.set(w, '{ "theme": "dracula", ')
+  await start($, on, w)
+  await openPane($)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  expect(w.toasts).toEqual(['config.json 不是有效的 JSON，外觀改用預設'])
+  expect((await ui.find({ key: 'card:perm@1' }))?.props.borderColor).toBe('cyan')
+  await ui.unmount()
+})
+
 test('refined：未設定欄位使用預設外觀，無效 appearance 與 motion 各提示一次', async ($, on) => {
   const w = world(pending())
   const config: AppearanceConfig = {}
@@ -1803,6 +1788,14 @@ test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱�
 const longBandQuestion = `第一行\n\n${'問'.repeat(500)}\n最後一行`
 const longBandQueue = Array.from({ length: 5 }, (_, i) => ({ tag: `排隊名稱${i}abcdefghijk`, isNew: true }))
 
+test('寬度：✨ 算 2 欄，排隊名稱後的 ✨ 照 2 欄預留', () => {
+  expect(columns('✨')).toBe(2)
+  expect(columns('a ✨')).toBe(4)
+  const rows = focusBandRows({ cols: 80, maxRows: 20, question: '問題', queue: [{ tag: 'abc', isNew: true }], hiddenCount: 0 })
+  expect(rows.queueLabels).toEqual(['abc ✨'])
+  expect(rows.keyLines.flat().find(item => item.index === 2)?.width).toBe(columns('abc') + 3 + 7)
+})
+
 test('refined：80 與 46 欄先保留換行操作列，長多行問題只取得剩餘行數', () => {
   for (const cols of [80, 46]) {
     const rows = focusBandRows({ cols, maxRows: 10, question: longBandQuestion, queue: longBandQueue, hiddenCount: 2 })
@@ -1872,6 +1865,20 @@ test('主題：命名配色有底色，中性不覆蓋，淺色次要文字與 D
     expect(contrast(theme.fg!, theme.bg!)).toBeGreaterThanOrEqual(4.5)
   }
   expect(contrast(THEMES.dracula.border!, THEMES.dracula.bg!)).toBeGreaterThanOrEqual(3)
+})
+
+test('主題：neutral-light、gruvbox、light 的邊框對底色至少 3:1', () => {
+  for (const name of ['neutral-light', 'gruvbox', 'light'] as const) {
+    const theme = THEMES[name]
+    expect(contrast(theme.border!, theme.bg!), name).toBeGreaterThanOrEqual(3)
+  }
+})
+
+test('主題：每個主題的選取框強調色不等於任何狀態色，gruvbox 的強調色也不等於次要文字色', () => {
+  for (const [name, t] of Object.entries(THEMES)) {
+    for (const role of ['busy', 'waiting', 'blocked', 'answered', 'error'] as const) expect(t.accent, `${name} ${role}`).not.toBe(t[role])
+  }
+  expect(THEMES.gruvbox.accent).not.toBe(THEMES.gruvbox.muted)
 })
 
 test('面板：命名主題最外層帶底色，中性與 classic 不增加底色', async ($, on) => {

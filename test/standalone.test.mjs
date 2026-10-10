@@ -138,7 +138,7 @@ test("資料路徑與鑰匙圈名稱照舊", () => {
   assert.match(read("skills/worktree-console/scripts/lib.mjs"), /path\.join\(os\.homedir\(\), "\.config", "worktree-console"\)/);
   assert.match(read("hooks/auto-handoff.mjs"), /path\.join\(os\.homedir\(\), "\.config", "claude-handoff"\)/);
   assert.match(read("skills/worktree-console/scripts/linear.mjs"), /SERVICE = "worktree-console-linear"/);
-  assert.match(read("skills/worktree-console/scripts/memory.mjs") + read("skills/worktree-console/scripts/log.mjs"), /\.worktree-console/);
+  assert.match(read("skills/worktree-console/scripts/log.mjs"), /\.worktree-console/);
 });
 
 test("每個測試檔先載入 isolate-env，跑測試不會碰到真的 herdr 或 Orca", () => {

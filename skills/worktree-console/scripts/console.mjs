@@ -40,7 +40,6 @@ import {
   stageOf,
   selfInfo,
   sessionTag,
-  unreadableMemory,
   stripRef,
   todoLines,
   UNSEEN,
@@ -53,7 +52,7 @@ import { consoleSessionOk, focusPayload, focusPick, focusReplied, focusSkip, loa
 import { usageLines } from "./console-usage.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome } from "./herdr.mjs";
 import { herdrReport } from "./herdr-report.mjs";
-import { alreadyIn } from "./memory.mjs";
+import { alreadyIn } from "./git-scene.mjs";
 import { maybeTerminals, runOrca, terminals } from "./terminals.mjs";
 import { commitsSince, dropBranch } from "./disposable.mjs";
 import {
@@ -158,9 +157,8 @@ function board() {
   const data = load({ withTitles: true, register: true });
   registerConsole({ handle: data.self.handle, paneKey: data.self.paneKey, repo: data.launchRepo });
   const list = pendingBlock(data.rows);
-  const bad = unreadableMemory();
   const names = nameLines(data.rows);
-  for (const line of [...boardLines(data.rows, aligning(data)), ...(list.length > 0 ? ["", ...list] : []), ...(names.length > 0 ? ["", ...names] : []), ...(bad.length > 0 ? ["", ...bad] : [])]) console.log(line);
+  for (const line of [...boardLines(data.rows, aligning(data)), ...(list.length > 0 ? ["", ...list] : []), ...(names.length > 0 ? ["", ...names] : [])]) console.log(line);
 }
 
 function afterSend() {

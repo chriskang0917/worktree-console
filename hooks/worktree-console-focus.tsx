@@ -26,7 +26,6 @@ type Focus = {
   announceKey?: string | null
   waiting?: { tag: string | null; seconds: number } | null
   queue?: { key: string; isNew: boolean }[]
-  unreadable?: string | null
   sessions?: Session[]
 }
 
@@ -313,6 +312,8 @@ async function announce($: EngineInterface, next: Focus, pressed: boolean) {
 }
 
 async function apply($: EngineInterface, next: Focus, pressed = false) {
+  // Only the console reads config.json, so another tab never toasts about it.
+  if (next.active && !focus.active) await loadPreferences($)
   if (next.active) {
     const live = [next.current, ...(next.queue ?? []).map(q => q.key)].filter((k): k is string => !!k)
     for (const q of next.queue ?? []) {
@@ -374,15 +375,17 @@ async function focusSel($: EngineInterface, at: number) {
   $.ui.invalidate('ui.render')
 }
 
-async function openPane($: EngineInterface, t: Tab = 'pending') {
+async function openPane($: EngineInterface) {
+  showTab('pending')
+  startRepin()
+  // Asked within the press itself, so the engine seats the pane at any width; an open after an await counts as unasked.
+  const opened = $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
   await loadPreferences($)
-  showTab(t)
   $.ui.invalidate('ui.render')
-  const opened = await $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
+  await opened
   // The pane takes the keys back only now (the band's `0` held them), its ring still on the old tab's index.
   startRepin()
   $.ui.invalidate('ui.render')
-  return opened
 }
 
 // A card's number only chooses it: on a card waiting on you that switches the band to it (and the switch prints it).
@@ -419,7 +422,6 @@ const countsText = () => {
 // The worktree-console focus band: polls `console.mjs focus`, draws the question on screen, the queue, the side pane and the counts.
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await loadPreferences($)
     if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || (await $.env.get('HERDR_ENV')) === '1') {
       sessionId = await $.session.id().catch(() => '')
       void poll($)
@@ -429,14 +431,6 @@ export const register: Register = on => {
       })
     }
     return next(e)
-  })
-
-  on('prompt.submit', async ($, e, next) => {
-    if (!focus.active || e.text.trim() !== '狀態') return next(e)
-    const opened = await openPane($, 'all')
-    if (!opened.isPlaced) return next(e)
-    if (focus.unreadable) $.ui.toast(focus.unreadable)
-    return { drop: '狀態已開在側邊面板' }
   })
 
   // The engine walks ↑↓ one Button back or forth through the pane, keeping its place by index: a step from where it held is one card up or down.
