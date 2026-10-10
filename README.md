@@ -110,12 +110,20 @@ Add these keys to your existing `~/.config/worktree-console/config.json` (or `$W
 ```
 
 - **appearance:** `refined` (default) or `classic`. Choose `classic` for the original panel and focus band; it ignores the theme.
-- **theme:** `neutral` uses terminal colors and leaves foreground text in your terminal's default color. No other palettes are included.
+- **theme:** `neutral` (default, uses terminal colors), `neutral-light`, `dracula`, `gruvbox`, or `light`. `neutral` leaves foreground text in your terminal's default color.
 - **motion:** `true` (default) alternates ◆/◇ every 900ms only for the primary question. The current item takes priority, otherwise the first queued question or authorization request does. Every visible authorization ◆ breathes in sync: 1.2 seconds in the blocked color, then 0.6 seconds dim; the label and focus-band rail keep the blocked color. Working sessions and errors stay still. `false` keeps all icons at their initial frame and disables the animation timer.
 
 Settings load when the session starts and each time the panel opens, so reopen the panel to apply edits. Missing settings use the defaults; an unknown value falls back to its default with one toast per distinct invalid value in the session.
 
 The refined panel calls running sessions **工作中**, questions **待回答**, authorization requests **待授權**, and answered sessions **已回覆**. These are display labels only; the conversation board retains its original status wording. The host controls button typography and hotkey colors; clickable names and keys retain its native styling.
+
+### Themes
+
+Set `theme` in `config.json` to `neutral`, `neutral-light`, `dracula`, `gruvbox`, or `light`, then reopen the panel. `neutral` keeps terminal-native foreground colors and follows Claude Code's panel background. Named themes paint their own panel background: `dracula` — `#282a36`, `gruvbox` — `#282828`, `light` — `#fdf6e3`, `neutral-light` — `#f7f7f5`. Theme changes affect only colors, not session data, layout, or shortcuts. The `classic` appearance ignores the theme and does not paint a background.
+
+The outer panel background covers text, card spacing, and unused rows; inner text rows do not need separate backgrounds. Ink's border cells do not inherit that background. Claude Code's own frame, close row, and tab row remain in its theme colors. The focus band and the rest of the terminal retain their existing backgrounds; pair light palettes with a light Claude Code theme for those surfaces. Both light palettes keep dim text contrast at least 4.5:1 on their panel backgrounds. Dracula uses `#9aa1c2` borders for at least 3:1 contrast on `#282a36`.
+
+Every palette keeps authorization labels in its blocked color while the ◆ glyph breathes between blocked and dim. Invalid theme names fall back to `neutral` with one toast per distinct invalid value in the session.
 
 ## Development
 

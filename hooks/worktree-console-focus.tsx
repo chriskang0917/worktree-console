@@ -573,7 +573,7 @@ export const register: Register = on => {
     }
     const empty = (
       <Box key="empty" width={cols} borderStyle="round" borderColor={modern ? theme.border : EMPTY_BORDER} paddingY={1}>
-        <Text dimColor>{`${' '.repeat(Math.max(0, Math.floor((cols - 2 - columns(EMPTY)) / 2)))}${EMPTY}`}</Text>
+        <Text dimColor={!modern} color={modern ? theme.dim : undefined}>{`${' '.repeat(Math.max(0, Math.floor((cols - 2 - columns(EMPTY)) / 2)))}${EMPTY}`}</Text>
       </Box>
     )
     const body = rows.slice(top, end).flatMap((r, j) => {
@@ -605,7 +605,7 @@ export const register: Register = on => {
       </Box>
     )
     return (
-      <Box flexDirection="column" height={dock ? e.props.scroll.bodyRows : undefined}>
+      <Box flexDirection="column" height={dock ? e.props.scroll.bodyRows : undefined} {...(modern && 'bg' in theme ? { backgroundColor: theme.bg } : {})}>
         {tabs}
         {modern && <Text color={theme.border}>{'─'.repeat(Math.min(cols, tabStart))}<Text color={theme.accent}>{'━'.repeat(tabWidth)}</Text>{'─'.repeat(Math.max(0, cols - tabStart - tabWidth))}</Text>}
         <Box key="cards" flexDirection="column" flexShrink={1} overflow="hidden">

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added optional `neutral-light`, `dracula`, `gruvbox`, and `light` themes through `config.json`; classic appearance remains unchanged.
+- Named themes now paint their own side-panel backgrounds, including card spacing and unused rows; neutral and classic continue to follow Claude Code. Dracula borders use `#9aa1c2` to remain visible on `#282a36`. Ink border cells and Claude Code's own frame retain the host background.
+- The refined focus-band reply count uses the theme's dim text color, while its trailing rule retains the border color; neutral colors remain unchanged.
 - The focus panel now defaults to a refined appearance with compact status icons, terminal-native neutral colors, responsive stage labels, and optional animation. Configure `appearance`, `theme: neutral`, and `motion` in `config.json`; choose `appearance: classic` to keep the original look and shortcuts.
 - Fixed refined focus-band hidden queue counts and question-height budgeting; narrow card headers no longer reserve unused trailing spaces.
 - Corrected narrow-card header regression fixtures and drawn-tree lookup so both normal and archived cards are checked for complete names and full-row width at 46 and 36 columns.

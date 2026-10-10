@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { statusCell } from './status-view.ts'
 import { focusBandRows } from './worktree-console-focus.tsx'
+import { THEMES } from './console-theme.ts'
 
 const PLUGIN = 'worktree-console'
 const PANE = 'worktree-console-pending'
@@ -1414,24 +1415,94 @@ test('refined：六種狀態與未知值保留正確圖標、文字及狀態色'
   await ui.unmount()
 })
 
-test('refined：neutral 使用終端色，無效設定只提示一次且每次開面板重讀', async ($, on) => {
+test('refined：主題只換顏色，無效設定只提示一次且每次開面板重讀', async ($, on) => {
   const w = world(pending())
-  const config: AppearanceConfig = { appearance: 'refined', theme: 'neutral', motion: false }
+  const config: AppearanceConfig = { appearance: 'refined', theme: 'dracula', motion: false }
   appearanceConfig.set(w, config)
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
-  expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('cyan')
-  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.borderColor).toBe('gray')
+  expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('#8be9fd')
+  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.borderColor).toBe('#9aa1c2')
   const original = await cardTags(ui)
+  for (const [name, accent, border] of [
+    ['neutral', 'cyan', 'gray'], ['neutral-light', '#0f7c8c', '#9a9ea6'],
+    ['dracula', '#8be9fd', '#9aa1c2'], ['gruvbox', '#d5c4a1', '#665c54'], ['light', '#1f7a73', '#93a1a1'],
+  ]) {
+    config.theme = name
+    await openPane($)
+    expect((await ui.find({ key: 'card:perm@1' }))?.props.borderColor).toBe(accent)
+    expect((await ui.find({ key: 'card:focusui@1' }))?.props.borderColor).toBe(border)
+    expect(await cardTags(ui)).toEqual(original)
+  }
   config.theme = '不存在'
   await openPane($)
   expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.props.borderColor).toBe('cyan')
   expect(await cardTags(ui)).toEqual(original)
   await openPane($)
   expect(w.toasts).toEqual(['config.json 的 theme 不認得：不存在，改用 neutral'])
+  config.theme = '另一個不存在'
+  await openPane($)
+  expect(w.toasts).toEqual([
+    'config.json 的 theme 不認得：不存在，改用 neutral',
+    'config.json 的 theme 不認得：另一個不存在，改用 neutral',
+  ])
   await ui.unmount()
 })
+
+for (const name of ['light', 'dracula'] as const) {
+  test(`refined：${name} 空分頁提示用主題 dim 色`, async ($, on) => {
+    const w = world(nothing())
+    appearanceConfig.set(w, { appearance: 'refined', theme: name, motion: false })
+    await start($, on, w)
+    await openPane($)
+    const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+    await ui.press({ key: 'tab:hidden' })
+    const hint = (await ui.findAll({ type: 'Text' })).find((x: any) => x.text.trim() === EMPTY)
+    expect(hint?.props.color).toBe(THEMES[name].dim)
+    expect(hint?.props.dimColor).toBe(false)
+    await ui.unmount()
+  })
+}
+
+test('主題：每個主題的工作中、待回答、待授權、已回覆、異常各用不同顏色', () => {
+  for (const [name, t] of Object.entries(THEMES)) {
+    const roles = [t.busy, t.waiting, t.blocked, t.answered, t.error]
+    expect(roles.every(Boolean), name).toBe(true)
+    expect(new Set(roles).size, name).toBe(5)
+  }
+})
+
+for (const [name, blocked, dim, border] of [
+  ['neutral', 'magentaBright', 'gray', 'gray'],
+  ['neutral-light', '#a3267a', '#5f646d', '#9a9ea6'],
+  ['dracula', '#ffb86c', '#9aa1c2', '#9aa1c2'],
+  ['gruvbox', '#fe8019', '#bdae93', '#665c54'],
+  ['light', '#a34f00', '#586e75', '#93a1a1'],
+]) {
+  test(`refined：${name} 授權圖標呼吸但文字維持授權色，待回覆文字與線條分色`, async ($, on) => {
+    const w = world(focusOf('perm', ['focusui']))
+    appearanceConfig.set(w, { appearance: 'refined', theme: name })
+    const clock = await start($, on, w)
+    await openPane($)
+    const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+    const focusBand = await $.ui.mount({ ...band(80), surface: 'terminal' })
+    for (const [elapsed, glyphColor] of [[0, blocked], [1_200, dim]] as const) {
+      await clock.advance(elapsed)
+      expect((await ui.find({ type: 'Text', text: '◆' }))?.props.color).toBe(glyphColor)
+      expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe(blocked)
+      expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe(glyphColor)
+      expect((await focusBand.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe(blocked)
+    }
+    expect((await focusBand.find({ type: 'Text', text: '── 待回覆 1/2 ' }))?.props.color).toBe(dim)
+    expect((await focusBand.find({ type: 'Text', text: '─'.repeat(66) }))?.props.color).toBe(border)
+    if (name === 'neutral') {
+      expect((await texts(focusBand)).join('')).toContain(`── 待回覆 1/2 ${'─'.repeat(66)}`)
+    }
+    await focusBand.unmount()
+    await ui.unmount()
+  })
+}
 
 test('refined：只有工作中可見時不開動畫計時器', async ($, on) => {
   const cards = [card('a', { status: '執行中', pending: false }), card('b', { status: '執行中', pending: false })]
@@ -1535,9 +1606,13 @@ test('refined：主要題目不可見時，可見待授權仍呼吸；classic �
   expect((await ui.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
   expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
   config.appearance = 'classic'
+  config.theme = 'dracula'
   await $.prompt.submit({ text: '狀態', wait: false, origin: { kind: 'user' } })
   await clock.advance(1_800)
   expect((await ui.find({ type: 'Text', text: ' 等待授權 ' }))?.props.backgroundColor).toBe('#3e2a2a')
+  expect((await ui.find({ key: 'card:工作中@1' }))?.props.borderColor).toBe('cyanBright')
+  expect((await ui.find({ key: 'card:perm@1' }))?.props.borderColor).toBe('#7a7a7a')
+  expect((await ui.find({ type: 'Text', text: ' 等待授權 ' }))?.props.color).toBe('#c8c8c8')
   expect(await ui.find({ type: 'Text', text: '◆' })).toBeUndefined()
   await ui.unmount()
 })
@@ -1772,4 +1847,52 @@ test('refined：長多行問題與五個長排隊名稱仍畫出操作與 0 面�
     expect((await texts(ui)).find((text: string) => text.startsWith('第一行'))?.endsWith('…')).toBe(true)
     await ui.unmount()
   }
+})
+
+const contrast = (a: string, b: string): number => {
+  const luminance = (hex: string) => {
+    const channels = [1, 3, 5].map(i => {
+      const value = parseInt(hex.slice(i, i + 2), 16) / 255
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+    })
+    return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722
+  }
+  const x = luminance(a), y = luminance(b)
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+
+test('主題：命名配色有底色，中性不覆蓋，淺色次要文字與 Dracula 框線可辨識', () => {
+  expect(Object.hasOwn(THEMES.neutral, 'bg')).toBe(false)
+  for (const name of ['dracula', 'gruvbox', 'light', 'neutral-light'] as const) {
+    expect(THEMES[name].bg).toMatch(/^#[0-9a-f]{6}$/)
+  }
+  for (const name of ['light', 'neutral-light'] as const) {
+    const theme = THEMES[name]
+    expect(contrast(theme.dim!, theme.bg!)).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(theme.fg!, theme.bg!)).toBeGreaterThanOrEqual(4.5)
+  }
+  expect(contrast(THEMES.dracula.border!, THEMES.dracula.bg!)).toBeGreaterThanOrEqual(3)
+})
+
+test('面板：命名主題最外層帶底色，中性與 classic 不增加底色', async ($, on) => {
+  const w = world(pending())
+  const config: AppearanceConfig = { theme: 'dracula', motion: false }
+  appearanceConfig.set(w, config)
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+  type Drawn = { type: string; props: { backgroundColor?: string }; children?: (Drawn | string)[] }
+  const outer = (node: Drawn): Drawn => node.type === 'Box' ? node : outer(node.children!.find(child => typeof child !== 'string') as Drawn)
+  for (const name of ['dracula', 'gruvbox', 'light', 'neutral-light', 'neutral'] as const) {
+    config.theme = name
+    await openPane($)
+    const box = outer(await ui.drawn())
+    expect(box.props.backgroundColor).toBe('bg' in THEMES[name] ? THEMES[name].bg : undefined)
+    expect(Object.hasOwn(box.props, 'backgroundColor')).toBe(name !== 'neutral')
+  }
+  config.appearance = 'classic'
+  config.theme = 'dracula'
+  await openPane($)
+  expect(Object.hasOwn(outer(await ui.drawn()).props, 'backgroundColor')).toBe(false)
+  await ui.unmount()
 })
