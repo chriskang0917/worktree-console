@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { LABELS, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sceneNotes, sessionCaption, sessionTag, sessionTranscript, unreadableMemory, withHabits } from "./lib.mjs";
+import { LABELS, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
 import { isConsoleSession } from "./log.mjs";
 
 export const FOCUS_WAIT_MS = 60_000;
@@ -200,7 +200,7 @@ function plainReport(tag, status) {
 
 // The focus band's and pane's data: every session as a card, the question on screen, the queue in order and the counts.
 export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(), announce = null, announceKey = null, keys = new Set() } = {}) {
-  const items = new Map(withHabits(pendingItems(rows)).map((item) => [item.session, item]));
+  const items = new Map(pendingItems(rows).map((item) => [item.session, item]));
   const keyOf = new Map([view.current, ...view.queue].filter(Boolean).map((e) => [e.item.session, e.key]));
   const titles = { ...(view.state.titles ?? {}) };
   const live = new Set(rows.flatMap((row) => row.sessions.map((s) => s.paneKey)));
@@ -218,8 +218,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         session,
         item ? (item.entries.length > 1 ? item.entries.map((x) => x.question).join(" / ") : item.entries[0].question) : status.kind === "idle" ? "（閒置）" : lastActivity(status),
       );
-      const ask = sceneNotes(item?.scene);
-      const report = [...(needsYou(status.kind) ? reportLines(row, status, session) : plainReport(tag, status)), ...(ask.length > 0 ? ["", ...ask] : [])];
+      const report = needsYou(status.kind) ? reportLines(row, status, session) : plainReport(tag, status);
       return {
         key: keyOf.get(session) ?? session.paneKey,
         tag,
@@ -246,7 +245,6 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
       announceKey,
       waiting: view.wait ? { tag: view.wait.tag, seconds: Math.max(0, Math.ceil((view.wait.until - now) / 1000)) } : null,
       queue: view.queue.map((e) => ({ key: e.key, isNew: (view.state.seen?.[e.key] ?? 0) > since })),
-      unreadable: unreadableMemory()[0] ?? null,
       stats: `${count(STATUS.anomaly[1]) ? `session 異常 ${count(STATUS.anomaly[1])} | ` : ""}等待回應 ${count("等待回應")} | 等待授權 ${count("等待授權")} | 回覆完畢 ${count("回覆完畢")} | 執行中 ${count("執行中")} | 封存 ${sessions.filter((s) => s.archived).length} | 閒置 ${count("閒置")}`,
       sessions,
     },

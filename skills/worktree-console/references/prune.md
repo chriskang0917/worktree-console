@@ -9,7 +9,7 @@
 
 判斷依據：
 
-- CANDIDATE：branch 已是預設分支（`origin/HEAD`，沒有就 `main`／`master`）或其 `origin/` 的祖先（`已合進 …`）；或 squash 合併過——merge 之後結果與預設分支相同（沿用 `memory.mjs` 的 `alreadyIn`，理由寫 `squash 合併進 …`）。
+- CANDIDATE：branch 已是預設分支（`origin/HEAD`，沒有就 `main`／`master`）或其 `origin/` 的祖先（`已合進 …`）；或 squash 合併過——merge 之後結果與預設分支相同（沿用 `git-scene.mjs` 的 `alreadyIn`，理由寫 `squash 合併進 …`）。
 - KEEP：預設分支；主 checkout 目前所在的 branch；你現在所在的 worktree；worktree 有未 commit 的改動（含未追蹤檔）；worktree 有 session 開著，或在 Orca／herdr 裡查不到 session 狀態（在 Orca／herdr 之外跑就不查這項，先用 `close` 關掉再清）；detached HEAD 的 worktree；還沒合併的 branch；和預設分支指向同一個 commit 的 branch（沒有自己的 commit，可能剛開，分不出「已合併」與「剛建立」，所以不動）。
 
 清理方式：

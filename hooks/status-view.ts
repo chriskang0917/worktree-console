@@ -18,7 +18,7 @@ export function statusCell(status: string, tick: number, { primary = false, anim
   if (primary && status === '等待回應') return { ...result, glyph: ANIMATION_FRAMES.attention[Math.floor(Math.max(0, tick) / 6) % 2]! }
   return result
 }
-export const columns = (text: string) => [...text].reduce((n, c) => n + (c.codePointAt(0)! > 0x2e80 ? 2 : 1), 0)
+export const columns = (text: string) => [...text].reduce((n, c) => n + (c.codePointAt(0)! > 0x2e80 || /\p{Emoji_Presentation}/u.test(c) ? 2 : 1), 0)
 export function truncateColumns(text: string, max: number): string {
   if (columns(text) <= max) return text
   let result = ''

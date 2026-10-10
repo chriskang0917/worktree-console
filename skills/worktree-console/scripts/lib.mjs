@@ -5,7 +5,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clip, isConsoleSession, readEvents, transcriptFor, writeManaged } from "./log.mjs";
 import { CACHE_HANDOFF_TEXT, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../../../hooks/auto-handoff.mjs";
-import { habitCell, habitFor, itemScene, memoryContext, memoryNotes, proposalLines, unreadableNotes } from "./memory.mjs";
 import { maybeTerminals, terminals } from "./terminals.mjs";
 
 export { orcaBin, runOrca } from "./terminals.mjs";
@@ -1189,11 +1188,10 @@ export function hiddenTally(list) {
 export function afterSendLines(rows, exclude, extra = []) {
   const items = pendingItems(rows, exclude);
   if (items.some((x) => x.session.status.kind !== "done")) return pendingLines(items);
-  const notes = habitNotes();
-  return [...boardLines(rows, extra), ...(notes.length > 0 ? ["", ...notes] : [])];
+  return boardLines(rows, extra);
 }
 
-const PENDING_HEAD = ["狀態", "代號", "問題", "選項", "建議", "你通常會回"];
+const PENDING_HEAD = ["狀態", "代號", "問題", "選項", "建議"];
 const RECOMMENDED_MARK = /\s*[(（]\s*(recommended|建議|推薦)\s*[)）]/gi;
 const OPTION_MARK = /\s*[(（]\s*(?:recommended|我的建議|建議|推薦)\s*[)）]/i;
 const MARK_NEXT = "(?=\\s*[(（]\\s*(?:[Rr]ecommended|我的建議|建議|推薦)\\s*[)）])";
@@ -1411,73 +1409,25 @@ function clipOptions(text, max) {
   return clipWidth(draw(3), max);
 }
 
-// What you usually answer for each pending item, copied from your past replies; never a judgement of its own.
-export function withHabits(items) {
-  let ctx = null;
-  try {
-    ctx = memoryContext();
-  } catch {}
-  return items.map((x) => {
-    let habit = null;
-    let scene = null;
-    try {
-      scene = ctx ? itemScene(x) : null;
-      habit = ctx ? habitFor(ctx, x, scene) : null;
-    } catch {}
-    return { ...x, habit, scene };
-  });
-}
-
-// 「要記住這個習慣嗎？」 for every scene, for the bottom of the reply list.
-export function habitNotes() {
-  try {
-    return memoryNotes(memoryContext());
-  } catch {
-    return [];
-  }
-}
-
-// 「要記住這個習慣嗎？」 for one scene, to hang under a question of that scene.
-export function sceneNotes(scene) {
-  if (!scene) return [];
-  try {
-    return proposalLines(memoryContext(), scene);
-  } catch {
-    return [];
-  }
-}
-
-// memory.md entries the script cannot read; only 狀態 shows them.
-export function unreadableMemory() {
-  try {
-    return unreadableNotes(memoryContext());
-  } catch {
-    return [];
-  }
-}
-
 function pendingLines(items, width = BOARD_WIDTH) {
-  const rows = withHabits(items).flatMap((x) =>
-    x.entries.map((e, i) => [LABELS[x.session.status.kind], e.code, i === 0 ? recycledMark(x.session, e.question) : e.question, e.options, e.suggest, i === 0 ? habitCell(x.habit) : "—"].map(cell)),
+  const rows = items.flatMap((x) =>
+    x.entries.map((e, i) => [LABELS[x.session.status.kind], e.code, i === 0 ? recycledMark(x.session, e.question) : e.question, e.options, e.suggest].map(cell)),
   );
   const widest = (i) => Math.max(displayWidth(PENDING_HEAD[i]), ...rows.map((c) => displayWidth(c[i])));
   const room = width - (3 * PENDING_HEAD.length + 1) - widest(0) - widest(1);
-  const caps = shareRoom([2, 3, 4, 5].map(widest), room);
-  const notes = habitNotes();
+  const caps = shareRoom([2, 3, 4].map(widest), room);
   return [
     "### 📋 待回覆",
     "",
     `| ${PENDING_HEAD.join(" | ")} |`,
     `|${" --- |".repeat(PENDING_HEAD.length)}`,
     ...rows.map((c) => `| ${[c[0], c[1], ...caps.map((w, k) => (k === 1 ? clipOptions(c[3], w) : clipWidth(c[k + 2], w)))].join(" | ")} |`),
-    ...(notes.length > 0 ? ["", ...notes] : []),
   ];
 }
 
 export function pendingBlock(rows, exclude = new Set()) {
   const items = pendingItems(rows, exclude);
-  if (items.length > 0) return pendingLines(items);
-  return habitNotes();
+  return items.length > 0 ? pendingLines(items) : [];
 }
 
 // Pending todo tickets as a 代號｜票號｜標題 table (代號 a, b, c…) clipped to `width`; nothing at all when there are none.
