@@ -1,5 +1,9 @@
 # Changelog
 
+## task-list 0.1.0
+
+- 新增 `task-list` plugin：建立本機任務與待辦項目，提交並驗收證據（任務內檔案、URL 或一般文字），以文字圖與時間線查看進度，並可先預覽再確認地結案、封存證據。需要 Node.js、macOS／Linux 與支援程序啟動時間的 `ps`。
+
 ## 1.2.0
 
 - Switching tabs right after `0` opens the side panel no longer leaves the highlight on a card number; it lands on the selected card's name.

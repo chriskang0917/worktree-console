@@ -7,14 +7,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dir = "mods/focus-show";
-const manifest = `${dir}/.claude-plugin/plugin.json`;
 
 const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8" });
 const versionOf = (text) => JSON.parse(text).version;
 
-// focus-show 是另一個 plugin，有自己的版號；程式改了版號沒升，/plugin 不會更新它，裝著的舊版就跟橫條對不上。
-test("mods/focus-show 自上次升版後有改動，就要升它自己的版號", (t) => {
+// Each independently installed plugin needs a new version for its changes to reach existing users.
+for (const dir of ["mods/focus-show", "plugins/task-list"]) test(`${dir} 自上次升版後有改動，就要升它自己的版號`, (t) => {
+  const manifest = `${dir}/.claude-plugin/plugin.json`;
   const bumped = git("log", "-1", "--format=%H", "-G", '"version"', "--", manifest).stdout.trim();
   if (!bumped) return t.skip("沒有 git 歷史可比對");
   const changed = git("diff", "--name-only", bumped, "--", dir, `:!${manifest}`).stdout.trim();

@@ -61,6 +61,16 @@ Open Claude Code in an Orca or herdr tab inside one of your repos, then:
 
 State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
 
+## Install task-list (optional)
+
+`task-list` is a separate plugin for local task lists: create tasks, track items, submit and review evidence, and view a text graph with a committed-event timeline.
+
+```text
+/plugin install task-list@worktree-console
+```
+
+It needs Node.js, macOS or Linux, and `ps` supporting `ps -p <pid> -o lstart=`; if the process identity cannot be checked, writes stop safely. Explicit `task close` previews the evidence it would archive; `--yes` applies only after outstanding work and unread reports are resolved and the preview revision and evidence checksum still match. See the [task-list README](./plugins/task-list/README.md) for commands, storage, evidence and acceptance. Disable or uninstall it with `claude plugin`; task data is kept.
+
 ## Customizing the console prompt
 
 Every time the console starts, it reads one prompt file in full and follows it. The built-in one is nearly empty. To use your own:
