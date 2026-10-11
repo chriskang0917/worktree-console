@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
+- Switching tabs right after `0` opens the side panel no longer leaves the highlight on a card number; it lands on the selected card's name.
 - Removed the `狀態` command: typing it now goes to the conversation like any other text, and the side panel opens only from the band's `0`. On Claude Code 2.1.295 and later a dropped prompt stays in the input box, which kept the panel from taking the keys.
 - Removed the reply-habit memory: the reply list no longer has a 你通常會回 column, nothing asks to remember a habit any more, and `memory.mjs` with its replay, remember and decline commands is gone. The scripts no longer read or write `~/.worktree-console/memory.md`; an existing file is left as it is.
 - `0` opens the side panel at any terminal width; it no longer waits undrawn below 144 columns.
