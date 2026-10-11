@@ -359,19 +359,21 @@ function showTab(t: Tab) {
 // `ui.focus` hook, so the held index is written where it is asked.
 let repin = false
 let repinTries = 0
+let repinGen = 0
 let drawing = 0
 const FRAME_MS = 50
 const REPIN_TRIES = 10
-const startRepin = () => ((repin = true), (repinTries = 0))
+const startRepin = () => ((repin = true), (repinTries = 0), (repinGen += 1))
 
-async function focusSel($: EngineInterface, at: number) {
+async function focusSel($: EngineInterface, at: number, gen: number) {
   if (at !== drawing) return
+  const endRepin = () => void (gen === repinGen && (repin = false))
   const pane = (await $.ui.panes().catch(() => [])).find(p => p.id === PANE)
-  if (!sel || !pane?.isFocused) return void (repin = false)
+  if (!sel || !pane?.isFocused) return endRepin()
   const want = `name:${sel}`
   const res = await $.ui.focus({ requestId: PANE, key: want }).catch(() => ({ deny: 'failed' }))
-  if (!res.deny && at === drawing) return void ((held = ring.indexOf(want)), (repin = false))
-  if (res.deny && ++repinTries >= REPIN_TRIES) return void (repin = false)
+  if (!res.deny && at === drawing) return void ((held = ring.indexOf(want)), endRepin())
+  if (res.deny && ++repinTries >= REPIN_TRIES) return endRepin()
   $.ui.invalidate('ui.render')
 }
 
@@ -499,7 +501,10 @@ export const register: Register = on => {
     syncAnimation($)
     ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
     const at = (drawing += 1)
-    if (repin) $.clock.after(FRAME_MS, () => void focusSel($, at))
+    if (repin) {
+      const gen = repinGen
+      $.clock.after(FRAME_MS, () => void focusSel($, at, gen))
+    }
     // Keep the selected label intact; only unselected labels shorten below 46 columns.
     const tabLabels = TABS.map(x => `${modern && cols < 46 && x.id !== tab ? '' : `${x.label} `}${rowsOf(x.id).length}`)
     const tabIndex = TABS.findIndex(x => x.id === tab)
