@@ -19,6 +19,9 @@
 - `mods/focus-show` is a separate plugin with its own `version` in
   `mods/focus-show/.claude-plugin/plugin.json`. Bump it whenever anything
   under `mods/focus-show` changes; `npm test` fails otherwise.
+- `plugins/task-list` is a separate plugin with its own `version` in
+  `plugins/task-list/.claude-plugin/plugin.json`. Bump it whenever anything
+  under `plugins/task-list` changes; `npm test` fails otherwise.
 
 ## Language
 

@@ -113,11 +113,12 @@ test("「agent-skills:」只出現在 README 與舊對話紀錄的測試資料",
   assert.deepEqual(hits, []);
 });
 
-test("plugin 名稱是 worktree-console；marketplace 列出 worktree-console 與 focus-show", () => {
+test("plugin 名稱是 worktree-console；marketplace 列出 worktree-console、focus-show 與 task-list", () => {
   assert.equal(json(".claude-plugin/plugin.json").name, "worktree-console");
   const market = json(".claude-plugin/marketplace.json");
-  assert.deepEqual(market.plugins.map((p) => [p.name, p.source]), [["worktree-console", "."], ["focus-show", "./mods/focus-show"]]);
+  assert.deepEqual(market.plugins.map((p) => [p.name, p.source]), [["worktree-console", "."], ["focus-show", "./mods/focus-show"], ["task-list", "./plugins/task-list"]]);
   assert.equal(json("mods/focus-show/.claude-plugin/plugin.json").name, "focus-show");
+  assert.equal(json("plugins/task-list/.claude-plugin/plugin.json").name, "task-list");
 });
 
 test("hooks.json 註冊專注橫條、自動交棒與過程紀錄，指到的檔案都在", () => {
