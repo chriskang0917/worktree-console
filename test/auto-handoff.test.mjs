@@ -373,3 +373,18 @@ test("headless（claude -p）session 不交棒", () => {
   const s = scenario([e], { config: ON });
   assert.equal(s.run("stop").out, "");
 });
+
+test("Stop hook 記下這一輪結束的時間給中控台判斷；擋下要求寫交棒說明（這一輪還沒結束）時不記", () => {
+  const ended = (s) => path.join(s.dir, "console", "turn-ends", `${s.session}.json`);
+  const quiet = scenario([user("做事"), reply(OPUS, 10_000)], { config: ON, orca: false });
+  const before = Date.now();
+  assert.equal(quiet.run("stop").out, "");
+  const at = JSON.parse(fs.readFileSync(ended(quiet), "utf8")).at;
+  assert.ok(at >= before && at <= Date.now(), "記下停下的時間");
+  const off = scenario([user("做事"), reply(OPUS, 10_000)], { orca: false });
+  off.run("stop");
+  assert.ok(fs.existsSync(ended(off)), "沒開自動交棒也照記");
+  const busy = scenario([user("做事"), reply(OPUS, 401_000)], { config: ON, orca: false });
+  assert.equal(busy.run("stop").json?.decision, "block");
+  assert.equal(fs.existsSync(ended(busy)), false, "擋下時這一輪還在跑，不記");
+});

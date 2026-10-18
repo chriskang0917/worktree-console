@@ -1,10 +1,9 @@
 import fs from "node:fs";
-import { CACHE_HANDOFF_TEXT } from "../../../hooks/auto-handoff.mjs";
+import { CACHE_HANDOFF_TEXT, measure, readConfig } from "../../../hooks/auto-handoff.mjs";
 import { KEEPALIVE_REPLY, KEEPALIVE_TEXT, sessionTag, sessionTranscript, takeoverPrompt, watcherPrompt } from "./lib.mjs";
 
 // The prompt cache lives an hour from the last model call; 10 minutes are left for polling and writing the handoff note.
 export const KEEPALIVE_AFTER_MS = 50 * 60 * 1000;
-export const HANDOFF_TOKENS = 150_000;
 const PRUNE_MS = 24 * 60 * 60 * 1000;
 const MENU_TOOL = "AskUserQuestion";
 
@@ -32,10 +31,10 @@ function entriesOf(file) {
 
 const mainUsage = (e) => e.type === "assistant" && !e.isSidechain && e.message?.usage && e.message.model !== "<synthetic>";
 
-// Tokens the last model call sent: everything in the context window.
-export function contextTokens(entries) {
-  const u = entries.findLast(mainUsage)?.message.usage;
-  return u ? (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) : null;
+// The context the last model call sent and the window it counts against, as the auto-handoff hook measures it.
+export function contextUse(entries) {
+  const m = measure(entries);
+  return m ? { used: m.used, window: m.window } : null;
 }
 
 const lastKeepalive = (entries) =>
@@ -77,12 +76,13 @@ export function sessionEntries(row, session) {
  * One watcher poll over every session: returns the new state, what to send and the lines to print.
  * Per pane: sent (keepalive on its way) → kept (it stopped again) → handing (cache handoff sent) or expired (left to expire);
  * fresh marks the session that took over, untouched until you reply. A reply from you drops the record.
+ * The cache handoff only takes a kept 💬 whose context is past the auto-handoff share of its window.
  */
 export function keepaliveStep(
   rows,
   prev,
   now = Date.now(),
-  { contextOf = (row, s) => contextTokens(sessionEntries(row, s)), replyOf = (row, s) => keepaliveReply(sessionEntries(row, s)) } = {},
+  { contextOf = (row, s) => contextUse(sessionEntries(row, s)), replyOf = (row, s) => keepaliveReply(sessionEntries(row, s)), ratio = readConfig().ratio } = {},
 ) {
   const state = {};
   const actions = [];
@@ -112,11 +112,12 @@ export function keepaliveStep(
           actions.push({ type: "kept", row, session, tag });
         } else rec = { ...rec, phase: "expired" };
       } else if (rec.phase === "kept" && agent && stopAt === rec.keptAt && keepable(session, status) && now - rec.keptAt >= KEEPALIVE_AFTER_MS) {
-        const tokens = contextOf(row, session);
-        if (typeof tokens === "number" && tokens >= HANDOFF_TOKENS) {
+        const ctx = rec.status?.kind === "waiting" ? contextOf(row, session) : null;
+        const tokens = ctx?.used ?? null;
+        if (ctx && ctx.used >= ratio * ctx.window) {
           rec = { ...rec, phase: "handing", handAt: now, tokens };
           actions.push({ type: "handoff", row, session, tag, text: CACHE_HANDOFF_TEXT, tokens });
-        } else rec = { ...rec, phase: "expired", tokens: tokens ?? null };
+        } else rec = { ...rec, phase: "expired", tokens };
       }
       if (rec) state[session.paneKey] = { ...rec, at: now };
     }

@@ -38,12 +38,13 @@
 
 ## 狀態怎麼判斷
 
-herdr 只回報 idle／working／blocked／done／unknown，中控台再讀子 session 的對話紀錄（herdr 給的 session id，或 console-log hook 登記的檔案）補上細節：
+herdr 只回報 idle／working／blocked／done／unknown，而且常在這一輪還沒結束時就說停了；中控台再讀子 session 的對話紀錄（herdr 給的 session id，或 console-log hook 登記的檔案）與 Stop hook 記下的這一輪結束時間（`~/.config/worktree-console/turn-ends/<session id>.json`，plugin 的 Stop hook 每次停下都會寫，被 hook 擋下繼續跑的那次不寫）補上細節：
 
-- blocked：紀錄最後一筆還在等的工具是提問選單 → 💬 等待回應（選項從紀錄讀出）；其他工具 → 🔐 等待授權（附工具名稱與內容）。
-- unknown：紀錄最後一筆是 Claude 回完話 → 照一般規則判 ⏸ 回覆完畢或 💬 等待回應；工具還在跑 → 🔄 執行中，畫面上開著授權框或選單 → 照 blocked 規則分類。
-- idle／done：herdr 看過的完成也會變 idle，所以紀錄裡下過指令且回完話就算 ⏸ 回覆完畢，沒下過指令才算 💤 閒置。
-- blocked 或 unknown 但紀錄讀不到（hook 沒登記、檔案損毀）→ **⚠️ session 異常，需手動排程**：排在待回覆與專注排隊的最前面，詳情附子 session 畫面；使用者回它時原文照送（打字＋Enter，不轉成 a、b、c），送完回一行 `[代號] 已原文送出（session 異常，請到分頁確認）`。
+- 紀錄停在還沒回覆的提問選單：不管 herdr 回報什麼，一律 💬 等待回應（選項從紀錄讀出），回 a、b 走選單代答。
+- blocked：紀錄裡在等的是其他工具 → 🔐 等待授權（附工具名稱與內容）。選單與授權框跳出來就照這兩條立刻顯示，不等 Stop hook。
+- idle／done／unknown：這一輪真的結束才算停下——Stop hook 記下的結束時間晚於紀錄最後一筆（被使用者中斷、API 錯誤這種不經 Stop hook 的結束也算）；讀不到 Stop hook 紀錄時，改看紀錄最後一筆是不是 Claude 回完話。停下後照一般規則判 ⏸ 回覆完畢或 💬 等待回應（看最後一則回覆有沒有問句），沒下過指令算 💤 閒置；還沒結束就是 🔄 執行中，不出題、不進排隊。工具還在跑 → 🔄 執行中，畫面上開著授權框 → 🔐。
+- 回報的原文是使用者上一則指令之後、這一輪 Claude 說的所有文字（中間跑過工具也接在一起），不只最後一段。
+- 讀不到紀錄先等 30 秒：herdr 新開的分頁還沒有對話紀錄（回 unknown），或 herdr 回 blocked 但紀錄還沒寫進那筆工具呼叫，都先顯示 🔄 執行中；30 秒內紀錄跟上就照紀錄分類，持續 30 秒以上仍讀不到（hook 沒登記、檔案損毀）才判 **⚠️ session 異常，需手動排程**：排在待回覆與專注排隊的最前面，詳情附子 session 畫面；使用者回它時原文照送（打字＋Enter，不轉成 a、b、c），送完回一行 `[代號] 已原文送出（session 異常，請到分頁確認）`。等待起點記在 `herdr-grace.json`。
 
 每次讀狀態腳本都會在 `~/.config/worktree-console/herdr-audit.jsonl` 寫一筆對照紀錄（herdr 原始狀態、中控台顯示的狀態、只從對話紀錄與畫面推出的狀態，三者不一致時標出），中控台不讀、不改它。
 

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentStatus, claudeProjectDir, consoleHome, git, gitWorktrees, goalInTranscript, lastInstruction, realpath, sessionTag, typedPrompt } from "./lib.mjs";
+import { agentStatus, claudeProjectDir, consoleHome, git, gitWorktrees, goalInTranscript, lastInstruction, realpath, sessionTag, turnEndAt, turnEntry, turnOver, typedPrompt } from "./lib.mjs";
 import { transcriptFor } from "./log.mjs";
 import { terminalError } from "./terminals.mjs";
 
@@ -12,6 +12,8 @@ const MENU_TOOL = "AskUserQuestion";
 const REPOS = "herdr-repos.json";
 const WORKTREES = "herdr-worktrees.json";
 export const AUDIT = "herdr-audit.jsonl";
+const GRACE = "herdr-grace.json";
+const GRACE_KEEP_MS = 24 * 60 * 60 * 1000;
 const TAIL_BYTES = 2 * 1024 * 1024;
 const ENDED = new Set(["end_turn", "stop_sequence", "max_tokens", "refusal"]);
 const INTERRUPTED = /^\[Request interrupted by user/;
@@ -201,11 +203,13 @@ function isPrompt(entry) {
 }
 
 // Where the main conversation stands: fresh (no instruction yet), running, tool (a call without its result), replied.
+// `text` is everything said since the last instruction, `final` the last message of it; `turn` is the last entry a turn wrote.
 export function transcriptState(entries, { truncated = false } = {}) {
   const open = new Map();
   let last = null;
+  let turn = null;
   let prompted = truncated;
-  let text = "";
+  let said = [];
   let at = null;
   for (const e of entries) {
     if (e.isSidechain || (e.type !== "user" && e.type !== "assistant")) continue;
@@ -214,21 +218,48 @@ export function transcriptState(entries, { truncated = false } = {}) {
       for (const p of parts) if (p.type === "tool_result") open.delete(p.tool_use_id);
       if (isPrompt(e)) {
         prompted = true;
-        text = "";
+        said = [];
       }
     } else {
       for (const p of parts) if (p.type === "tool_use") open.set(p.id, p);
-      const said = parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n").trim();
-      if (said) text = said;
+      const text = parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n").trim();
+      if (text) said.push(text);
     }
     last = e;
+    turn = turnEntry(e) ?? turn;
     const t = Date.parse(e.timestamp ?? "");
     if (!Number.isNaN(t)) at = t;
   }
   const pending = [...open.values()].at(-1) ?? null;
   const ended = last?.type === "assistant" ? ENDED.has(last.message?.stop_reason) : !!last && INTERRUPTED.test(promptText(last));
   const phase = pending ? "tool" : !prompted ? "fresh" : ended ? "replied" : "running";
-  return { phase, pending: pending ? { name: pending.name, input: pending.input } : null, text, at, prompt: typedPrompt(lastInstruction(entries) ?? "") };
+  return { phase, pending: pending ? { name: pending.name, input: pending.input } : null, text: said.join("\n\n"), final: said.at(-1) ?? "", at, turn, prompt: typedPrompt(lastInstruction(entries) ?? "") };
+}
+
+const graceMs = () => Number(process.env.HERDR_GRACE_MS ?? 30_000);
+
+// How long a pane has waited on its transcript (no transcript yet, or herdr's blocked before the tool call is written),
+// from the first read that saw it; null clears the wait.
+function waitedFor(pane, waiting, now = Date.now()) {
+  const all = readJson(GRACE, {});
+  const since = all[pane]?.since;
+  if (!waiting) {
+    if (since === undefined) return 0;
+    delete all[pane];
+  } else if (typeof since === "number") return now - since;
+  else {
+    for (const [k, v] of Object.entries(all)) if (now - (v?.since ?? 0) > GRACE_KEEP_MS) delete all[k];
+    all[pane] = { since: now };
+  }
+  try {
+    writeJson(GRACE, all);
+  } catch {}
+  return 0;
+}
+
+// The turn is over when the Stop hook says so; without its record, when the transcript's last entry ends the turn.
+function turnDone(t, file) {
+  return turnOver(t.turn, turnEndAt(path.basename(file, ".jsonl"))) ?? t.phase === "replied";
 }
 
 export function promptOnScreen(lines) {
@@ -248,11 +279,12 @@ function inferredKind(t, file, onScreen) {
   if (t.phase === "running") return "busy";
   if (t.phase === "tool") return promptOnScreen(onScreen()) ? (t.pending.name === MENU_TOOL ? "waiting" : "permission") : "busy";
   if (goalInTranscript(file) === true) return "busy";
-  return agentStatus({ state: "done", lastAssistantMessage: t.text }).kind;
+  return agentStatus({ state: "done", lastAssistantMessage: t.text, finalMessage: t.final }).kind;
 }
 
-// herdr's idle/working/blocked/done/unknown turned into Orca's agent shape: blocked is told apart by the pending tool
-// in the transcript, unknown is filled in from it, and neither readable makes the session an anomaly.
+// herdr's idle/working/blocked/done/unknown turned into Orca's agent shape. An open menu in the transcript wins over
+// whatever herdr says; blocked is told apart by the pending tool; done/idle/unknown count as stopped only once the turn
+// is over. A transcript that stays unreadable (or behind herdr's blocked) for 30 s makes the session an anomaly.
 export function herdrAgent(a, readScreen = screenLines) {
   const raw = a.agent_status ?? "unknown";
   const file = transcriptFile(a);
@@ -260,19 +292,24 @@ export function herdrAgent(a, readScreen = screenLines) {
   const t = read ? transcriptState(read.entries, { truncated: read.truncated }) : null;
   let lines;
   const onScreen = () => (lines ??= readScreen(a.pane_id) ?? []);
+  const behind = raw === "blocked" ? t?.phase !== "tool" : raw === "unknown" && !t;
+  const lost = waitedFor(a.pane_id, behind) >= graceMs();
   let state;
-  if (raw === "working") state = "working";
-  else if (raw === "blocked") state = t?.phase === "tool" ? "blocked" : "anomaly";
-  else if (raw === "done" || raw === "idle") state = !t ? raw : t.phase === "fresh" ? "idle" : "done";
-  else if (!t) state = "anomaly";
+  if (t?.phase === "tool" && t.pending.name === MENU_TOOL) state = "blocked";
+  else if (behind) state = lost ? "anomaly" : "working";
+  else if (raw === "blocked") state = "blocked";
+  else if (raw === "working") state = "working";
+  else if (!t) state = raw;
+  else if (t.phase === "fresh") state = "idle";
   else if (t.phase === "tool") state = promptOnScreen(onScreen()) ? "blocked" : "working";
-  else state = t.phase === "replied" ? "done" : t.phase === "fresh" ? "idle" : "working";
+  else state = turnDone(t, file) ? "done" : "working";
   const blocked = state === "blocked";
   return {
     paneKey: a.pane_id,
     state,
     prompt: t?.prompt ?? "",
     lastAssistantMessage: t?.text ?? "",
+    finalMessage: t?.final ?? "",
     stateStartedAt: t?.at ?? null,
     toolName: blocked ? t.pending.name : null,
     toolInput: blocked ? toolInput(t.pending.name, t.pending.input) : null,
