@@ -62,14 +62,23 @@ test("內建 prompt 只有〈中控台〉一段並說明怎麼自訂；範本多
   assert.match(item.entries[0].suggest, /^b/);
 });
 
+test("待回覆的判定不變：已推送又閒置的 session 不進待回覆，已推送又回覆完畢的仍進", () => {
+  const row = (kind) => ({ repo: "app", label: "PROJ-1", ticket: "PROJ-1", branch: "proj-1", title: "x", stage: "已推送", sessions: [{ n: null, handle: "h", agent: null, status: { kind, text: kind === "done" ? "做完了" : "" } }] });
+  assert.deepEqual(pendingItems([row("idle")]), []);
+  assert.equal(pendingItems([row("done")]).length, 1);
+});
+
 test("看板對齊列：一律是「等你確認開工」", () => {
   assert.equal(aligningRow("PROJ-1", "x", "app").activity, "等你確認開工");
 });
 
-test("README 說明怎麼客製中控台 prompt 與需求訪談要守的格式", () => {
-  const readme = read("README.md");
-  const section = readme.slice(readme.indexOf("## Customizing the console prompt"), readme.indexOf("## Development"));
-  for (const want of ["~/.config/worktree-console/prompt.md", "templates/prompt.md", "## 需求訪談", "## 中控台", "定稿完成：", ".goals/<slug>.md", "建議："]) assert.ok(section.includes(want), want);
+test("README 說明怎麼客製中控台 prompt 與需求訪談要守的格式（中英兩份）", () => {
+  for (const [file, from, to] of [["README.en.md", "## Customizing the console prompt", "## Look and feel"], ["README.md", "## 自訂中控台 prompt", "## 外觀"]]) {
+    const readme = read(file);
+    const section = readme.slice(readme.indexOf(from), readme.indexOf(to));
+    assert.ok(readme.includes(from) && readme.includes(to), file);
+    for (const want of ["~/.config/worktree-console/prompt.md", "templates/prompt.md", "## 需求訪談", "## 中控台", "定稿完成：", ".goals/<slug>.md", "建議："]) assert.ok(section.includes(want), `${file}: ${want}`);
+  }
 });
 
 test("開工與交棒說明：做不做需求訪談看中控台 prompt 有沒有那一段；/goal 規則寫在中控台自己的交棒說明", () => {
@@ -107,17 +116,18 @@ test("repo 自給自足：沒有 import 或路徑指到 repo 外", () => {
 
 test("「agent-skills:」只出現在 README 與舊對話紀錄的測試資料", () => {
   const hits = [];
-  for (const file of tracked().filter((f) => f !== "README.md" && !f.startsWith("test/"))) {
+  for (const file of tracked().filter((f) => f !== "README.md" && f !== "README.en.md" && !f.startsWith("test/"))) {
     for (const line of read(file).split("\n")) if (line.includes("agent-skills:")) hits.push(`${file}: ${line.trim().slice(0, 80)}`);
   }
   assert.deepEqual(hits, []);
 });
 
-test("plugin 名稱是 worktree-console；marketplace 列出 worktree-console、focus-show 與 task-list", () => {
+test("plugin 名稱是 worktree-console；marketplace 列出 worktree-console、focus-show、tool-dots 與 task-list", () => {
   assert.equal(json(".claude-plugin/plugin.json").name, "worktree-console");
   const market = json(".claude-plugin/marketplace.json");
-  assert.deepEqual(market.plugins.map((p) => [p.name, p.source]), [["worktree-console", "."], ["focus-show", "./mods/focus-show"], ["task-list", "./plugins/task-list"]]);
+  assert.deepEqual(market.plugins.map((p) => [p.name, p.source]), [["worktree-console", "."], ["focus-show", "./mods/focus-show"], ["tool-dots", "./mods/tool-dots"], ["task-list", "./plugins/task-list"]]);
   assert.equal(json("mods/focus-show/.claude-plugin/plugin.json").name, "focus-show");
+  assert.equal(json("mods/tool-dots/.claude-plugin/plugin.json").name, "tool-dots");
   assert.equal(json("plugins/task-list/.claude-plugin/plugin.json").name, "task-list");
 });
 

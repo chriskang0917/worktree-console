@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.0
+
+- The side panel has three tabs, 待回覆 (q), 全部 (w) and 封存 (e); the 閒置 tab and its `r` key are gone, and the footer reads `qwe 切分頁`. 全部 now lists every session that is not archived, idle ones included with their 閒置 status, so a pushed session that went idle no longer drops out of every tab. What counts as 待回覆 is unchanged.
+- The focus band's header carries `9: 顯示問題 · 8: 延後處理` on its right, in the theme's dim colour (only `9: 顯示問題` while the queue is empty); the row of buttons under the question is gone and its row goes to the question. On a narrow band the name is cut with `…` and both buttons stay whole on the one row. The keys 9 and 8 work as before.
+- Removed the classic appearance: the panel and band have one look. The `appearance` setting is gone; a `config.json` that still has it toasts once 「appearance 已移除，一律用預設外觀」 and the panel draws as usual.
+- The README is in Traditional Chinese now, with the English one in `README.en.md`; each links to the other at the top. The same goes for the task-list README.
+- New `tool-dots` mod in this marketplace, a separate plugin (see `tool-dots 0.1.0`). CI runs `claude plugin test mods/tool-dots`.
+
+## tool-dots 0.1.0
+
+- New `tool-dots` plugin: a run of tool calls with no reply text or message of yours between them draws as one line, a dot per call (yellow running, green done, red failed) and then `tool_call: Bash ×3 · Read ×2` in the order each tool first ran, with ` - N error(s)` when any failed. Reminders riding on a tool result do not split a run. Past 24 calls a dim `+N` follows the dots; MCP tools show as `server:tool`. Folded, result blocks are hidden; ctrl+o (or `--verbose`) shows every call and its result as usual.
+
+## task-list 0.1.1
+
+- The README is in Traditional Chinese, with the English one in `README.en.md`; each links to the other at the top.
+
 ## task-list 0.1.0
 
 - 新增 `task-list` plugin：建立本機任務與待辦項目，提交並驗收證據（任務內檔案、URL 或一般文字），以文字圖與時間線查看進度，並可先預覽再確認地結案、封存證據。需要 Node.js、macOS／Linux 與支援程序啟動時間的 `ps`。

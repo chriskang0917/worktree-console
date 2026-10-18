@@ -12,7 +12,7 @@ const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8" })
 const versionOf = (text) => JSON.parse(text).version;
 
 // Each independently installed plugin needs a new version for its changes to reach existing users.
-for (const dir of ["mods/focus-show", "plugins/task-list"]) test(`${dir} 自上次升版後有改動，就要升它自己的版號`, (t) => {
+for (const dir of ["mods/focus-show", "mods/tool-dots", "plugins/task-list"]) test(`${dir} 自上次升版後有改動，就要升它自己的版號`, (t) => {
   const manifest = `${dir}/.claude-plugin/plugin.json`;
   const bumped = git("log", "-1", "--format=%H", "-G", '"version"', "--", manifest).stdout.trim();
   if (!bumped) return t.skip("沒有 git 歷史可比對");

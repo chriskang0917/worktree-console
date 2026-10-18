@@ -1,40 +1,43 @@
-> **Language note:** the skills, their prompts and everything the console prints are in Traditional Chinese (zh-TW). This README is in English; translation is planned.
+[English](./README.en.md)｜[中文](./README.md)
+
+> **語言說明：** skill、它們的 prompt，以及中控台印出的所有內容都是繁體中文。這是中文版 README；英文版見 [README.en.md](./README.en.md)。
 
 <h1 align="center">worktree-console</h1>
 
 <p align="center">
-  <a href="#install">Install</a> ·
-  <a href="#usage">Usage</a> ·
-  <a href="#customizing-the-console-prompt">Customizing</a> ·
-  <a href="#development">Development</a> ·
-  <a href="./CHANGELOG.md">Changelog</a> ·
-  <a href="./LICENSE">MIT License</a>
+  <a href="#安裝">安裝</a> ·
+  <a href="#使用方式">使用方式</a> ·
+  <a href="#自訂中控台-prompt">自訂</a> ·
+  <a href="#開發">開發</a> ·
+  <a href="./CHANGELOG.md">更新紀錄</a> ·
+  <a href="./LICENSE">MIT 授權</a>
 </p>
 
-<p align="center"><b>Run a dozen Claude Code sessions from one: a console that starts them, watches them, and brings every question to you.</b></p>
+<p align="center"><b>用一個 Claude Code session 管十幾個：中控台幫你開 session、盯著它們，把每個問題送到你面前。</b></p>
 
-worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https://github.com/stablyai/orca) or [herdr](https://github.com/herdrdev/herdr), and that session becomes the console for every worktree and Claude Code session across all your repos.
+worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/stablyai/orca) 或 [herdr](https://github.com/herdrdev/herdr) 的一個分頁裡打開它，那個 session 就成了你所有 repo 裡每個 worktree 與 Claude Code session 的中控台。
 
-- **Hand it a ticket, get a running session.** Give it a Linear ticket (or just a task). It reads the ticket, finds the parent ticket, proposes a repo and branch name, and after you confirm it creates the worktree and starts a Claude Code session there.
-- **Sessions report back by themselves.** A watcher follows every session. When one stops to ask something, finishes, or needs a permission, the console tells you which ticket it is and what it wants.
-- **Focus mode: one question at a time, answered with one key.** A band above your input box always shows the current question with its options. Answer `b` and the console sends what that session expects (`B`, `2`, or the right menu item). Other questions wait in a queue (`1`–`5` to jump, `8` to put one off, `0` for a side panel with every session as a card). Full reports print straight into the chat without spending tokens. Focus mode needs a Claude Code build with mods (plugin function hooks), plus the separate `focus-show` plugin from this marketplace.
-- **One board for everything.** `現在狀況` prints a table per repo: status, ticket, summary, stage (not started, planning, implementing, pushed) and the latest activity, so you can see where every session is.
-- **Direct, close and archive from one place.** Send instructions to any session by ticket, close a worktree when its branch is merged, or archive sessions you want out of sight.
-- **Automatic handoff.** When a session's context fills past a threshold, or its prompt cache is about to expire while you are away, it writes a handoff note and a fresh session takes over in a new tab. `/worktree-console:handoff` does it on demand.
-- **Context usage notices (off by default).** Turn it on and a session that crosses 30%, 50% or 70% of its real context window is told so, once per band, so a background or headless session can wrap up before the window fills. `node hooks/context-notice.mjs enable`, and `bands 20,40,60` to change the bands.
-- **A log of how you work.** Every console and session event is recorded under `~/.worktree-console/`, so you can look back at what was started, asked and answered.
-- **Make it yours.** On startup the console reads a prompt file you can replace with your own, to add console rules or to have every session interview you before it codes. See [Customizing the console prompt](#customizing-the-console-prompt).
+- **丟一張票，就有一個跑起來的 session。** 給它一張 Linear 票（或直接講任務）。它會讀票、找出母票、提議 repo 與 branch 名稱，你確認後就建好 worktree，並在那裡開一個 Claude Code session。
+- **session 自己回報。** watcher 盯著每個 session。哪個停下來問問題、做完了、或要授權，中控台就告訴你是哪張票、它要什麼。
+- **專注模式：一次一題，按一個鍵就回。** 輸入框上方的橫條永遠顯示目前這題和它的選項。回 `b`，中控台就送出那個 session 要的寫法（`B`、`2` 或正確的選單項目）。其他題在排隊列等著（`1`–`5` 跳過去、`8` 延後、`9` 再印一次題目、`0` 打開側邊面板，每個 session 一張卡片，分成「待回覆、全部、封存」三個分頁）。完整回報直接印進對話，不花 token。專注模式需要支援 mods（plugin 函式 hook）的 Claude Code，以及本 marketplace 另外提供的 `focus-show` plugin。
+- **一張看板看全部。** `現在狀況` 每個 repo 印一張表：狀態、票號、摘要、階段（未開工、規劃中、實作中、已推送）與最後動態，每個 session 走到哪一眼看完。
+- **在同一個地方指揮、關閉、封存。** 用票號對任何 session 下指令，branch 合併後關掉 worktree，或把不想看到的 session 封存起來。
+- **自動交棒。** session 的 context 用量超過門檻，或你不在時 prompt 快取快過期，它會寫一份交棒說明，由新分頁裡的新 session 接手。`/worktree-console:handoff` 可以隨時手動交棒。
+- **context 用量提醒（預設關閉）。** 打開後，session 的實際 context 用量跨過 30%、50%、70% 時各提醒一次，讓背景或無人看管的 session 在用滿前收尾。用 `node hooks/context-notice.mjs enable` 打開，`bands 20,40,60` 改門檻。
+- **工作過程有紀錄。** 中控台與每個 session 的事件都記在 `~/.worktree-console/`，事後可以回頭看開了什麼、問了什麼、回了什麼。
+- **工具呼叫收成一行（選用）。** 另外安裝的 `tool-dots` mod 把連續的工具呼叫收成一行彩色圓點加次數；按 ctrl+o 照樣看得到全部。見〈[安裝 tool-dots](#安裝-tool-dots選用)〉。
+- **照你的習慣改。** 中控台啟動時會讀一份 prompt 檔，你可以換成自己的版本，加上中控台規則，或讓每個 session 寫 code 前先訪談你。見〈[自訂中控台 prompt](#自訂中控台-prompt)〉。
 
-## Install
+## 安裝
 
-Requirements:
+需求：
 
-- [Orca](https://github.com/stablyai/orca) or [herdr](https://github.com/herdrdev/herdr). The console only runs inside one of their tabs.
-- [Node.js](https://nodejs.org/) 20 or later.
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Focus mode also needs a build with mods.
-- Optional: Linear access through Orca (`orca linear …`) for ticket kickoff.
+- [Orca](https://github.com/stablyai/orca) 或 [herdr](https://github.com/herdrdev/herdr)。中控台只在它們的分頁裡運作。
+- [Node.js](https://nodejs.org/) 20 以上。
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)。專注模式另需支援 mods 的版本。
+- 選用：透過 Orca 存取 Linear（`orca linear …`），丟票開工時用。
 
-In Claude Code:
+在 Claude Code 裡：
 
 ```text
 /plugin marketplace add chriskang0917/worktree-console
@@ -42,51 +45,65 @@ In Claude Code:
 /plugin install focus-show@worktree-console
 ```
 
-`focus-show` is only needed for focus mode.
+`focus-show` 只有專注模式需要。
 
-## Usage
+## 使用方式
 
-Open Claude Code in an Orca or herdr tab inside one of your repos, then:
+在 Orca 或 herdr 分頁裡、你的某個 repo 下打開 Claude Code，然後：
 
-| Say | What happens |
+| 輸入 | 會發生什麼 |
 | --- | --- |
-| `/worktree-console:worktree-console` or `開中控台` | Starts the console: board, archived sessions, watcher |
-| `<ticket>`, e.g. `PROJ-123` | Aligns on the ticket, then starts a worktree and session after you confirm |
-| `現在狀況` | Prints the board |
-| `<ticket> 詳情` | Shows what that session has been doing |
-| `b`, or any reply | Answers the question currently on the focus band |
-| `關掉 <ticket>` | Checks the worktree is safe to remove, then closes it |
-| `清理 branch` or `prune` | Lists local branches and worktrees as CANDIDATE or KEEP (merged or squash-merged, with the reason); deletes only after you confirm |
-| `/worktree-console:handoff` | Hands the current session over to a fresh one |
+| `/worktree-console:worktree-console` 或 `開中控台` | 啟動中控台：看板、封存清單、watcher |
+| `<票號>`，例如 `PROJ-123` | 先對齊這張票，你確認後開 worktree 與 session |
+| `現在狀況` | 印出看板 |
+| `<票號> 詳情` | 顯示那個 session 最近在做什麼 |
+| `b` 或任何回覆 | 回答專注橫條上目前這題 |
+| `關掉 <票號>` | 確認 worktree 可以安全移除，再關掉它 |
+| `清理 branch` 或 `prune` | 列出本機 branch 與 worktree，標 CANDIDATE 或 KEEP（已合併或 squash 合併，附原因）；你確認後才刪 |
+| `/worktree-console:handoff` | 把目前的 session 交棒給新的 session |
 
-State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
+狀態存在 `~/.config/worktree-console/`（中控台登記、專注狀態、封存、設定與你自己的 `prompt.md`）、`~/.config/claude-handoff/`（交棒設定與說明）和 `~/.worktree-console/`（過程紀錄）。用到 Linear token 時，它存在 macOS 鑰匙圈的 `worktree-console-linear`。
 
-## Install task-list (optional)
+## 安裝 task-list（選用）
 
-`task-list` is a separate plugin for local task lists: create tasks, track items, submit and review evidence, and view a text graph with a committed-event timeline.
+`task-list` 是另一個 plugin，管本機的任務清單：建立任務、追蹤項目、提交與驗收證據，並用文字圖加上已提交事件的時間線查看進度。
 
 ```text
 /plugin install task-list@worktree-console
 ```
 
-It needs Node.js, macOS or Linux, and `ps` supporting `ps -p <pid> -o lstart=`; if the process identity cannot be checked, writes stop safely. Explicit `task close` previews the evidence it would archive; `--yes` applies only after outstanding work and unread reports are resolved and the preview revision and evidence checksum still match. See the [task-list README](./plugins/task-list/README.md) for commands, storage, evidence and acceptance. Disable or uninstall it with `claude plugin`; task data is kept.
+它需要 Node.js、macOS 或 Linux，以及支援 `ps -p <pid> -o lstart=` 的 `ps`；核對不了程序身分時會安全地停止寫入。明確下 `task close` 會先預覽要封存的證據；`--yes` 要等未完成的工作與未讀的回報都處理完、且預覽的 revision 與證據 checksum 都沒變才會套用。指令、儲存位置、證據與驗收見 [task-list README](./plugins/task-list/README.md)。用 `claude plugin` 停用或解除安裝；任務資料會保留。
 
-## Customizing the console prompt
+## 安裝 tool-dots（選用）
 
-Every time the console starts, it reads one prompt file in full and follows it. The built-in one is nearly empty. To use your own:
+`tool-dots` 是另一個 mod，把對話裡連續的工具呼叫收成一行：每次呼叫一個點（執行中黃、成功綠、失敗紅），接著照各工具第一次出現的先後列出工具與次數，有失敗時再註明幾個：
 
-1. Copy it to `~/.config/worktree-console/prompt.md` (under `$WORKTREE_CONSOLE_HOME` if you set it). Start from [`templates/prompt.md`](./templates/prompt.md) if you want the interview, or from `skills/worktree-console/references/prompt.md` if you don't.
-2. Edit it. When this file exists the console reads only it, never the built-in one, and plugin updates never touch it.
-3. Restart the console. `node <plugin>/skills/worktree-console/scripts/console.mjs prompt` prints which file is in use, whether it is yours, and whether it has an interview section.
+```text
+●●●●● tool_call: Bash ×3 · Read ×2 - 1 error
+```
 
-The file has up to two sections, by heading:
+中間出現回覆文字或你的訊息，就從下一行重新算。超過 24 次時點只畫 24 個，後面接淡色的 `+N`。MCP 工具顯示成 `server:tool`。折疊時工具的結果區塊不顯示；按 ctrl+o（或用 `--verbose`）時，每個工具呼叫和結果照原樣全部顯示。需要支援 mods 的 Claude Code。
 
-- `## 中控台`: extra rules for the console itself, in plain language.
-- `## 需求訪談` (the interview): if this section exists, every ticket starts with an interview before any coding; without it, sessions start coding right away. You can still say "interview this one" or "skip the interview" for a single ticket while aligning.
+```text
+/plugin install tool-dots@worktree-console
+```
 
-During an interview the new session reads your `## 需求訪談` section, asks you questions until the goal is settled, writes a goal file, and stops. The console relays each question to you, then hands the goal to a fresh session to build it. Whatever you write in the section, keep these, or the console loses track:
+## 自訂中控台 prompt
 
-- **Question format.** Ask one question at a time, in plain text (no menus), in this shape. The focus band reads the options from it, and an answer like `b` is sent back by letter.
+中控台每次啟動都會完整讀一份 prompt 檔並照著做。內建的那份幾乎是空的。要用你自己的：
+
+1. 把它複製到 `~/.config/worktree-console/prompt.md`（有設 `$WORKTREE_CONSOLE_HOME` 就放在那底下）。要訪談就從 [`templates/prompt.md`](./templates/prompt.md) 開始，不要就從 `skills/worktree-console/references/prompt.md` 開始。
+2. 編輯它。這個檔存在時中控台只讀它，不讀內建那份，plugin 更新也不會動到它。
+3. 重開中控台。`node <plugin>/skills/worktree-console/scripts/console.mjs prompt` 會印出用的是哪個檔、是不是你的、有沒有訪談段落。
+
+這個檔依標題最多分兩段：
+
+- `## 中控台`：給中控台本身的額外規則，用白話寫。
+- `## 需求訪談`（訪談）：有這一段時，每張票開工前都先訪談、再寫 code；沒有的話 session 直接開工。對齊時仍可以對單張票說「這張要訪談」或「這張不用訪談」。
+
+訪談時，新 session 讀你的 `## 需求訪談` 段落，一題一題問你直到目標定下來，寫出目標檔後停下。中控台把每一題轉給你，再把目標交給新的 session 實作。這一段不管你怎麼寫，下面幾點要保留，否則中控台會跟丟：
+
+- **題目格式。** 一次問一題，用純文字（不要選單），照這個樣子寫。專注橫條從這裡讀出選項，你回 `b` 這類答案時會照字母送回去。
 
   ```text
   **第 N 題：<question>？**
@@ -99,43 +116,41 @@ During an interview the new session reads your `## 需求訪談` section, asks y
   建議：<letter>, <reason>
   ```
 
-  Options use lowercase `a`, `b`, `c`. Put nothing after the options except the `建議：` (recommendation) line.
-- **Goal file.** Write it to `.goals/<slug>.md` in the main checkout, using the slug the first message gives. The handoff turns its `**驗收準則**` (acceptance criteria) list into the checks the building session must show, skipping items marked 🔧 (no test yet) or ⚠️ (needs a human), and fills in the `**實作方案**` (approach) line.
-- **Finish line.** When the goal is settled, reply with only `定稿完成：<absolute path of the goal file>` and wait. The console takes it from there.
+  選項用小寫 `a`、`b`、`c`。選項後面除了 `建議：` 那一行，不要再放別的。
+- **目標檔。** 寫到主 checkout 的 `.goals/<slug>.md`，slug 用第一則訊息給的。交棒時會把它的 `**驗收準則**` 清單轉成實作 session 必須展示的檢查（標 🔧 沒測試、⚠️ 需人工判定的項目略過），並填上 `**實作方案**` 那一行。
+- **收尾。** 目標定下來時，只回 `定稿完成：<目標檔的絕對路徑>` 然後等。接下來由中控台處理。
 
-`templates/prompt.md` is a complete working example: what to ask about, how to write testable acceptance criteria, and the goal file layout.
+`templates/prompt.md` 是一份完整可用的範例：該問什麼、怎麼寫可測的驗收準則，以及目標檔的格式。
 
-## Appearance
+## 外觀
 
-The focus panel uses the `refined` appearance by default: compact status icons and a matching focus band. Each status has its own colour (工作中 green, 待回答 yellow, 待授權 bright magenta, 已回覆 bright cyan, 異常 bright red, 閒置 grey). The stage is a quiet grey tag at the right of the card header from 46 columns up, and the first item of the bottom row below that; 未開工 is not shown. The focus band's name is no longer focusable or clickable; use `9: 顯示問題` to show the question. In both appearances a tab key (pressed again too) puts the selection and keyboard focus on that tab's first card, ↓ then moves one card from there, and `0` opens the panel on 待回覆 with the band's question selected; the other shortcuts and session data are unchanged.
+專注面板與橫條只有一種外觀：精簡的狀態圖示，搭配同風格的專注橫條。每個狀態有自己的顏色（工作中綠、待回答黃、待授權亮洋紅、已回覆亮青、異常亮紅、閒置灰）。46 欄以上時，階段是卡片標題列右側的灰色小標；更窄時放在底列最前面；未開工不顯示。專注橫條的標題列左邊是狀態與代號，右邊用主題的淡色寫 `9: 顯示問題 · 8: 延後處理`（排隊列是空的時只有 `9: 顯示問題`）；橫條太窄時先把代號以 `…` 截短。代號不能聚焦也不能點，要看題目按 `9`。按分頁鍵（`q`、`w`、`e`，重按同一個也算）會把選取和鍵盤焦點放到那個分頁的第一張卡片，之後按 ↓ 從那裡往下一張；`0` 會打開面板到「待回覆」並選中橫條上這題；其他快捷鍵與 session 資料不變。面板的「全部」分頁列出所有沒封存的 session，閒置的也在裡面（卡片照樣標「閒置」）；封存的只出現在「封存」。
 
-Add these keys to your existing `~/.config/worktree-console/config.json` (or `$WORKTREE_CONSOLE_HOME/config.json`); keep any other settings:
+把這些鍵加進你現有的 `~/.config/worktree-console/config.json`（或 `$WORKTREE_CONSOLE_HOME/config.json`），其他設定保留：
 
 ```json
 {
-  "appearance": "refined",
   "theme": "neutral",
   "motion": true
 }
 ```
 
-- **appearance:** `refined` (default) or `classic`. Choose `classic` for the original look of the panel and focus band; it ignores the theme, and uses the same tab and card focus behaviour as `refined`.
-- **theme:** `neutral` (default, uses terminal colors), `neutral-light`, `dracula`, `gruvbox`, or `light`. `neutral` leaves foreground text in your terminal's default color.
-- **motion:** `true` (default) alternates ◆/◇ every 900ms only for the primary question. The current item takes priority, otherwise the first queued question or authorization request does. Every visible authorization ◆ breathes in sync: 1.2 seconds in the blocked color, then 0.6 seconds dim; the label and focus-band rail keep the blocked color. Working sessions and errors stay still. `false` keeps all icons at their initial frame and disables the animation timer.
+- **theme：** `neutral`（預設，用終端機的顏色）、`neutral-light`、`dracula`、`gruvbox` 或 `light`。`neutral` 讓前景文字維持終端機的預設色。
+- **motion：** `true`（預設）時，只有主要那題的圖示每 900ms 在 ◆／◇ 之間切換。目前這題優先，沒有的話是排隊列第一個問題或授權請求。所有看得到的授權 ◆ 同步呼吸：1.2 秒授權色、0.6 秒淡色；狀態字與橫條左側直線維持授權色。工作中與異常不動。`false` 讓所有圖示停在第一格，並關掉動畫計時器。
 
-Settings load when the session starts and each time the panel opens, so reopen the panel to apply edits. Only the console's own tab reads the file. Missing settings use the defaults; an unknown value falls back to its default with one toast per distinct invalid value in the session, and a file that is not valid JSON falls back to all defaults with one toast.
+設定在 session 啟動時、以及每次打開面板時讀取，改完重開面板就生效。只有中控台自己的分頁會讀這個檔。沒寫的設定用預設值；不認得的值退回預設，同一個錯誤值在一個 session 裡只跳一次通知；檔案不是有效的 JSON 時全部用預設，跳一次通知。
 
-The refined panel calls running sessions **工作中**, questions **待回答**, authorization requests **待授權**, and answered sessions **已回覆**. These are display labels only; the conversation board retains its original status wording. The host controls button typography and hotkey colors; clickable names and keys retain its native styling.
+面板把執行中的 session 叫 **工作中**、問題叫 **待回答**、授權請求叫 **待授權**、回覆完畢叫 **已回覆**。這些只是顯示用的標籤；對話裡的看板維持原本的狀態用字。按鈕字型與快捷鍵顏色由 Claude Code 決定；可點的名稱與按鍵維持它原生的樣式。
 
-### Themes
+### 主題
 
-Set `theme` in `config.json` to `neutral`, `neutral-light`, `dracula`, `gruvbox`, or `light`, then reopen the panel. `neutral` keeps terminal-native foreground colors and follows Claude Code's panel background. Named themes paint their own panel background: `dracula` — `#282a36`, `gruvbox` — `#282828`, `light` — `#fdf6e3`, `neutral-light` — `#f7f7f5`. Theme changes affect only colors, not session data, layout, or shortcuts. The `classic` appearance ignores the theme and does not paint a background.
+在 `config.json` 把 `theme` 設成 `neutral`、`neutral-light`、`dracula`、`gruvbox` 或 `light`，再重開面板。`neutral` 保留終端機原生的前景色，背景跟著 Claude Code 的面板。命名主題會畫自己的面板背景：`dracula` — `#282a36`、`gruvbox` — `#282828`、`light` — `#fdf6e3`、`neutral-light` — `#f7f7f5`。換主題只換顏色，不動 session 資料、版面或快捷鍵。
 
-The outer panel background covers text, card spacing, and unused rows; inner text rows do not need separate backgrounds. Ink's border cells do not inherit that background. Claude Code's own frame, close row, and tab row remain in its theme colors. The focus band and the rest of the terminal retain their existing backgrounds; pair light palettes with a light Claude Code theme for those surfaces. Both light palettes keep dim text contrast at least 4.5:1 on their panel backgrounds. Every named theme's card borders keep at least 3:1 contrast on its panel background.
+面板最外層的背景蓋住文字、卡片間距與沒用到的列；裡面的文字列不必各自上背景。Ink 的框線格子不會繼承這個背景。Claude Code 自己的外框、關閉列與分頁列維持它的主題色。專注橫條與終端機其他部分維持原本的背景；用淺色配色時，這些地方請搭配淺色的 Claude Code 主題。兩個淺色配色的淡色文字對面板背景至少 4.5:1；每個命名主題的卡片框線對面板背景至少 3:1。
 
-Every palette keeps authorization labels in its blocked color while the ◆ glyph breathes between blocked and dim. Invalid theme names fall back to `neutral` with one toast per distinct invalid value in the session.
+每個配色的授權狀態字都維持授權色，◆ 圖示則在授權色與淡色之間呼吸。不認得的主題名稱退回 `neutral`，同一個錯誤值在一個 session 裡只跳一次通知。
 
-## Development
+## 開發
 
 ```sh
 git clone https://github.com/chriskang0917/worktree-console.git
@@ -143,22 +158,23 @@ cd worktree-console
 npm test
 ```
 
-Run tests inside a herdr tab as `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`. The focus band and `focus-show` tests run with `claude plugin test .` and `claude plugin test mods/focus-show`.
+在 herdr 分頁裡跑測試要用 `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`。專注橫條、`focus-show` 與 `tool-dots` 的測試用 `claude plugin test .`、`claude plugin test mods/focus-show` 與 `claude plugin test mods/tool-dots` 跑。
 
-真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。本機沒有 `tmux` 時這些測試會略過並寫明原因；CI（設了 `CI` 環境變數）上沒有 `tmux` 則直接失敗。CI 由 `.github/workflows/ci.yml` 執行：安裝固定版本的 `@anthropic-ai/claude-code` 與 `tmux`，跑 `npm test`、`claude plugin test .` 與 `claude plugin test mods/focus-show`。
+真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。本機沒有 `tmux` 時這些測試會略過並寫明原因；CI（設了 `CI` 環境變數）上沒有 `tmux` 則直接失敗。CI 由 `.github/workflows/ci.yml` 執行：安裝固定版本的 `@anthropic-ai/claude-code` 與 `tmux`，跑 `npm test`、`claude plugin test .`、`claude plugin test mods/focus-show` 與 `claude plugin test mods/tool-dots`。
 
-To try a local checkout without replacing your installed copy:
+不想換掉已安裝的版本、只想試本機 checkout 時：
 
 ```sh
-claude --plugin-dir . --plugin-dir ./mods/focus-show
+claude --plugin-dir . --plugin-dir ./mods/focus-show --plugin-dir ./mods/tool-dots
 ```
 
-Layout:
+目錄：
 
-- `skills/worktree-console/`: the console skill, its references and scripts
-- `skills/handoff/`: the handoff skill
-- `hooks/`: the focus band mod, the auto-handoff hook and the console log hook
-- `mods/focus-show/`: the `/focus-show` command, a separate plugin
-- `test/`: Node test runner tests and fixtures
+- `skills/worktree-console/`：中控台 skill、它的 references 與 scripts
+- `skills/handoff/`：交棒 skill
+- `hooks/`：專注橫條 mod、自動交棒 hook 與過程紀錄 hook
+- `mods/focus-show/`：`/focus-show` 指令，獨立的 plugin
+- `mods/tool-dots/`：工具呼叫折疊 mod，獨立的 plugin
+- `test/`：Node test runner 的測試與測試資料
 
-See [AGENTS.md](./AGENTS.md) for versioning rules.
+版本規則見 [AGENTS.md](./AGENTS.md)。

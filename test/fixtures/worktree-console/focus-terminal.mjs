@@ -17,10 +17,10 @@ export function focusFixture(counts, summaries = []) {
   }));
   const queue = make("reply", pending, { pending: true }).map((s, i) => (summaries[i] ? { ...s, summary: summaries[i] } : s));
   return { active: true, current: queue[0].key, queue: queue.slice(1).map(s => ({ key: s.key, isNew: false })),
-    sessions: [...queue, ...make("work", all - pending, { status: "執行中" }), ...make("archive", hidden, { archived: true }), ...make("idle", idle, { status: "閒置" })] };
+    sessions: [...queue, ...make("work", all - pending - idle, { status: "執行中" }), ...make("archive", hidden, { archived: true }), ...make("idle", idle, { status: "閒置" })] };
 }
 
-export async function terminalFixture({ counts, summaries, columns = 120, socket = `wtc-focus-test-${process.pid}`, appearance = "refined", source = process.env.WTC_FOCUS_SOURCE } = {}) {
+export async function terminalFixture({ counts, summaries, columns = 120, socket = `wtc-focus-test-${process.pid}`, source = process.env.WTC_FOCUS_SOURCE } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wtc-focus-"));
   fs.mkdirSync(path.join(home, ".claude"));
   fs.writeFileSync(path.join(home, ".claude/.claude.json"), JSON.stringify({
@@ -41,7 +41,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
   fs.writeFileSync(path.join(input, ".claude-plugin/plugin.json"), JSON.stringify({ name: "fixture-input", version: "1.0.0" }));
   fs.writeFileSync(path.join(input, "hooks/hooks.json"), JSON.stringify({ modules: ["./fixture.tsx"] }));
   fs.writeFileSync(path.join(input, "hooks/fixture.tsx"), `export const register = on => {
-  on('fs.read', async () => ({ value: ${JSON.stringify(JSON.stringify({ appearance, motion: false }))} }))
+  on('fs.read', async () => ({ value: ${JSON.stringify(JSON.stringify({ motion: false }))} }))
   on('env.get', async (_$, e) => ({ value: e.name === 'ORCA_TERMINAL_HANDLE' ? 'fixture-only' : e.name === 'HOME' ? ${JSON.stringify(home)} : undefined }))
   on('process.run', async () => ({ value: { exitCode: 0, stdout: ${JSON.stringify(JSON.stringify(focusFixture(counts, summaries)))}, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
 }
@@ -110,7 +110,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
           const start = lines[row].indexOf("q:");
           const tabs = lines[row].slice(start).trimEnd();
           const segmentStart = tabs.indexOf(`${key}:`);
-          const segment = tabs.slice(segmentStart).split(/  (?=[qwer]:)/)[0];
+          const segment = tabs.slice(segmentStart).split(/  (?=[qwe]:)/)[0];
           const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
           const markerStart = width(tabs.slice(0, segmentStart));
           // Each row is cut at its own sidebar divider: wide characters left of it can shift string indexes between rows.

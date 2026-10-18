@@ -29,3 +29,5 @@ jobs:
         run: claude plugin test .
       - name: claude plugin test mods/focus-show
         run: claude plugin test mods/focus-show
+      - name: claude plugin test mods/tool-dots
+        run: claude plugin test mods/tool-dots
