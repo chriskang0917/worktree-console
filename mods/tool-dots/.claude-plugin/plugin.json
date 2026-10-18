@@ -1,0 +1,10 @@
+{
+  "name": "tool-dots",
+  "version": "0.1.0",
+  "description": "把對話裡連續的工具呼叫收成一行：每次呼叫一個點（執行中黃、成功綠、失敗紅），接各工具次數；ctrl+o 展開時照原樣顯示。",
+  "author": {
+    "name": "chriskang",
+    "email": "chriskang028@gmail.com"
+  },
+  "types": "./types/index.d.ts"
+}

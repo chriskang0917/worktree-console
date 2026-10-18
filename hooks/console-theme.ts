@@ -7,9 +7,9 @@ export const THEMES = {
   gruvbox: palette('#ebdbb2', '#d5c4a1', '#bdae93', '#928374', '#fbf1c7', '#b8bb26', '#d3869b', '#fe8019', '#83a598', '#ff5c4d', '#282828'),
   light: palette('#394c52', '#4d6267', '#586e75', '#7f8f90', '#1f7a73', '#397900', '#a82b73', '#a34f00', '#1f5fa8', '#b62e32', '#fdf6e3'),
 } satisfies Record<string, ConsoleTheme>
-export type Appearance = { appearance: 'refined' | 'classic'; theme: keyof typeof THEMES; motion: boolean }
+export type Appearance = { theme: keyof typeof THEMES; motion: boolean }
 export function loadAppearance(text: string, warnings: string[]): Appearance {
-  const result: Appearance = { appearance: 'refined', theme: 'neutral', motion: true }
+  const result: Appearance = { theme: 'neutral', motion: true }
   let config: unknown
   try { config = JSON.parse(text) } catch {
     warnings.push('config.json 不是有效的 JSON，外觀改用預設')
@@ -17,13 +17,13 @@ export function loadAppearance(text: string, warnings: string[]): Appearance {
   }
   if (!config || typeof config !== 'object' || Array.isArray(config)) return result
   const values = config as Record<string, unknown>
-  for (const key of ['appearance', 'theme', 'motion'] as const) {
+  if (values.appearance !== undefined) warnings.push('appearance 已移除，一律用預設外觀')
+  for (const key of ['theme', 'motion'] as const) {
     const value = values[key]
     if (value === undefined) continue
-    const valid = key === 'appearance' ? value === 'refined' || value === 'classic' : key === 'theme' ? typeof value === 'string' && Object.hasOwn(THEMES, value) : typeof value === 'boolean'
+    const valid = key === 'theme' ? typeof value === 'string' && Object.hasOwn(THEMES, value) : typeof value === 'boolean'
     if (valid) {
-      if (key === 'appearance') result.appearance = value as Appearance['appearance']
-      else if (key === 'theme') result.theme = value as Appearance['theme']
+      if (key === 'theme') result.theme = value as Appearance['theme']
       else result.motion = value as boolean
     } else {
       const message = `config.json 的 ${key} 不認得：${String(value)}，改用 ${String(result[key])}`

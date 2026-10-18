@@ -8,8 +8,9 @@
   `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`.
   Otherwise the handoff tests (and others that open tabs) open real tabs in
   your herdr session.
-- The focus band and `/focus-show` mod tests (`*.test.tsx`) run with
-  `claude plugin test .` and `claude plugin test mods/focus-show`.
+- The focus band, `/focus-show` and tool-dots mod tests (`*.test.tsx`) run with
+  `claude plugin test .`, `claude plugin test mods/focus-show` and
+  `claude plugin test mods/tool-dots`.
 
 ## Versioning
 
@@ -19,6 +20,9 @@
 - `mods/focus-show` is a separate plugin with its own `version` in
   `mods/focus-show/.claude-plugin/plugin.json`. Bump it whenever anything
   under `mods/focus-show` changes; `npm test` fails otherwise.
+- `mods/tool-dots` is a separate plugin with its own `version` in
+  `mods/tool-dots/.claude-plugin/plugin.json`. Bump it whenever anything
+  under `mods/tool-dots` changes; `npm test` fails otherwise.
 - `plugins/task-list` is a separate plugin with its own `version` in
   `plugins/task-list/.claude-plugin/plugin.json`. Bump it whenever anything
   under `plugins/task-list` changes; `npm test` fails otherwise.

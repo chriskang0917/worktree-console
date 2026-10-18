@@ -17,6 +17,11 @@
       "description": "專注模式的 /focus-show：把橫條目前這題的完整回報直接印到對話，不經模型（搭配 worktree-console 的專注橫條使用）。"
     },
     {
+      "name": "tool-dots",
+      "source": "./mods/tool-dots",
+      "description": "把對話裡連續的工具呼叫收成一行：每次呼叫一個點（執行中黃、成功綠、失敗紅），接各工具次數，有失敗時註明幾個；ctrl+o 展開時照原樣顯示。"
+    },
+    {
       "name": "task-list",
       "source": "./plugins/task-list",
       "description": "本機任務清單、證據驗收與文字待辦圖。需要 Node.js、macOS／Linux，以及支援 ps -p <pid> -o lstart= 的 ps；身分核對失敗時安全停止寫入。"
