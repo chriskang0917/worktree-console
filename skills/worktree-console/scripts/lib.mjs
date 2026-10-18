@@ -392,6 +392,15 @@ function paragraphs(text) {
     .filter((p) => p.length > 0);
 }
 
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+const isTableRow = (line) => TABLE_ROW.test(line);
+
+// Paragraphs without markdown table rows, for the one line a board cell or the band shows.
+function proseParagraphs(text) {
+  return paragraphs(text).map((p) => p.filter((l) => !isTableRow(l))).filter((p) => p.length > 0);
+}
+
 function clipChars(text, max = CELL_MAX) {
   const chars = Array.from((text || "").replace(/\s+/g, " ").trim());
   return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : chars.join("");
@@ -441,7 +450,7 @@ export function proseLines(text) {
 }
 
 function askLines(text) {
-  return proseLines(text).filter((l) => /[?？]/.test(l)).map((l) => l.trim());
+  return proseLines(text).filter((l) => /[?？]/.test(l) && !isTableRow(l)).map((l) => l.trim());
 }
 
 // Returns { kind, text, tool, input, menu } for one ps agent; text/input are verbatim.
@@ -458,7 +467,7 @@ export function agentStatus(agent) {
   }
   if (state === "done") {
     const text = paragraphs(agent.lastAssistantMessage).map((p) => p.join("\n")).join("\n\n");
-    return { kind: askLines(text).length > 0 ? "waiting" : "done", text };
+    return { kind: askLines(agent.finalMessage ?? text).length > 0 ? "waiting" : "done", text };
   }
   return { kind: "idle", text: "" };
 }
@@ -480,8 +489,8 @@ export function lastActivity(status) {
   if (status.kind === "busy") return clipChars(status.text) || "—";
   if (status.kind === "permission") return clipChars(`${status.tool} ${status.input}`);
   if (status.kind === "waiting" && status.menu) return clipChars(status.menu[0].question);
-  if (status.kind === "waiting") return clipChars(askLines(status.text).at(-1) ?? (paragraphs(status.text).at(-1) ?? []).at(-1)) || "—";
-  if (status.kind === "done") return clipChars(sentences((paragraphs(status.text).at(-1) ?? []).join(" ")).at(-1)) || "—";
+  if (status.kind === "waiting") return clipChars(askLines(status.text).at(-1) ?? (proseParagraphs(status.text).at(-1) ?? []).at(-1)) || "—";
+  if (status.kind === "done") return clipChars(sentences((proseParagraphs(status.text).at(-1) ?? []).join(" ")).at(-1)) || "—";
   return "—";
 }
 
@@ -707,6 +716,7 @@ export function sessionStatus(agent, worktreePath, handle = null, now = Date.now
     agent.mainAgent?.state === "done" &&
     !subagentsRunning(worktreePath, agent.prompt, handle);
   const a = settled ? { ...agent, state: "done" } : agent;
+  if (a?.state === "done" && !agent.herdr && turnRunning(sessionTranscript(handle, worktreePath, agent.prompt)) === true) return { kind: "busy", text: agent.prompt ?? "" };
   const since = settled ? agent.mainAgent.stateStartedAt : agent?.stateStartedAt;
   if (a?.state === "done" && goalRunning(a, worktreePath, handle, now - (typeof since === "number" ? since : -Infinity))) {
     return { kind: "busy", text: agent.prompt ?? "" };
@@ -808,6 +818,69 @@ export function goalInTranscript(file) {
     } catch {}
   }
   return false;
+}
+
+const TURN_ENDS = "turn-ends";
+const INTERRUPTED = /^\[Request interrupted by user/;
+const LOCAL_COMMAND = /^<(command-name|command-message|local-command-)/;
+
+// When the Stop hook last saw this session's turn end; null without a record.
+export function turnEndAt(sessionId) {
+  try {
+    const at = JSON.parse(fs.readFileSync(path.join(consoleHome(), TURN_ENDS, `${sessionId}.json`), "utf8")).at;
+    return typeof at === "number" ? at : null;
+  } catch {
+    return null;
+  }
+}
+
+const entryText = (e) => {
+  const content = e.message?.content;
+  return (typeof content === "string" ? content : Array.isArray(content) ? content.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n") : "").trim();
+};
+
+// What a model turn writes: replies, tool results and prompts, not a local command (/model) or a hook's meta note.
+export function turnEntry(e) {
+  if (e.isSidechain || e.isMeta || (e.type !== "user" && e.type !== "assistant")) return null;
+  const at = Date.parse(e.timestamp ?? "");
+  const time = Number.isNaN(at) ? null : at;
+  if (e.type === "assistant") return { at: time, stopped: !!e.isApiErrorMessage };
+  const text = entryText(e);
+  if (LOCAL_COMMAND.test(text)) return null;
+  return { at: time, stopped: INTERRUPTED.test(text) };
+}
+
+// Over once the Stop hook wrote its end after the last entry, or the turn was interrupted or failed (no Stop then); null without a record.
+export function turnOver(last, end) {
+  if (end === null) return null;
+  if (!last || last.stopped || last.at === null) return true;
+  return end >= last.at;
+}
+
+function lastTurnEntry(file) {
+  try {
+    const fd = fs.openSync(file, "r");
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    fs.closeSync(fd);
+    const lines = buf.toString("utf8").split("\n");
+    for (let i = lines.length - 1; i >= (start > 0 ? 1 : 0); i--) {
+      try {
+        const hit = turnEntry(JSON.parse(lines[i]));
+        if (hit) return hit;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+// Orca says done: still running while the transcript holds entries past the Stop hook's last turn end; null without a record.
+function turnRunning(file) {
+  if (!file) return null;
+  const over = turnOver(lastTurnEntry(file), turnEndAt(path.basename(file, ".jsonl")));
+  return over === null ? null : !over;
 }
 
 export function goalOnScreen(handle) {
@@ -1200,8 +1273,28 @@ function cell(text) {
   return String(text ?? "").replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
 }
 
+// A quote box around the text, with each markdown table left outside it so it is still drawn as a table.
 function quote(text) {
-  return String(text || "").split("\n").map((l) => (l.trim() ? `> ${l}` : ">"));
+  const lines = String(text || "").split("\n");
+  const out = [];
+  let fenced = false;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\s*(```|~~~)/.test(l)) fenced = !fenced;
+    if (!fenced && isTableRow(l) && TABLE_RULE.test(lines[i + 1] ?? "")) {
+      let end = i + 2;
+      while (end < lines.length && isTableRow(lines[end])) end++;
+      while (out.at(-1) === ">") out.pop();
+      if (out.length > 0 && out.at(-1) !== "") out.push("");
+      out.push(...lines.slice(i, end).map((r) => r.trim()), "");
+      i = end - 1;
+      while (i + 1 < lines.length && !lines[i + 1].trim()) i++;
+      continue;
+    }
+    out.push(l.trim() ? `> ${l}` : ">");
+  }
+  while (out.at(-1) === "") out.pop();
+  return out;
 }
 
 // One table row per claude session; worktrees without a session stay off the board.
@@ -1336,6 +1429,7 @@ function clipOption(text) {
 
 // `- **A**：…`, `1. **粗體**，…`, `2. 文字，…` → { code, label, marked }: label is the bold part, else the text up to the first ，：。—（.
 export function optionLine(line) {
+  if (isTableRow(line)) return tableOption(line);
   const m = String(line).match(OPTION_HEAD);
   if (!m) return null;
   const code = m[1] ?? m[3] ?? m[5];
@@ -1350,6 +1444,17 @@ export function optionLine(line) {
   else if (/^\s*[:：、.]*\s*\*\*/.test(plain)) label = plain.replace(/^\s*[:：、.]*\s*\*\*/, "").split("**")[0];
   else label = plain.replace(/^\s*[:：、.]+\s*/, "").split(OPTION_STOP)[0];
   return { code, label: label.replace(/\*\*/g, "").trim(), marked };
+}
+
+// `| **B** | 方案 | 說明 |`: a table row whose first cell is a code; its label is the next non-empty cell.
+function tableOption(line) {
+  const cells = line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim());
+  const code = cells[0].replace(/\*\*/g, "").replace(/[.)）:：、]$/, "").trim();
+  if (!/^(?:[A-Za-z]|\d{1,2})$/.test(code) || /^[i-z]$/.test(code)) return null;
+  const rest = cells.slice(1);
+  const marked = rest.some((c) => OPTION_MARK.test(c));
+  const label = (rest.find((c) => c.replace(OPTION_MARK, "").replace(/\*\*/g, "").trim()) ?? "").replace(OPTION_MARK, "").replace(/\*\*/g, "");
+  return { code, label: label.split(OPTION_STOP)[0].trim(), marked };
 }
 
 const family = (code) => (/\d/.test(code) ? "digit" : /[a-z]/.test(code) ? "lower" : "upper");
@@ -1423,7 +1528,7 @@ export function childAnswer(item, text) {
 
 // ⏸: the next step the child wrote in its last paragraph as 「下一步建議…」.
 function doneEntry(tag, status) {
-  const said = (paragraphs(status.text).at(-1) ?? []).join("\n").match(NEXT_STEP)?.[1].trim();
+  const said = (proseParagraphs(status.text).at(-1) ?? []).join("\n").match(NEXT_STEP)?.[1].trim();
   return { entries: [{ code: tag, question: lastActivity(status), options: "—", suggest: said || "—" }] };
 }
 
@@ -1466,7 +1571,7 @@ export function stopFields(row, session) {
 }
 
 function lastSentence(text) {
-  return sentences((paragraphs(text).at(-1) ?? []).join(" ")).at(-1) ?? "";
+  return sentences((proseParagraphs(text).at(-1) ?? []).join(" ")).at(-1) ?? "";
 }
 
 // Sessions in ⚠️, 💬, 🔐, or ⏸, in board order with ⚠️ first; `exclude` holds tags just replied to.

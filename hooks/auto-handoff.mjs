@@ -29,9 +29,16 @@ export function handoffHome() {
   return process.env.AUTO_HANDOFF_HOME || path.join(os.homedir(), ".config", "claude-handoff");
 }
 
-function consoleRegistry() {
-  return path.join(process.env.WORKTREE_CONSOLE_HOME || path.join(os.homedir(), ".config", "worktree-console"), "consoles.json");
+function consoleHome() {
+  return process.env.WORKTREE_CONSOLE_HOME || path.join(os.homedir(), ".config", "worktree-console");
 }
+
+function consoleRegistry() {
+  return path.join(consoleHome(), "consoles.json");
+}
+
+// When each session's last turn ended, for the console to tell a stopped session from one herdr or Orca calls stopped too early.
+export const turnEndFile = (id) => path.join(consoleHome(), "turn-ends", `${id}.json`);
 
 export function readJson(file, fallback) {
   try {
@@ -315,8 +322,18 @@ export function takeoverInstruction({ note, question, goal, isConsole, cache = f
   return parts.join("");
 }
 
+let held = false;
+
 function block(reason) {
+  held = true;
   process.stdout.write(JSON.stringify({ decision: "block", reason }));
+}
+
+function recordTurnEnd(input) {
+  if (!input.session_id) return;
+  try {
+    writeJson(turnEndFile(input.session_id), { at: Date.now() });
+  } catch {}
 }
 
 function tellUser(message) {
@@ -722,7 +739,14 @@ function configure(command, value) {
 const [command, value] = process.argv.slice(2);
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {
   try {
-    if (command === "stop") await stop(readStdin());
+    if (command === "stop") {
+      const input = readStdin();
+      try {
+        await stop(input);
+      } finally {
+        if (!held) recordTurnEnd(input);
+      }
+    }
     else if (command === "session-start") sessionStart();
     else if (command === "pre-tool-use") preToolUse(readStdin());
     else if (["enable", "disable", "ratio", "status"].includes(command)) configure(command, value);

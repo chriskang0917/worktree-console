@@ -99,6 +99,7 @@ function world(agents, { transcripts = {}, screens = {}, extraPanes = [], worksp
     AWAIT_INTERVAL_MS: "20",
     SEND_CHECK_MS: "0",
     SEND_CHECK_TRIES: "1",
+    HERDR_GRACE_MS: "0",
     ...env,
   };
   const run = (args, extra = {}) => {
@@ -500,7 +501,7 @@ test("auto-handoff hook 在 Orca 與 herdr 以外：說明只支援 Orca 與 her
   fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ enabled: true }));
   const transcript = path.join(dir, "t.jsonl");
   fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", message: { role: "assistant", model: "claude-haiku-4-5", usage: { input_tokens: 150000 }, content: [{ type: "text", text: "x" }] } }) + "\n");
-  const env = { ...clean(), AUTO_HANDOFF_HOME: home, CLAUDE_CONFIG_DIR: path.join(dir, "claude") };
+  const env = { ...clean(), AUTO_HANDOFF_HOME: home, CLAUDE_CONFIG_DIR: path.join(dir, "claude"), WORKTREE_CONSOLE_HOME: path.join(dir, "console") };
   const stop = () => spawnSync(process.execPath, [autoHandoff, "stop"], { input: JSON.stringify({ session_id: "sess-n", transcript_path: transcript, cwd: dir }), encoding: "utf8", env });
   stop();
   fs.writeFileSync(path.join(home, "notes", "sess-n.md"), "# 說明\n");
@@ -756,6 +757,7 @@ test("改名：格式不對或撞名就拒絕並說原因；成功後看板、he
   const s = w.state();
   s.agents.find((a) => a.pane_id === "w1:p3").agent_status = "done";
   fs.writeFileSync(path.join(w.dir, "state.json"), JSON.stringify(s));
+  fs.appendFileSync(path.join(claudeProjectDirIn(w, wt("proj-204-unknown")), "s-busy.jsonl"), `${JSON.stringify(said("做完了。"))}\n`);
   watchOnce(w);
   watchOnce(w);
   assert.deepEqual(w.sends().filter((x) => x.text === "/rename busy-one").map((x) => x.pane), ["w1:p3"], "停下後只送一次");
@@ -824,4 +826,153 @@ test("auto-handoff hook 在 herdr：子 session 的新分頁沿用舊分頁名�
     assert.equal(tab[tab.indexOf("--label") + 1], want);
     assert.equal(nameIn(start.slice(start.indexOf("--") + 1)), want);
   }
+});
+// The Stop hook's record of a session's last turn end, at second `n` of the transcript clock.
+const endTurn = (w, session, n) => {
+  fs.mkdirSync(path.join(w.home, "turn-ends"), { recursive: true });
+  fs.writeFileSync(path.join(w.home, "turn-ends", `${session}.json`), JSON.stringify({ at: Date.parse(ts(n)) }));
+};
+function claudeProjectDirIn(w, cwd) {
+  const prev = process.env.CLAUDE_PROJECTS_DIR;
+  process.env.CLAUDE_PROJECTS_DIR = w.base.CLAUDE_PROJECTS_DIR;
+  try {
+    return claudeProjectDir(cwd);
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_PROJECTS_DIR;
+    else process.env.CLAUDE_PROJECTS_DIR = prev;
+  }
+}
+const boardRow = (out, tag) => out.split("\n").find((l) => l.includes(`| ${tag} |`)) ?? "";
+const pendingOf = (out) => (out.split("### 📋 待回覆")[1] ?? "").split("\n").filter((l) => /^\| (?!狀態|---)/.test(l));
+// What the focus band gets from `console.mjs focus`: the console's own pane is registered first.
+function bandOf(w, extra = {}) {
+  fs.mkdirSync(w.home, { recursive: true });
+  fs.writeFileSync(path.join(w.home, "consoles.json"), JSON.stringify(["w1:p1"]));
+  return JSON.parse(w.run(["focus"], extra).out);
+}
+const asked = (stop = "end_turn") => [user("改登入頁", 0), said("改好了，要 push 嗎？", 3, stop)];
+
+test("Stop hook 還沒記下這一輪結束時，herdr 說 done／idle 也算執行中：看板、待回覆、橫條都不出題；記下後才出題", () => {
+  for (const status of ["done", "idle"]) {
+    const w = world([{ cwd: wt("proj-201-menu"), status, session: "s1" }], { transcripts: { s1: { cwd: wt("proj-201-menu"), entries: asked() } } });
+    endTurn(w, "s1", 1);
+    const out = w.run(["board", "--repo", app()]).out;
+    assert.match(boardRow(out, "PROJ-201"), /🔄 執行中/, `${status}: ${out}`);
+    assert.deepEqual(pendingOf(out), []);
+    const band = bandOf(w);
+    assert.equal(band.current, null, "橫條上沒有題目");
+    assert.deepEqual(band.queue, [], "也不進排隊");
+    assert.equal(band.sessions[0].status, "執行中");
+    endTurn(w, "s1", 4);
+    const after = w.run(["board", "--repo", app()]).out;
+    assert.match(boardRow(after, "PROJ-201"), /💬 等待回應.*要 push 嗎？/, after);
+    assert.match(bandOf(w).current ?? "", /^w1:p2@/, "這一輪結束後才出題");
+  }
+});
+
+test("讀不到 Stop hook 紀錄時：herdr 說停了而且對話紀錄最後一筆結束這一輪才算停下，紀錄還在跑就是執行中", () => {
+  const run = (entries, status = "done") =>
+    world([{ cwd: wt("proj-205-idle"), status, session: "s" }], { transcripts: { s: { cwd: wt("proj-205-idle"), entries } } }).run(["board", "--repo", app()]).out;
+  assert.match(boardRow(run([user("跑測試"), said("測試全過。", 3)]), "PROJ-205"), /⏸ 回覆完畢.*測試全過/);
+  assert.match(boardRow(run([user("跑測試"), said("先看一下", 1, null)]), "PROJ-205"), /🔄 執行中/, "最後一則還沒結束");
+  assert.match(boardRow(run([user("跑測試"), call("t1", "Bash", { command: "npm test" }), result("t1")], "idle"), "PROJ-205"), /🔄 執行中/, "工具結果之後模型還沒回");
+  assert.match(boardRow(run([user("跑測試"), said("先看一下", 1, null), user("[Request interrupted by user]", 2)]), "PROJ-205"), /⏸ 回覆完畢/, "被中斷就算停了");
+});
+
+test("被中斷的一輪沒有 Stop hook 紀錄，舊紀錄不會讓它一直顯示執行中", () => {
+  const w = world([{ cwd: wt("proj-205-idle"), status: "idle", session: "s" }], {
+    transcripts: { s: { cwd: wt("proj-205-idle"), entries: [user("a", 0), said("好了。", 1), user("再改", 2), said("改到一半", 3, null), user("[Request interrupted by user]", 4)] } },
+  });
+  endTurn(w, "s", 1);
+  assert.match(boardRow(w.run(["board", "--repo", app()]).out, "PROJ-205"), /⏸ 回覆完畢/);
+});
+
+test("選單與授權框不等 Stop hook：Stop hook 紀錄還是上一輪的，跳出來就立刻顯示 💬／🔐", () => {
+  const w = world(
+    [
+      { cwd: wt("proj-201-menu"), status: "blocked", session: "m" },
+      { cwd: wt("proj-202-perm"), status: "blocked", session: "p" },
+    ],
+    {
+      transcripts: {
+        m: { cwd: wt("proj-201-menu"), entries: [user("挑顏色", 0), said("先想想", 1, "tool_use"), call("t1", "AskUserQuestion", { questions: MENU }, 2)] },
+        p: { cwd: wt("proj-202-perm"), entries: [user("建資料夾", 0), call("t2", "Bash", { command: "mkdir -p /tmp/x" }, 2)] },
+      },
+    },
+  );
+  endTurn(w, "m", 0);
+  endTurn(w, "p", 0);
+  const out = w.run(["board", "--repo", app()]).out;
+  assert.match(boardRow(out, "PROJ-201"), /💬 等待回應.*要用哪個色？/);
+  assert.match(boardRow(out, "PROJ-202"), /🔐 等待授權.*mkdir -p \/tmp\/x/);
+});
+
+test("herdr 新開的分頁還沒有對話紀錄、herdr 回 unknown：先顯示執行中，持續 30 秒以上仍讀不到才判 ⚠️", () => {
+  const w = world([{ cwd: wt("proj-204-unknown"), status: "unknown", session: "new" }]);
+  const slow = { HERDR_GRACE_MS: "30000" };
+  const first = w.run(["board", "--repo", app()], slow).out;
+  assert.match(boardRow(first, "PROJ-204"), /🔄 執行中/, first);
+  assert.doesNotMatch(first, /⚠️/);
+  assert.match(boardRow(w.run(["board", "--repo", app()], slow).out, "PROJ-204"), /🔄 執行中/, "30 秒內再讀仍是執行中");
+  const grace = path.join(w.home, "herdr-grace.json");
+  fs.writeFileSync(grace, JSON.stringify({ "w1:p2": { since: Date.now() - 31_000 } }));
+  assert.match(boardRow(w.run(["board", "--repo", app()], slow).out, "PROJ-204"), /⚠️ session 異常/, "超過 30 秒才判異常");
+  const file = path.join(w.base.CLAUDE_PROJECTS_DIR, "x", "new.jsonl");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, [user("開工", 0), said("做好了。", 1)].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  assert.match(boardRow(w.run(["board", "--repo", app()], slow).out, "PROJ-204"), /⏸ 回覆完畢/, "紀錄出現後照紀錄分類");
+  assert.deepEqual(JSON.parse(fs.readFileSync(grace, "utf8")), {}, "等待紀錄清掉");
+});
+
+test("對話紀錄停在還沒回覆的選單：herdr 回 working、idle、done、blocked 都判 💬 選單並列出選項，回 b 走選單代答", () => {
+  for (const status of ["working", "idle", "done", "blocked"]) {
+    const w = world([{ cwd: wt("proj-201-menu"), status, session: "m" }], {
+      transcripts: { m: { cwd: wt("proj-201-menu"), entries: [user("挑顏色"), call("t1", "AskUserQuestion", { questions: MENU })] } },
+    });
+    const out = w.run(["board", "--repo", app()]).out;
+    assert.match(boardRow(out, "PROJ-201"), /💬 等待回應.*要用哪個色？/, `${status}: ${out}`);
+    assert.ok(pendingOf(out).some((l) => /PROJ-201.*a 紅／b 藍／其他/.test(l)), `${status}: ${pendingOf(out).join("\n")}`);
+    const res = w.run(["reply", "--", "PROJ-201 b"], { FAKE_HERDR_UNBLOCK: "1", AWAIT_INTERVAL_MS: "10" });
+    assert.equal(res.out, "[PROJ-201] 已選擇：顏色→藍", `${status}: ${res.out}${res.err}`);
+    assert.deepEqual(w.sends().filter((s) => s.via === "send-keys").map((s) => s.keys.join(" ")), ["2"], status);
+  }
+});
+
+test("herdr 回 blocked 但對話紀錄還沒寫進那筆工具呼叫：30 秒內顯示執行中，紀錄跟上就照紀錄分類，超過 30 秒才判 ⚠️", () => {
+  const slow = { HERDR_GRACE_MS: "30000" };
+  const w = world([{ cwd: wt("proj-201-menu"), status: "blocked", session: "m" }], {
+    transcripts: { m: { cwd: wt("proj-201-menu"), entries: [user("挑顏色", 0), said("我問一下", 1, null)] } },
+  });
+  const first = w.run(["board", "--repo", app()], slow).out;
+  assert.match(boardRow(first, "PROJ-201"), /🔄 執行中/, first);
+  assert.doesNotMatch(first, /⚠️/);
+  const file = path.join(claudeProjectDirIn(w, wt("proj-201-menu")), "m.jsonl");
+  fs.appendFileSync(file, `${JSON.stringify(call("t1", "AskUserQuestion", { questions: MENU }, 2))}\n`);
+  assert.match(boardRow(w.run(["board", "--repo", app()], slow).out, "PROJ-201"), /💬 等待回應.*要用哪個色？/, "紀錄跟上就是選單");
+
+  const late = world([{ cwd: wt("proj-201-menu"), status: "blocked", session: "m" }], {
+    transcripts: { m: { cwd: wt("proj-201-menu"), entries: [user("挑顏色", 0), said("我問一下", 1, null)] } },
+  });
+  assert.match(boardRow(late.run(["board", "--repo", app()], slow).out, "PROJ-201"), /🔄 執行中/);
+  fs.writeFileSync(path.join(late.home, "herdr-grace.json"), JSON.stringify({ "w1:p2": { since: Date.now() - 31_000 } }));
+  assert.match(boardRow(late.run(["board", "--repo", app()], slow).out, "PROJ-201"), /⚠️ session 異常/, "超過 30 秒仍沒跟上才判異常");
+});
+
+test("同一輪「講一段 → 跑工具 → 再講一段」：回報包含上一則指令之後的所有文字；狀態看最後一段", () => {
+  const entries = [
+    user("舊指令", 0),
+    said("舊回覆不該出現。", 1),
+    user("改登入頁", 2),
+    { ...said("我先看一下要改哪些檔，要不要也改註冊頁？", 3, "tool_use"), message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "text", text: "我先看一下要改哪些檔，要不要也改註冊頁？" }, { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] } },
+    result("t1", 4),
+    said("改好了，登入頁換成新版面。", 5),
+  ];
+  const w = world([{ cwd: wt("proj-205-idle"), status: "done", session: "s" }], { transcripts: { s: { cwd: wt("proj-205-idle"), entries } } });
+  endTurn(w, "s", 6);
+  const out = w.run(["board", "--repo", app()]).out;
+  assert.match(boardRow(out, "PROJ-205"), /⏸ 回覆完畢.*改好了/, "前段的問句不算，最後一段沒有問句");
+  const detail = w.run(["detail", "--repo", app(), "PROJ-205"]).out;
+  assert.match(detail, /> 我先看一下要改哪些檔，要不要也改註冊頁？/);
+  assert.match(detail, /> 改好了，登入頁換成新版面。/);
+  assert.doesNotMatch(detail, /舊回覆/);
 });

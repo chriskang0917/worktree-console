@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CACHE_HANDOFF_TEXT } from "../hooks/auto-handoff.mjs";
 import { KEEPALIVE_REPLY, KEEPALIVE_TEXT, RECYCLED, agentStatus, boardLines, collect, handoffLines, pendingBlock } from "../skills/worktree-console/scripts/lib.mjs";
-import { HANDOFF_TOKENS, KEEPALIVE_AFTER_MS, handedOver, keepaliveStep, keepaliveUsage } from "../skills/worktree-console/scripts/keepalive.mjs";
+import { KEEPALIVE_AFTER_MS, handedOver, keepaliveStep, keepaliveUsage } from "../skills/worktree-console/scripts/keepalive.mjs";
 import { emptyFocus, focusPayload, focusStep, saveFocus, syncFocus } from "../skills/worktree-console/scripts/focus.mjs";
 import { readEvents } from "../skills/worktree-console/scripts/log.mjs";
 
@@ -310,10 +310,10 @@ function saveFocusIn(home) {
   inWorld(world([]), home, () => saveFocus(emptyFocus()));
 }
 
-test("交棒：續命那輪停下再滿 50 分鐘仍沒人回、context 滿 15 萬 token，watcher 送快取交棒訊息走既有 handoff 流程，完成後印「[票號] 已自動交棒（快取將到期）」", () => {
+test("交棒：續命那輪停下再滿 50 分鐘仍沒人回、停在 💬 且 context 超過自動交棒門檻，watcher 送快取交棒訊息走既有 handoff 流程，完成後印「[票號] 已自動交棒（快取將到期）」", () => {
   const now = Date.now();
   const home = homes();
-  registerTranscript(home, "A", [used(90_000), keepalive, ok(160_000)]);
+  registerTranscript(home, "A", [used(90_000), keepalive, ok(450_000)]);
   const stop = { id: "A", n: 1, text: QUESTION, since: now - 110 * MIN };
   watch(world([stop]), home);
   const dir = world([{ ...stop, prompt: KEEPALIVE_TEXT, text: KEEPALIVE_REPLY, since: now - 51 * MIN }]);
@@ -337,10 +337,10 @@ test("交棒：續命那輪停下再滿 50 分鐘仍沒人回、context 滿 15 �
   assert.equal(handedOver({ [pane("A")]: { phase: "handing", handle: "term_A" } }, { ...ev, status: "failed" })[pane("A")].phase, "expired", "交棒失敗的舊 session 讓它過期，不再續命");
 });
 
-test("交棒：同情境 context 未滿 15 萬 token 時不交棒，之後也不再送任何訊息", () => {
+test("交棒：同情境 context 未達自動交棒門檻時不交棒，之後也不再送任何訊息", () => {
   const now = Date.now();
   const home = homes();
-  registerTranscript(home, "A", [used(90_000), keepalive, ok(HANDOFF_TOKENS - 1)]);
+  registerTranscript(home, "A", [used(90_000), keepalive, ok(399_000)]);
   const stop = { id: "A", n: 1, text: QUESTION, since: now - 110 * MIN };
   const first = world([stop]);
   watch(first, home);
@@ -353,10 +353,31 @@ test("交棒：同情境 context 未滿 15 萬 token 時不交棒，之後也不
   let state = keepState(home);
   const rows = rowsOf([{ ...stop, prompt: KEEPALIVE_TEXT, since: now - 51 * MIN }]);
   for (let t = now; t < now + 6 * 60 * MIN; t += 5 * MIN) {
-    const step = keepaliveStep(rows, state, t, { contextOf: () => HANDOFF_TOKENS - 1 });
+    const step = keepaliveStep(rows, state, t, { contextOf: () => ({ used: 399_000, window: 1_000_000 }) });
     assert.deepEqual(step.actions, [], "之後幾小時都不再送");
     state = step.state;
   }
+});
+
+test("交棒：快取將到期只交棒停在 💬 且 context 超過自動交棒比例的 session；⏸ 回覆完畢或未達門檻都不交棒、不送交棒訊息", () => {
+  const t0 = Date.now();
+  const reply = { id: "A", n: 1, text: "登入頁改好了。", since: t0 };
+  const ask = { id: "B", n: 2, text: QUESTION, since: t0 };
+  const kept = (ratio, used) => {
+    const opts = { contextOf: () => ({ used, window: 1_000_000 }), ratio };
+    let s = keepaliveStep(rowsOf([reply, ask]), {}, t0 + 50 * MIN, opts).state;
+    const back = [reply, ask].map((x) => ({ ...x, prompt: KEEPALIVE_TEXT, since: t0 + 51 * MIN }));
+    s = keepaliveStep(rowsOf(back), s, t0 + 52 * MIN, opts).state;
+    assert.deepEqual([s[pane("A")].phase, s[pane("B")].phase], ["kept", "kept"]);
+    return keepaliveStep(rowsOf(back), s, t0 + 101 * MIN, opts);
+  };
+  const high = kept(0.4, 900_000);
+  assert.deepEqual(high.actions.map((a) => [a.type, a.tag, a.text]), [["handoff", "PROJ-2", CACHE_HANDOFF_TEXT]], "只有 💬 交棒，⏸ 不交棒");
+  assert.equal(high.state[pane("A")].phase, "expired");
+  assert.deepEqual(kept(0.3, 350_000).actions.map((a) => a.tag), ["PROJ-2"], "門檻照設定的比例 30%：35% 交棒");
+  const low = kept(0.4, 350_000);
+  assert.deepEqual(low.actions, [], "35% 未達 40% 門檻：不交棒");
+  assert.deepEqual([low.state[pane("A")].phase, low.state[pane("B")].phase], ["expired", "expired"]);
 });
 
 test("♻️：換手過的 session 在看板、待回覆清單、專注卡片的最後動態／問題前有「♻️」，使用者回覆後消失", () => {
@@ -384,7 +405,7 @@ test("交棒後的新 session 在使用者回覆前不續命、不交棒；使�
   let state = { [pane("N")]: { phase: "fresh", handle: "term_N", at: t0 } };
   const waiting = { id: "N", n: 1, text: QUESTION, prompt: "接手交棒：先完整讀 /n.md 。", since: t0 };
   for (let t = t0; t < t0 + 5 * 60 * MIN; t += 5 * MIN) {
-    const step = keepaliveStep(rowsOf([waiting]), state, t, { contextOf: () => 900_000 });
+    const step = keepaliveStep(rowsOf([waiting]), state, t, { contextOf: () => ({ used: 900_000, window: 1_000_000 }) });
     assert.deepEqual(step.actions, [], "回覆前從不續命、不交棒");
     state = step.state;
   }
@@ -407,9 +428,9 @@ test("交棒後的新 session 在使用者回覆前不續命、不交棒；使�
   s = keepaliveStep(rowsOf([{ ...A, prompt: KEEPALIVE_TEXT, since: t0 + 51 * MIN }]), s, t0 + 52 * MIN).state;
   assert.equal(s[pane("A")].phase, "kept");
   const reply = { ...A, prompt: "選 B", text: "好，前後端一起改。還要補文件嗎？", since: t0 + 70 * MIN };
-  step = keepaliveStep(rowsOf([reply]), s, t0 + 119 * MIN, { contextOf: () => 900_000 });
+  step = keepaliveStep(rowsOf([reply]), s, t0 + 119 * MIN, { contextOf: () => ({ used: 900_000, window: 1_000_000 }) });
   assert.deepEqual([step.actions, step.state[pane("A")]], [[], undefined], "續命過的 session 被回覆後也歸零：不交棒、重新計時");
-  step = keepaliveStep(rowsOf([reply]), step.state, t0 + 120 * MIN, { contextOf: () => 900_000 });
+  step = keepaliveStep(rowsOf([reply]), step.state, t0 + 120 * MIN, { contextOf: () => ({ used: 900_000, window: 1_000_000 }) });
   assert.deepEqual(step.actions.map((a) => a.type), ["keepalive"]);
 });
 
@@ -432,7 +453,7 @@ test("排除：🔐 等待授權、開著選單的 💬、封存、💤 閒置�
   rows[3].sessions[0].archived = true;
   let state = {};
   for (let t = now; t < now + 8 * 60 * MIN; t += 5 * MIN) {
-    const step = keepaliveStep(rows, state, t, { contextOf: () => 900_000 });
+    const step = keepaliveStep(rows, state, t, { contextOf: () => ({ used: 900_000, window: 1_000_000 }) });
     assert.deepEqual(step.actions, []);
     state = step.state;
   }

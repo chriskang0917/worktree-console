@@ -149,6 +149,8 @@ let held: number | null = null
 let known: Set<string> | null = null
 let tick = 0
 let sessionId = ''
+// The console's own model turn: a /focus-show sent during it would wait in the input queue, so announces hold until it ends.
+let turning = false
 const sent: string[] = []
 const misses = new Map<string, number>()
 let appearance: Appearance = { theme: 'neutral', motion: true }
@@ -297,10 +299,11 @@ async function show($: EngineInterface, tag: string, key: string | null = null) 
   $.ui.toast(installed ? `[${tag}] 題目沒印出，按 Enter 印` : '印不出題目：需要另外安裝 focus-show')
 }
 
-// A poll repeats an announce until `focus-shown` lands, which can wait on the console's turn; a press always prints.
+// A poll repeats an announce until `focus-shown` lands; while the console's turn runs only a press prints, and once it
+// ends the question then on the band is the one printed.
 async function announce($: EngineInterface, next: Focus, pressed: boolean) {
   const key = next.announceKey ?? null
-  if (!next.announce || (key && !pressed && sent.includes(key))) return
+  if (!next.announce || (!pressed && turning) || (key && !pressed && sent.includes(key))) return
   if (key && !sent.includes(key)) {
     sent.push(key)
     if (sent.length > SENT_MAX) sent.shift()
@@ -430,6 +433,20 @@ export const register: Register = on => {
       })
     }
     return next(e)
+  })
+
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) turning = true
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const res = await next(e)
+    if (e.agentId === undefined) {
+      turning = false
+      if (focus.active) void poll($)
+    }
+    return res
   })
 
   // The engine walks ↑↓ one Button back or forth through the pane, keeping its place by index: a step from where it held is one card up or down.

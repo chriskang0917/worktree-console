@@ -54,6 +54,27 @@ function converse(agent, text) {
   fs.appendFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
 }
 
+// An answered menu or permission prompt: the transcript gets the result of the call it was waiting on.
+function answered(agent) {
+  const base = process.env.CLAUDE_PROJECTS_DIR;
+  const id = agent.agent_session?.value;
+  if (!base || !id || !fs.existsSync(base)) return;
+  for (const d of fs.readdirSync(base)) {
+    const file = path.join(base, d, `${id}.jsonl`);
+    if (!fs.existsSync(file)) continue;
+    const entries = fs.readFileSync(file, "utf8").split("\n").filter(Boolean).flatMap((l) => {
+      try {
+        return [JSON.parse(l)];
+      } catch {
+        return [];
+      }
+    });
+    const parts = entries.flatMap((e) => (Array.isArray(e.message?.content) ? e.message.content : []));
+    const call = parts.filter((p) => p.type === "tool_use").at(-1);
+    if (call && !parts.some((p) => p.type === "tool_result" && p.tool_use_id === call.id)) fs.appendFileSync(file, `${JSON.stringify({ type: "user", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: call.id, content: "ok" }] } })}\n`);
+  }
+}
+
 const tabs = () => [...new Map(state.panes.map((p) => [p.tab_id, { tab_id: p.tab_id, workspace_id: p.workspace_id, label: state.tabLabels?.[p.tab_id] ?? p.label ?? "1" }])).values()];
 if (cmd === "api snapshot") ok({ type: "session_snapshot", snapshot: { panes: state.panes, agents: state.agents, workspaces: state.workspaces ?? [], tabs: tabs() } });
 if (cmd === "tab rename") {
@@ -77,9 +98,10 @@ if (cmd === "pane send-keys") {
   if (process.env.FAKE_HERDR_SEND_FAIL) error("pane_not_found");
   fs.appendFileSync(path.join(dir, "sends.jsonl"), `${JSON.stringify({ via: "send-keys", pane: args[2], keys: args.slice(3) })}\n`);
   const agent = agentOf(args[2]);
-  if (agent && agent.agent_status === "blocked" && process.env.FAKE_HERDR_UNBLOCK) {
-    agent.agent_status = "working";
+  if (agent && process.env.FAKE_HERDR_UNBLOCK) {
+    if (agent.agent_status === "blocked") agent.agent_status = "working";
     save(state);
+    answered(agent);
   }
   process.exit(0);
 }

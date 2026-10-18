@@ -3005,3 +3005,29 @@ test("Orca open：--continue 時 --command 是 claude --name <代號> --continue
     assert.equal(args[args.indexOf("--command") + 1], command);
   }
 });
+
+test("Orca 同樣以 Stop hook 紀錄判斷這一輪結束：紀錄還是上一輪的就算執行中，記下這一輪結束才停下；讀不到紀錄時照 Orca", () => {
+  const home = fs.mkdtempSync(path.join(tmp, "turn-orca-"));
+  const prev = process.env.WORKTREE_CONSOLE_HOME;
+  process.env.WORKTREE_CONSOLE_HOME = home;
+  try {
+    const at = (n) => new Date(Date.UTC(2026, 9, 5, 6, 0, n)).toISOString();
+    const reply = "登入頁做好了，要順便改註冊頁嗎？";
+    const files = { "s.jsonl": [{ ...userText(LOGIN_PROMPT), timestamp: at(0) }, { ...assistantText(reply), timestamp: at(3) }] };
+    const agent = { ...agentsOf("proj-101-login")[0], state: "done", workingMode: undefined, mainAgent: undefined, toolName: null, prompt: LOGIN_PROMPT, lastAssistantMessage: reply };
+    const kind = () => withTranscripts(files, () => sessionStatus(agent, wt("proj-101-login")).kind);
+    const end = (n) => {
+      fs.mkdirSync(path.join(home, "turn-ends"), { recursive: true });
+      fs.writeFileSync(path.join(home, "turn-ends", "s.json"), JSON.stringify({ at: Date.parse(at(n)) }));
+    };
+    assert.equal(kind(), "waiting", "沒有紀錄：照 Orca 的 done");
+    end(1);
+    assert.equal(kind(), "busy", "紀錄是上一輪的：這一輪還在跑");
+    end(4);
+    assert.equal(kind(), "waiting", "記下這一輪結束才出題");
+    assert.equal(withTranscripts(files, () => sessionStatus({ ...agent, state: "waiting", toolName: "Bash", toolInput: "ls" }, wt("proj-101-login")).kind), "permission", "授權框不等 Stop hook");
+  } finally {
+    if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
+    else process.env.WORKTREE_CONSOLE_HOME = prev;
+  }
+});

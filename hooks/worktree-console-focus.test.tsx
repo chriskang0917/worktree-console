@@ -1955,3 +1955,30 @@ test('面板：命名主題最外層帶底色，中性不增加底色', async ($
   }
   await ui.unmount()
 })
+
+test('中控台自己那一輪還在跑：橫條照樣換題但不送 /focus-show；這一輪結束後只印橫條上當下那一題，中間被換掉的不補送', async ($, on) => {
+  const w = { ...world({ ...focusOf('perm', ['focusui', 'logging']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true }
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', async (_$, e) => ({ text: e.answer }))
+  const clock = await start($, on, w)
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
+  await $.turn.start({ text: '回 perm 允許', turnId: 'console-turn' })
+  w.focus = { ...focusOf('focusui', ['logging']), announce: 'focusui', announceKey: keyOf('focusui') }
+  await clock.advance(5_000)
+  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
+  expect((await ui.find({ key: 'band-name' }))?.text).toBe('focusui')
+  w.focus = { ...focusOf('logging', []), announce: 'logging', announceKey: keyOf('logging') }
+  await clock.advance(5_000)
+  expect((await ui.find({ key: 'band-name' }))?.text).toBe('logging')
+  await ui.unmount()
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
+  await $.turn.start({ text: '', turnId: 'sub-turn', agentId: 'sub' })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'sub-turn', agentId: 'sub', reason: 'answer' })
+  await clock.settle()
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
+  await $.turn.complete({ answer: '好', durationMs: 1, isAborted: false, turnId: 'console-turn', reason: 'answer' })
+  await clock.settle()
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`, `logging ${idOf(keyOf('logging'))}`])
+  await clock.advance(5_000)
+  expect(w.shown).toHaveLength(2)
+})
