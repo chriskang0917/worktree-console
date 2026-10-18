@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.0
+
+- feat(console): name every session, remote control, herdr ask, CI version bumps
+
 ## 1.3.0
 
 - The side panel has three tabs, 待回覆 (q), 全部 (w) and 封存 (e); the 閒置 tab and its `r` key are gone, and the footer reads `qwe 切分頁`. 全部 now lists every session that is not archived, idle ones included with their 閒置 status, so a pushed session that went idle no longer drops out of every tab. What counts as 待回覆 is unchanged.

@@ -80,6 +80,8 @@ function world(agents, { transcripts = {}, screens = {}, extraPanes = [], worksp
   for (const [pane, lines] of Object.entries(screens)) fs.writeFileSync(path.join(dir, `screen-${pane.replace(/:/g, "_")}.txt`), lines.join("\n") + "\n");
   const orcaDir = path.join(dir, "orca");
   fs.mkdirSync(orcaDir);
+  fs.mkdirSync(path.join(dir, "config", "herdr"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "config", "herdr", "config.toml"), `[worktrees]\ndirectory = "${path.join(dir, "worktrees")}"\n`);
   const base = {
     ...clean(),
     HERDR_ENV: "1",
@@ -91,6 +93,7 @@ function world(agents, { transcripts = {}, screens = {}, extraPanes = [], worksp
     FAKE_ORCA_DIR: orcaDir,
     WORKTREE_CONSOLE_HOME: home,
     WORKTREE_CONSOLE_LOG_DIR: path.join(dir, "log"),
+    XDG_CONFIG_HOME: path.join(dir, "config"),
     ANSWER_KEY_DELAY_MS: "0",
     SECURITY_BIN: "/usr/bin/false",
     AWAIT_INTERVAL_MS: "20",
@@ -329,7 +332,7 @@ test("open --continue 在沒有分頁的 worktree 開 claude 並帶參數", () =
   const res = w.run(["open", "--path", wt("proj-205-idle"), "--continue"]);
   assert.equal(res.code, 0, res.out);
   assert.match(res.out, /^terminal: w1:p\d+$/);
-  assert.deepEqual(w.state().agents.at(-1).argv, ["--continue"]);
+  assert.deepEqual(w.state().agents.at(-1).argv, ["--name", "PROJ-205", "--continue"]);
 });
 
 const opens = (w) => w.calls().filter((c) => (c[0] === "tab" || c[0] === "workspace") && c[1] === "create");
@@ -370,7 +373,7 @@ test("搬 session：目標工作區開新分頁 --resume 原對話、登記到�
   const fresh = w.state().agents.find((a) => a.pane_id !== "w1:p2" && a.cwd === wt("proj-205-idle"));
   assert.equal(res.out, `[PROJ-205] 已搬到工作區「app」：新分頁 ${fresh.pane_id}，舊分頁 w1:p2 已關`);
   assert.equal(fresh.pane_id.split(":")[0], "w9");
-  assert.deepEqual(fresh.argv, ["--resume", "s-done"]);
+  assert.deepEqual(fresh.argv, ["--name", "PROJ-205", "--resume", "s-done"]);
   assert.equal(w.state().panes.some((p) => p.pane_id === "w1:p2"), false, "舊分頁已關");
   const log = path.join(w.dir, "log");
   const events = fs.readdirSync(log).filter((f) => f.endsWith(".jsonl")).flatMap((f) => fs.readFileSync(path.join(log, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)));
@@ -623,5 +626,202 @@ test("linear.mjs：key 只放在 API 請求的標頭，issue 帶母票與子票�
     assert.ok(!fs.readFileSync(path.join(dir, "security-args"), "utf8").includes(SECRET), "key 不在指令參數裡");
   } finally {
     server.close();
+  }
+});
+
+const tabsOf = (w) => [...new Map(w.state().panes.map((p) => [p.tab_id, w.state().tabLabels?.[p.tab_id] ?? p.label ?? "1"])).entries()];
+const startArgs = (w) => w.calls().filter((c) => c[0] === "agent" && c[1] === "start").map((c) => (c.includes("--") ? c.slice(c.indexOf("--") + 1) : []));
+const nameIn = (argv) => (argv.includes("--name") ? argv[argv.indexOf("--name") + 1] : null);
+
+function watchOnce(w, extra = {}) {
+  const res = spawnSync(process.execPath, [path.join(scripts, "watch.mjs")], {
+    encoding: "utf8",
+    env: { ...w.base, WATCH_INTERVAL_MS: "10", WATCH_TIMEOUT_MS: "0", WATCH_PGREP_PATTERN: `no-such-watcher-${process.pid}`, ...extra },
+  });
+  return { code: res.status, out: res.stdout.trim(), err: res.stderr };
+}
+
+function asConsole(w, status = "done") {
+  const s = w.state();
+  s.agents.push({ agent: "claude", name: "console", pane_id: "w1:p1", cwd: app(), agent_status: status });
+  fs.writeFileSync(path.join(w.dir, "state.json"), JSON.stringify(s));
+  fs.mkdirSync(w.home, { recursive: true });
+  fs.writeFileSync(path.join(w.home, "consoles.json"), JSON.stringify(["w1:p1"]));
+}
+
+test("session 名稱：開工、open、move、需求訪談交棒、臨時分頁開的 claude 都帶 --name，分頁也都有名稱，新工作區的第一個分頁不留數字", () => {
+  const w = world([{ cwd: wt("proj-201-menu"), status: "done", session: "s" }], { transcripts: { s: { cwd: wt("proj-201-menu"), entries: [user("訪談"), said("定稿完成")] } }, workspaces: [{ workspace_id: "w1", label: "worktree-console" }] });
+  const target = path.join(tmp, "herdr-wt", "app", "proj-310");
+  const ok = (args) => {
+    const res = w.run(args);
+    assert.equal(res.code, 0, `${args[0]}: ${res.out}${res.err}`);
+  };
+  ok(["start", "--repo", app(), "--branch", "feat/proj-310", "--dir", "proj-310", "--ticket", "PROJ-310", "--path", target, "--", "PROJ-310 做"]);
+  ok(["open", "--path", wt("proj-205-idle")]);
+  const file = path.join(w.dir, "goal.txt");
+  fs.writeFileSync(file, "/goal 做完 PROJ-201");
+  ok(["handoff", "--path", wt("proj-201-menu"), "--from", "w1:p2", "--file", file]);
+  // The fake screen has no input box, so delivery fails; the tab is already open by then.
+  w.run(["ask-tab", "--repo", app(), "--title", "問一下", "PROJ-310", "--", "這是什麼？"]);
+  assert.deepEqual(startArgs(w).map(nameIn), ["PROJ-310", "PROJ-205", "PROJ-201", "PROJ-310-ask"]);
+  const opened = w.state().panes.filter((p) => p.pane_id !== "w1:p1" && p.pane_id !== "w1:p2").map((p) => p.tab_id);
+  const labels = new Map(tabsOf(w));
+  assert.ok(opened.length >= 4);
+  for (const tab of opened) assert.doesNotMatch(labels.get(tab), /^\d+$/, `分頁 ${tab} 名稱是 ${labels.get(tab)}`);
+  assert.ok(w.calls().some((c) => c[0] === "workspace" && c[1] === "create"), "第一次開在 app 的工作區");
+  assert.ok(w.calls().some((c) => c[0] === "tab" && c[1] === "rename"), "新工作區的第一個分頁改名");
+
+  const moved = stray();
+  assert.equal(moved.run(["move", "--repo", app(), "PROJ-205"], { MOVE_CHECK_MS: "0" }).code, 0);
+  assert.equal(nameIn(startArgs(moved)[0]), "PROJ-205");
+});
+
+test("暫存 session（herdr）：「問：」沒指定 repo 開在中控台的 repo，「問 <repo>：」開在指定 repo；可以給名稱，claude 與分頁都帶名稱", () => {
+  const api = path.join(tmp, "api");
+  if (!fs.existsSync(api)) {
+    sh(tmp, "clone", "-q", "remote.git", "api");
+  }
+  const w = world([], { workspaces: [{ workspace_id: "w1", label: "app" }] });
+  const env = { FAKE_HERDR_TRANSCRIPTS: path.join(w.dir, "projects") };
+  const res = w.run(["ask", "--repo", app(), "--nickname", "docs", "--title", "查文件", "--", "README 在講什麼？"], env);
+  assert.equal(res.code, 0, res.out + res.err);
+  assert.equal(res.out, "[docs] 已開暫存 worktree（app），問題已送出");
+  assert.doesNotMatch(res.out, /目前只支援 Orca/);
+  const rec = JSON.parse(fs.readFileSync(path.join(w.home, "disposable.json"), "utf8"));
+  assert.deepEqual([rec[0].repo, rec[0].branch, rec[0].source, rec[0].kind], ["app", "ask-docs", "herdr", "worktree"]);
+  assert.equal(nameIn(startArgs(w)[0]), "docs");
+  assert.equal(w.sends().at(-1).text, "README 在講什麼？");
+
+  w.run(["board", "--repo", api]);
+  const named = w.run(["ask", "--repo", app(), "--target", "api", "--name", "api-q1", "--title", "查 api", "--", "api 怎麼啟動？"], env);
+  assert.equal(named.code, 0, named.out + named.err);
+  assert.equal(named.out, "[api-q1] 已開暫存 worktree（api），問題已送出");
+  assert.equal(nameIn(startArgs(w)[1]), "api-q1");
+  assert.match(w.run(["board", "--repo", app()]).out, /\| api-q1 \|/);
+  const bad = w.run(["ask", "--repo", app(), "--name", "Bad Name", "--title", "x", "--", "x？"], env);
+  assert.deepEqual([bad.code, bad.out], [1, "[Bad Name] 不能用：名稱只收英文小寫、數字、-，2～20 字元"]);
+});
+
+test("命名：開工時給名稱，看板、待回覆、專注卡片顯示名稱，詳情仍看得到票號；用名稱或票號都指揮得到", () => {
+  const w = world([]);
+  const target = path.join(tmp, "herdr-wt", "app", "proj-320");
+  const res = w.run(["start", "--repo", app(), "--branch", "feat/proj-320", "--dir", "proj-320", "--ticket", "PROJ-320", "--name", "login-fix", "--path", target, "--", "PROJ-320 修登入"], { FAKE_HERDR_TRANSCRIPTS: path.join(w.dir, "projects") });
+  assert.equal(res.code, 0, res.out + res.err);
+  assert.equal(nameIn(startArgs(w)[0]), "login-fix");
+  const board = w.run(["board", "--repo", app()]).out;
+  assert.match(board, /\| ⏸ 回覆完畢 \| login-fix \|/);
+  assert.doesNotMatch(board, /\| PROJ-320 \|/);
+  assert.match(board, /📋 待回覆[\s\S]*\| login-fix \|/);
+  const detail = w.run(["detail", "--repo", app(), "login-fix"]).out;
+  assert.match(detail, /^\[login-fix\] 詳情/);
+  assert.match(detail, /票號：PROJ-320/);
+  assert.equal(JSON.parse(w.run(["resolve", "--repo", app(), "login-fix"]).out).rows[0].tag, "login-fix");
+  assert.equal(JSON.parse(w.run(["resolve", "--repo", app(), "PROJ-320"]).out).rows[0].tag, "login-fix");
+  asConsole(w);
+  const focus = w.run(["focus"]).out;
+  assert.match(focus, /"tag":"login-fix"/, "專注橫條與卡片用名稱");
+  assert.doesNotMatch(focus, /"tag":"PROJ-320"/);
+});
+
+test("改名：格式不對或撞名就拒絕並說原因；成功後看板、herdr 分頁換新名稱，停著的 session 立刻送 /rename，執行中的等它停下由 watcher 送", () => {
+  const w = world([
+    { cwd: wt("proj-205-idle"), status: "done", session: "s-done" },
+    { cwd: wt("proj-204-unknown"), status: "working", session: "s-busy" },
+  ], { transcripts: { "s-done": DONE, "s-busy": { cwd: wt("proj-204-unknown"), entries: [user("做事")] } } });
+  const bad = (name, why) => {
+    const res = w.run(["rename", "--repo", app(), "PROJ-205", name]);
+    assert.deepEqual([res.code, res.out], [1, `[${name}] 不能用：${why}`], name);
+  };
+  const FORMAT = "名稱只收英文小寫、數字、-，2～20 字元";
+  for (const name of ["Login", "登入", "two words", "a".repeat(21), "x"]) bad(name, FORMAT);
+  bad("app", "和 repo「app」同名");
+  bad("proj-204", "和既有的名稱或代號「PROJ-204」重複");
+  assert.equal(w.run(["rename", "--repo", app(), "PROJ-205", "a".repeat(20)]).code, 0, "20 字元可以");
+
+  const ok = w.run(["rename", "--repo", app(), "PROJ-205", "idle-run"]);
+  assert.equal(ok.code, 0, ok.out + ok.err);
+  assert.equal(ok.out, `[idle-run] 已改名：${"a".repeat(20)} → idle-run`, "停著的 session 不必等");
+  assert.match(w.run(["board", "--repo", app()]).out, /\| idle-run \|/);
+  assert.deepEqual(w.sends().filter((s) => s.text?.startsWith("/rename")).map((s) => [s.pane, s.text]), [["w1:p2", `/rename ${"a".repeat(20)}`], ["w1:p2", "/rename idle-run"]]);
+  assert.equal(new Map(tabsOf(w)).get("w1:t2"), "idle-run");
+  assert.equal(JSON.parse(w.run(["resolve", "--repo", app(), "idle-run"]).out).rows[0].handle, "w1:p2", "用新名稱指揮得到");
+
+  const busy = w.run(["rename", "--repo", app(), "PROJ-204", "busy-one"]);
+  assert.equal(busy.code, 0, busy.out);
+  assert.match(busy.out, /busy-one 還沒停下，Claude Code session 名稱等它停下再改/);
+  assert.equal(new Map(tabsOf(w)).get("w1:t3"), "busy-one", "分頁名稱立刻換");
+  assert.equal(w.sends().filter((s) => s.text === "/rename busy-one").length, 0, "執行中不送");
+  watchOnce(w);
+  assert.equal(w.sends().filter((s) => s.text === "/rename busy-one").length, 0, "還在跑，watcher 也不送");
+  const s = w.state();
+  s.agents.find((a) => a.pane_id === "w1:p3").agent_status = "done";
+  fs.writeFileSync(path.join(w.dir, "state.json"), JSON.stringify(s));
+  watchOnce(w);
+  watchOnce(w);
+  assert.deepEqual(w.sends().filter((x) => x.text === "/rename busy-one").map((x) => x.pane), ["w1:p3"], "停下後只送一次");
+});
+
+test("watcher：純數字的分頁補上名稱（使用者名稱、票號、branch），已有名稱的不改，中控台自己的分頁叫 console", () => {
+  const w = world([
+    { cwd: wt("proj-201-menu"), status: "done", session: "a" },
+    { cwd: wt("nick-task"), status: "done", session: "b" },
+    { cwd: wt("proj-205-idle"), status: "done", session: "c" },
+    { cwd: wt("proj-204-unknown"), status: "done", session: "d" },
+  ]);
+  asConsole(w);
+  const s = w.state();
+  s.tabLabels = { "w1:t5": "keep-me" };
+  fs.writeFileSync(path.join(w.dir, "state.json"), JSON.stringify(s));
+  fs.writeFileSync(path.join(w.home, "nicknames.json"), JSON.stringify({ [wt("proj-205-idle")]: { name: "my-name", branch: "feat/proj-205-idle", repo: "app" } }));
+  watchOnce(w);
+  const labels = new Map(tabsOf(w));
+  assert.deepEqual(
+    ["w1:t1", "w1:t2", "w1:t3", "w1:t4", "w1:t5"].map((t) => labels.get(t)),
+    ["console", "PROJ-201", "feat/nick-task", "my-name", "keep-me"],
+  );
+});
+
+test("remote control：中控台停下後 watcher 只對中控台自己送一次 /remote-control，子 session 不送；換成新的中控台 session 再送一次", () => {
+  const w = world([{ cwd: wt("proj-205-idle"), status: "done", session: "c" }]);
+  asConsole(w, "working");
+  watchOnce(w, { CLAUDE_CODE_SESSION_ID: "console-1" });
+  assert.equal(w.sends().filter((x) => x.text === "/remote-control").length, 0, "中控台還在跑就不送");
+  const s = w.state();
+  s.agents.find((a) => a.pane_id === "w1:p1").agent_status = "done";
+  fs.writeFileSync(path.join(w.dir, "state.json"), JSON.stringify(s));
+  watchOnce(w, { CLAUDE_CODE_SESSION_ID: "console-1" });
+  watchOnce(w, { CLAUDE_CODE_SESSION_ID: "console-1" });
+  assert.deepEqual(w.sends().filter((x) => x.text === "/remote-control").map((x) => [x.pane, x.via]), [["w1:p1", "prompt"]]);
+  watchOnce(w, { CLAUDE_CODE_SESSION_ID: "console-2" });
+  assert.deepEqual(w.sends().filter((x) => x.text === "/remote-control").map((x) => x.pane), ["w1:p1", "w1:p1"], "自動交棒換手後的新中控台也開");
+
+  const child = world([{ cwd: wt("proj-205-idle"), status: "done", session: "c" }]);
+  watchOnce(child, { CLAUDE_CODE_SESSION_ID: "not-console" });
+  assert.equal(child.sends().filter((x) => x.text === "/remote-control").length, 0, "不是中控台的 watcher 不送");
+});
+
+test("auto-handoff hook 在 herdr：子 session 的新分頁沿用舊分頁名稱與 --name，中控台的新分頁叫 console", () => {
+  for (const [isConsole, label, want] of [[false, "PROJ-9", "PROJ-9"], [true, "1", "console"]]) {
+    const dir = fs.mkdtempSync(path.join(tmp, "ah-name-"));
+    const projects = path.join(dir, "projects");
+    fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ panes: [{ pane_id: "w3:p1", tab_id: "w3:t1", workspace_id: "w3", cwd: app(), label }], agents: [] }));
+    const home = path.join(dir, "handoff");
+    fs.mkdirSync(path.join(home, "notes"), { recursive: true });
+    fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ enabled: true, ratio: 0.4 }));
+    const consoleHome = path.join(dir, "console");
+    fs.mkdirSync(consoleHome, { recursive: true });
+    if (isConsole) fs.writeFileSync(path.join(consoleHome, "consoles.json"), JSON.stringify(["w3:p1"]));
+    const transcript = path.join(dir, "t.jsonl");
+    fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", message: { role: "assistant", model: "claude-haiku-4-5", stop_reason: "end_turn", usage: { input_tokens: 90000 }, content: [{ type: "text", text: "進行中" }] } }) + "\n");
+    const env = { ...clean(), HERDR_ENV: "1", HERDR_PANE_ID: "w3:p1", HERDR_WORKSPACE_ID: "w3", HERDR_BIN: fakeHerdr, FAKE_HERDR_DIR: dir, FAKE_HERDR_TRANSCRIPTS: projects, CLAUDE_PROJECTS_DIR: projects, AUTO_HANDOFF_HOME: home, CLAUDE_CONFIG_DIR: path.join(dir, "claude"), WORKTREE_CONSOLE_HOME: consoleHome, WORKTREE_CONSOLE_LOG_DIR: path.join(dir, "log"), AUTO_HANDOFF_POLL_MS: "10", AUTO_HANDOFF_DELIVER_MS: "500" };
+    const stop = () => spawnSync(process.execPath, [autoHandoff, "stop"], { input: JSON.stringify({ session_id: "sess-n", transcript_path: transcript, cwd: app() }), encoding: "utf8", env });
+    stop();
+    fs.writeFileSync(path.join(home, "notes", "sess-n.md"), "# 交棒說明\n");
+    stop();
+    const calls = fs.readFileSync(path.join(dir, "calls.log"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const tab = calls.find((c) => c[0] === "tab" && c[1] === "create");
+    const start = calls.find((c) => c[0] === "agent" && c[1] === "start");
+    assert.equal(tab[tab.indexOf("--label") + 1], want);
+    assert.equal(nameIn(start.slice(start.indexOf("--") + 1)), want);
   }
 });

@@ -347,6 +347,7 @@ export const herdrTerminals = {
     );
     const paths = worktrees.map((w) => w.path);
     const kinds = new Map((snap.agents ?? []).map((a) => [a.pane_id, a.agent]));
+    const tabLabels = new Map((snap.tabs ?? []).map((t) => [t.tab_id, t.label ?? null]));
     const terminals = panes.map((p) => {
       const ws = String(p.pane_id).split(":")[0];
       return {
@@ -357,6 +358,7 @@ export const herdrTerminals = {
         agentIdentity: kinds.get(p.pane_id) ?? p.agent ?? null,
         createdAt: paneOrder(p.pane_id),
         tab: p.tab_id,
+        tabLabel: tabLabels.get(p.tab_id) ?? null,
         workspace: p.workspace_id,
       };
     });
@@ -419,20 +421,24 @@ export const herdrTerminals = {
   key(handle, key) {
     return ok(runHerdr(["pane", "send-keys", handle, key]));
   },
-  create(worktreePath, { args = [], label = null, workspace = null, timeoutMs = 60000 } = {}) {
+  // Every tab it opens has a name, the first one of a new workspace too; `name` is also the Claude Code session's.
+  create(worktreePath, { args = [], label = null, name = null, workspace = null, timeoutMs = 60000 } = {}) {
     let snap;
     try {
       snap = herdrSnapshot();
     } catch (error) {
       return { ok: false, code: error.message };
     }
+    const tabLabel = label ?? name ?? path.basename(worktreePath);
     const ws = workspace ?? workspaceNamed(snap, repoName(worktreePath));
     const opened = ws
-      ? runHerdr(["tab", "create", "--workspace", ws, "--cwd", worktreePath, ...(label ? ["--label", label] : []), "--no-focus"])
+      ? runHerdr(["tab", "create", "--workspace", ws, "--cwd", worktreePath, "--label", tabLabel, "--no-focus"])
       : runHerdr(["workspace", "create", "--cwd", worktreePath, "--label", repoName(worktreePath), "--no-focus"]);
     const pane = opened.ok ? opened.result?.root_pane?.pane_id : null;
     if (!pane) return { ok: false, code: opened.error?.code ?? "沒有 pane" };
-    const started = runHerdr(["agent", "start", agentName(pane), "--kind", "claude", "--pane", pane, "--timeout", String(timeoutMs), ...(args.length ? ["--", ...args] : [])]);
+    if (!ws && opened.result?.root_pane?.tab_id) runHerdr(["tab", "rename", opened.result.root_pane.tab_id, tabLabel]);
+    const argv = [...(name ? ["--name", name] : []), ...args];
+    const started = runHerdr(["agent", "start", agentName(pane), "--kind", "claude", "--pane", pane, "--timeout", String(timeoutMs), ...(argv.length ? ["--", ...argv] : [])]);
     return { ok: true, handle: pane, ready: started.ok, code: started.ok ? null : started.error?.code ?? "unknown" };
   },
   // A named workspace must already exist; without a name the repo's own one, null when it still has to be opened.
@@ -477,6 +483,22 @@ export const herdrTerminals = {
   closeTab(handle) {
     return ok(runHerdr(["pane", "close", handle]));
   },
+  renameTab(handle, label) {
+    let snap;
+    try {
+      snap = herdrSnapshot();
+    } catch (error) {
+      return { ok: false, code: error.message };
+    }
+    const tab = (snap.panes ?? []).find((p) => p.pane_id === handle)?.tab_id;
+    return tab ? ok(runHerdr(["tab", "rename", tab, label])) : { ok: false, code: "pane_not_found" };
+  },
+  // A tab still called by its number gets the name of the session in it; the console's own tab is always `console`.
+  nameTabs(rows, terminals, self) {
+    const done = [];
+    for (const { tab, label } of tabRenames(rows, terminals, self)) if (runHerdr(["tab", "rename", tab, label]).ok) done.push({ tab, label });
+    return done;
+  },
   linearIssue(id) {
     if (!titles.has(id)) {
       const res = linear(["issue", id]);
@@ -509,6 +531,26 @@ export const herdrTerminals = {
     } catch {}
   },
 };
+
+export const CONSOLE_TAB = "console";
+
+export function tabRenames(rows, terminals, self) {
+  const byHandle = new Map(rows.flatMap((r) => r.sessions.filter((s) => s.handle).map((s) => [s.handle, { row: r, session: s }])));
+  const out = new Map();
+  for (const t of terminals) {
+    if (!t.tab || out.has(t.tab)) continue;
+    if (t.handle === self) {
+      if (t.tabLabel !== CONSOLE_TAB) out.set(t.tab, CONSOLE_TAB);
+      continue;
+    }
+    if (!/^\d+$/.test(String(t.tabLabel ?? "")) || t.agentIdentity !== "claude") continue;
+    const hit = byHandle.get(t.handle);
+    if (!hit) continue;
+    const { row } = hit;
+    out.set(t.tab, row.given ?? row.ticket ?? (row.branch || path.basename(row.path)));
+  }
+  return [...out].map(([tab, label]) => ({ tab, label }));
+}
 
 const RAW_SHOWN = { working: ["busy"], blocked: ["waiting", "permission"], done: ["done", "waiting"], idle: ["idle", "done", "waiting"], unknown: [] };
 

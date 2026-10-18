@@ -14,8 +14,14 @@
 
 ## Versioning
 
-- Bump `version` in `.claude-plugin/plugin.json` (SemVer) when publishing
-  changes, in its own `chore:` commit together with a new `## <version>`
+- CI bumps versions on pull requests: `.github/scripts/plugin-versions.mjs`
+  pushes a `chore: bump plugin versions` commit that sets each touched
+  plugin's `version` from main's (`feat` minor, others patch, `!` major) and
+  adds or renames its `CHANGELOG.md` section. Write the changelog notes in the
+  PR if you want your own wording; CI keeps them. A PR from a fork bumps by
+  hand: run the script with `--check` to see the expected versions.
+- Without CI (a direct push), bump `version` in `.claude-plugin/plugin.json`
+  (SemVer) in its own `chore:` commit together with a new `## <version>`
   section at the top of `CHANGELOG.md`.
 - `mods/focus-show` is a separate plugin with its own `version` in
   `mods/focus-show/.claude-plugin/plugin.json`. Bump it whenever anything

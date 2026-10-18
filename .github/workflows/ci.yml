@@ -6,11 +6,55 @@ on:
   pull_request:
 
 jobs:
+  # Each plugin the PR touches is bumped from main's version; reruns recompute, so pushing again never stacks a bump.
+  version:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.bump.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch main
+        run: git fetch --no-tags origin main
+      - name: Bump plugin versions
+        id: bump
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          node .github/scripts/plugin-versions.mjs --base origin/main --title "$TITLE"
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -qam "chore: bump plugin versions"
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # A fork's branch cannot take a push from here, so its author bumps by hand.
+      - name: Check plugin versions (fork)
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: node .github/scripts/plugin-versions.mjs --base origin/main --title "$TITLE" --check
+
   test:
+    needs: version
+    if: ${{ !cancelled() && (needs.version.result == 'success' || needs.version.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22

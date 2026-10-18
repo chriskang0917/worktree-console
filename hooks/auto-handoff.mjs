@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readManaged } from "../skills/worktree-console/scripts/log.mjs";
 
 const SMALL_WINDOW = 200_000;
 const LARGE_WINDOW = 1_000_000;
@@ -22,6 +23,7 @@ export const CACHE_HANDOFF_TEXT = "（中控台自動交棒，不是使用者的
 export const KEEPALIVE_REPLY = "收到";
 export const KEEPALIVE_TEXT = `（中控台自動訊息，不是使用者的新指令）只回「${KEEPALIVE_REPLY}」兩個字，不要做任何事，也不要呼叫任何工具。`;
 export const TAKEOVER_HEAD = "接手交棒：";
+export const CONSOLE_NAME = "console";
 
 export function handoffHome() {
   return process.env.AUTO_HANDOFF_HOME || path.join(os.homedir(), ".config", "claude-handoff");
@@ -414,6 +416,13 @@ function failer(ctx) {
   };
 }
 
+// The new session keeps the old one's name: `console` for the console, else the tag the console shows for its tab.
+function sessionName(handle, isConsole, tabLabel = null) {
+  if (isConsole) return CONSOLE_NAME;
+  if (tabLabel && !/^\d+$/.test(tabLabel)) return tabLabel;
+  return readManaged()?.handles?.[handle]?.ticket ?? null;
+}
+
 // Every step must succeed before the old tab closes; on failure the old tab stays and the step is named.
 async function orcaHandoff(ctx) {
   const { session, oldHandle, cwd, mode, note, goal, question, isConsole, cache } = ctx;
@@ -422,7 +431,8 @@ async function orcaHandoff(ctx) {
 
   const term = findTerminal(oldHandle);
   const worktree = term?.worktreePath || cwd;
-  const command = `cd ${shellQuote(cwd)} && claude${mode ? ` --permission-mode ${shellQuote(mode)}` : ""}`;
+  const name = sessionName(oldHandle, isConsole);
+  const command = `cd ${shellQuote(cwd)} && claude${name ? ` --name ${shellQuote(name)}` : ""}${mode ? ` --permission-mode ${shellQuote(mode)}` : ""}`;
   steps.push("開新分頁");
   const created = orca(["terminal", "create", "--worktree", `path:${worktree}`, "--command", command]);
   const newTerm = created.ok ? created.result.terminal : null;
@@ -516,14 +526,18 @@ async function herdrHandoff(ctx) {
   const { session, oldHandle, cwd, mode, note, goal, question, isConsole, cache } = ctx;
   const fail = failer(ctx);
   const ws = process.env.HERDR_WORKSPACE_ID;
-  const tab = herdr(["tab", "create", ...(ws ? ["--workspace", ws] : []), "--cwd", cwd, "--no-focus"]);
+  const snap = herdr(["api", "snapshot"]).result?.snapshot ?? {};
+  const oldTab = (snap.panes ?? []).find((p) => p.pane_id === oldHandle)?.tab_id;
+  const name = sessionName(oldHandle, isConsole, (snap.tabs ?? []).find((t) => t.tab_id === oldTab)?.label ?? null);
+  const tab = herdr(["tab", "create", ...(ws ? ["--workspace", ws] : []), "--cwd", cwd, ...(name ? ["--label", name] : []), "--no-focus"]);
   const pane = tab.ok ? tab.result?.root_pane?.pane_id : null;
   if (!pane) return fail("開新分頁", tab.error?.code);
   ctx.newHandle = pane;
   updateEvent(session, { status: "switching", newHandle: pane, newPaneKey: pane });
 
-  const name = `h-${pane.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 32);
-  const ready = herdr(["agent", "start", name, "--kind", "claude", "--pane", pane, "--timeout", String(Number(process.env.AUTO_HANDOFF_READY_MS || 60000)), ...(mode ? ["--", "--permission-mode", mode] : [])]);
+  const agentName = `h-${pane.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 32);
+  const argv = [...(name ? ["--name", name] : []), ...(mode ? ["--permission-mode", mode] : [])];
+  const ready = herdr(["agent", "start", agentName, "--kind", "claude", "--pane", pane, "--timeout", String(Number(process.env.AUTO_HANDOFF_READY_MS || 60000)), ...(argv.length ? ["--", ...argv] : [])]);
   if (!ready.ok) return fail("等新分頁就緒", ready.error?.code ?? "not-ready");
 
   const instruction = takeoverInstruction({ note, question, goal, isConsole, cache });

@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import {
   collect,
+  consoleHome,
   decorate,
+  flushRenames,
   formatBaseline,
   handoffEvents,
   handoffLines,
+  isConsole,
   mainCheckout,
   markHandoffReported,
   nameLines,
@@ -80,6 +84,29 @@ function poll() {
   }
 }
 
+const REMOTE = "remote-control.json";
+const REMOTE_KEEP = 50;
+
+// The console's own session gets /remote-control once, when it first stops; sending it again would open a dialog.
+function remoteControl(self, manager) {
+  const key = process.env.CLAUDE_CODE_SESSION_ID || self.handle;
+  if (!self.handle || !key) return;
+  const file = path.join(consoleHome(), REMOTE);
+  let done = [];
+  try {
+    done = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {}
+  if (!Array.isArray(done)) done = [];
+  if (done.includes(key) || !["done", "idle"].includes(manager.agentOf(self.handle)?.state)) return;
+  const sent = manager.send(self.handle, "/remote-control", { enter: true });
+  logEvent("remote-control", { handle: self.handle, ok: sent.ok, reason: sent.ok ? null : sent.code ?? "unknown" });
+  if (!sent.ok) return;
+  try {
+    fs.mkdirSync(consoleHome(), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify([...done, key].slice(-REMOTE_KEEP)));
+  } catch {}
+}
+
 let baseline = values.baseline !== undefined ? parseBaseline(values.baseline) : null;
 const started = Date.now();
 let first = true;
@@ -91,6 +118,11 @@ for (;;) {
     process.exit(0);
   }
   if (first) registerConsole({ handle: data.self.handle, paneKey: data.self.paneKey, repo: path.basename(mainCheckout(process.cwd())) });
+  const manager = terminals();
+  const own = isConsole(data.self.handle) ? data.self : null;
+  if (own) remoteControl(own, manager);
+  manager.nameTabs(data.rows, data.terminals, own?.handle ?? null);
+  flushRenames(data.rows, data.terminals, manager);
   const start = first && values.baseline === undefined;
   commitLog(start ? { force: true, reason: "中控台啟動" } : {});
   first = false;

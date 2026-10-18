@@ -20,6 +20,8 @@ worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https
 - **Hand it a ticket, get a running session.** Give it a Linear ticket (or just a task). It reads the ticket, finds the parent ticket, proposes a repo and branch name, and after you confirm it creates the worktree and starts a Claude Code session there.
 - **Sessions report back by themselves.** A watcher follows every session. When one stops to ask something, finishes, or needs a permission, the console tells you which ticket it is and what it wants.
 - **Focus mode: one question at a time, answered with one key.** A band above your input box always shows the current question with its options. Answer `b` and the console sends what that session expects (`B`, `2`, or the right menu item). Other questions wait in a queue (`1`–`5` to jump, `8` to put one off, `9` to print the question again, `0` for a side panel with every session as a card, under the tabs 待回覆, 全部 and 封存). Full reports print straight into the chat without spending tokens. Focus mode needs a Claude Code build with mods (plugin function hooks), plus the separate `focus-show` plugin from this marketplace.
+- **Reach the console from your phone.** When the console starts, it turns on Remote Control for its own session (only that one, never the sessions it opens), so the console shows up in the Claude app's Remote Control list. A console that took over through an automatic handoff turns it on again.
+- **Every session has a name.** Each session the console opens starts with `claude --name <name>`, and in herdr every tab it opens is named too (the console's own tab is `console`). You can name a session when you open it and rename it later; the name then replaces the ticket on the board.
 - **One board for everything.** `現在狀況` prints a table per repo: status, ticket, summary, stage (not started, planning, implementing, pushed) and the latest activity, so you can see where every session is.
 - **Direct, close and archive from one place.** Send instructions to any session by ticket, close a worktree when its branch is merged, or archive sessions you want out of sight.
 - **Automatic handoff.** When a session's context fills past a threshold, or its prompt cache is about to expire while you are away, it writes a handoff note and a fresh session takes over in a new tab. `/worktree-console:handoff` does it on demand.
@@ -58,11 +60,24 @@ Open Claude Code in an Orca or herdr tab inside one of your repos, then:
 | `現在狀況` | Prints the board |
 | `<ticket> 詳情` | Shows what that session has been doing |
 | `b`, or any reply | Answers the question currently on the focus band |
+| `問：<question>` | Opens a temporary worktree in the repo the console was started in and asks the question there (herdr and Orca) |
+| `問 <repo>：<question>` | Same, in the named repo |
+| `<ticket>，名稱 <name>` or `問：<question>，名稱 <name>` | Gives the new session a name while opening it (see [Session names](#session-names)) |
+| `<tag> 改名 <name>` | Renames a session: board, focus band, herdr tab and Claude Code session name all change |
 | `關掉 <ticket>` | Checks the worktree is safe to remove, then closes it |
 | `清理 branch` or `prune` | Lists local branches and worktrees as CANDIDATE or KEEP (merged or squash-merged, with the reason); deletes only after you confirm |
 | `/worktree-console:handoff` | Hands the current session over to a fresh one |
 
 State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
+
+## Session names
+
+Every session the console opens is started with `claude --name <name>`: kickoff, temporary sessions, extra tabs, reopened and moved sessions, the interview handoff and automatic handoffs. Without a name of your own, the name is the session's tag (ticket, nickname or branch). In Orca, a session started by `orca worktree create` gets its name through `/rename` once it first stops. In herdr, every tab the console opens has a name instead of a number (the first tab of a new workspace included), the console's own tab is `console`, and the watcher names any numbered tab running Claude Code after its session: your name, else the ticket, else the branch or folder. Tabs that already have a name are left alone.
+
+- **Give a name when opening.** Add `名稱 <name>` to the request, e.g. `PROJ-123，名稱 login-fix` or `問：README 在講什麼？名稱 docs`. Without one, the console picks a nickname as before.
+- **Rename later.** `<tag> 改名 <name>` (e.g. `PROJ-123 改名 login-fix`) changes the board, the focus band, the reply list, the herdr tab and the Claude Code session name. A session that is still running gets `/rename` as soon as it stops; the watcher sends it.
+- **Format.** Lowercase letters, digits and `-`, 2 to 20 characters. A name must not repeat another session's name or tag (tickets included) or a repo name, because you also type it to direct the session. Anything else (capitals, Chinese, spaces, 21 characters) is refused with the reason.
+- **Where it shows.** A named session shows its name instead of the ticket on the board, the focus band, the reply list and reports; `<name> 詳情` still lists the ticket. Typing the name or the old ticket both reach it.
 
 ## Install task-list (optional)
 
@@ -138,6 +153,21 @@ Add these keys to your existing `~/.config/worktree-console/config.json` (or `$W
 - **theme:** `neutral` (default, uses terminal colors), `neutral-light`, `dracula`, `gruvbox`, or `light`. `neutral` leaves foreground text in your terminal's default color.
 - **motion:** `true` (default) alternates ◆/◇ every 900ms only for the primary question. The current item takes priority, otherwise the first queued question or authorization request does. Every visible authorization ◆ breathes in sync: 1.2 seconds in the blocked color, then 0.6 seconds dim; the label and focus-band rail keep the blocked color. Working sessions and errors stay still. `false` keeps all icons at their initial frame and disables the animation timer.
 
+### Repo abbreviations
+
+When the same ticket runs in several repos, the board puts a short form of the repo after the ticket: `SARA-7063-fe` and `SARA-7063-be` for `sara-v2-frontend` and `sara-v2-backend`. By default the words every one of those repo names starts with are dropped and `frontend` / `backend` become `fe` / `be`; a repo name with neither keeps what is left (`acme-billing` next to `acme-admin-portal` gives `billing`). Set your own short forms with `repoAbbreviations`:
+
+```json
+{
+  "repoAbbreviations": {
+    "sara-v2-frontend": "web",
+    "sara-v2-backend": "api"
+  }
+}
+```
+
+If two short forms would still be the same, the board uses the full repo names instead (`SARA-7063-sara-v2-frontend`), so two sessions never share a tag. The console reads this key every time it lists sessions; no restart needed.
+
 Settings load when the session starts and each time the panel opens, so reopen the panel to apply edits. Only the console's own tab reads the file. Missing settings use the defaults; an unknown value falls back to its default with one toast per distinct invalid value in the session, and a file that is not valid JSON falls back to all defaults with one toast.
 
 The panel calls running sessions **工作中**, questions **待回答**, authorization requests **待授權**, and answered sessions **已回覆**. These are display labels only; the conversation board retains its original status wording. The host controls button typography and hotkey colors; clickable names and keys retain its native styling.
@@ -161,6 +191,8 @@ npm test
 Run tests inside a herdr tab as `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`. The focus band, `focus-show` and `tool-dots` tests run with `claude plugin test .`, `claude plugin test mods/focus-show` and `claude plugin test mods/tool-dots`.
 
 The real-terminal regression tests also need `tmux` and a `claude` build with mods. Run them alone with `node --test test/worktree-console-focus-terminal.test.mjs`; they use a temporary HOME, fake data and their own tmux socket, and never read your console state. Without `tmux` they are skipped locally with the reason; on CI (with the `CI` environment variable set) a missing `tmux` fails them. CI runs from `.github/workflows/ci.yml`: it installs a pinned `@anthropic-ai/claude-code` and `tmux`, then runs `npm test`, `claude plugin test .`, `claude plugin test mods/focus-show` and `claude plugin test mods/tool-dots`.
+
+Plugin versions are bumped by CI on each pull request. The `version` job finds which plugins the PR changes (`mods/focus-show`, `mods/tool-dots`, `plugins/task-list`, or everything else for `worktree-console`), bumps each from the version currently on `main` (`feat` → minor, anything else → patch, a `!` in the PR title → major), adds a `CHANGELOG.md` section with the PR title, and pushes a `chore: bump plugin versions` commit to the PR branch. It always recomputes from `main`, so pushing more commits keeps the same version, and if another PR merges first the next run moves to the following number. Notes you write in that changelog section yourself are kept; only the version heading changes. For a PR from a fork CI cannot push, so it checks instead and fails with the version each plugin should have. The script is `.github/scripts/plugin-versions.mjs`.
 
 To try a local checkout without replacing your installed copy:
 

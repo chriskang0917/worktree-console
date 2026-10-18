@@ -5,7 +5,7 @@
 | 指令 | 用途 |
 | --- | --- |
 | `console.mjs await-start --path P --expect <首則指令前 40 字> [--interview] [--timeout 60]` | `[票號] 已開工` 或 `[票號] 未開工：<原因>` |
-| `console.mjs title --terminal H -- <任務標題>` | 記下這個 session 的任務標題（≤ 15 字），專注卡片在同一個 worktree 有多個 session 時靠它分辨；成功不印任何東西 |
+| `console.mjs title --terminal H [--name <session 名稱>] -- <任務標題>` | 記下這個 session 的任務標題（≤ 15 字），專注卡片在同一個 worktree 有多個 session 時靠它分辨；帶 `--name` 時另外記下 Claude Code session 名稱，watcher 等它停下送 `/rename`（Orca 用 `orca worktree create` 開的 session 沒辦法帶 `claude --name`）。成功不印任何東西 |
 
 ## 開票（對齊）
 
@@ -18,7 +18,7 @@
 2. `orca linear issue <KEY-n> --json` 讀票（Linear 只讀：不改狀態、不留言）。讀不到就說明原因，請使用者貼票的內容。
 3. 找母票（orca 的回傳沒有母票欄位，只能反查）：把票名開頭的 `[…]` 前綴去掉後跑 `orca linear search "<標題>" --limit 5 --json`，扣掉這張票自己；對每個候選跑 `orca linear issue <候選> --children --json`，子票清單裡有這張票的就是母票。都沒有就當沒有母票。
 4. 決定預定 repo 與 branch 名稱。預定 repo 預設是啟動中控台的 repo；使用者指定別的 repo（名稱對 `orca repo list --json` 的 `displayName`）就改用它，以下的 `$TARGET` 指它的主 checkout。branch 名稱：先讀 `<base>/references/branch-naming.md`。沒有母票時，預定 branch＝第 2 步讀到的 `result.issue.branchName`。有母票時，先看 `orca worktree list --json` 裡所有 repo 的 worktree，branch 名稱含母票號（不分大小寫）的就整串照用（前後端分在不同 repo，名稱要完全一樣）；沒有就用母票的 branchName（`orca linear issue <母票號> --json`）。讀不到 branchName 才在 `$TARGET` 照 `branch-naming.md` 取名，有母票時票號用母票號、功能描述取自母票標題。**不另外停下來問名稱**，也不要寫死任何個人前綴。
-5. 回一段對齊摘要，開頭 `[KEY-n] 對齊`，內容：這張票要做什麼（2～4 行）；有母票時一行 `子票 <KEY-n> → 母票 <母票號>《<母票標題>》`請使用者確認，沒找到時一行「沒查到母票，branch 用這張票的 Linear branch 名稱」；一行 `預定 repo：<名稱>`；預定 branch 名稱（使用者指定的名稱不合規時，照 `branch-naming.md` 加一行提醒與建議名稱）；一行 `需求訪談：做` 或 `需求訪談：不做`，以及固定問句「確認後就開工？」。使用者否定母票、補給母票號或改 repo，就照他說的重做第 4 步。
+5. 回一段對齊摘要，開頭 `[KEY-n] 對齊`（使用者給了名稱就寫 `[<名稱>] 對齊`），內容：這張票要做什麼（2～4 行）；有母票時一行 `子票 <KEY-n> → 母票 <母票號>《<母票標題>》`請使用者確認，沒找到時一行「沒查到母票，branch 用這張票的 Linear branch 名稱」；一行 `預定 repo：<名稱>`；預定 branch 名稱（使用者指定的名稱不合規時，照 `branch-naming.md` 加一行提醒與建議名稱）；一行 `需求訪談：做` 或 `需求訪談：不做`；使用者給了名稱時一行 `名稱：<名稱>`（規則見 SKILL.md〈名稱〉，不合格式或撞名就在這裡說原因並請他換一個）；以及固定問句「確認後就開工？」。使用者說「名稱 <名稱>」「叫它 <名稱>」就是給名稱；沒給就不寫這行，照舊用票號或暱稱。使用者否定母票、補給母票號或改 repo，就照他說的重做第 4 步。
 6. **使用者確認之前，不呼叫 `orca worktree create`、不啟動任何子 session。** 使用者改 branch 名稱或 repo 就照新的。
 
 ### 沒有票
@@ -27,7 +27,7 @@
 
 ## 開工
 
-預定 repo 已有 worktree 用著預定的 branch（同一張母票的另一張子票）時，不建新 worktree：`orca terminal create --worktree path:<path> --command "claude" --json`，`orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json` 為 `satisfied:true` 後送首則指令，對這個 handle 照第 2 步跑一次 `title`，再從第 3 步接著做。該 worktree 原本綁的票不改。
+預定 repo 已有 worktree 用著預定的 branch（同一張母票的另一張子票）時，不建新 worktree：`orca terminal create --worktree path:<path> --command "claude --name <名稱或 KEY-n>" --json`，`orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json` 為 `satisfied:true` 後送首則指令，對這個 handle 照第 2 步跑一次 `title`，再從第 3 步接著做。該 worktree 原本綁的票不改。
 
 1. 建 worktree 並啟動子 session（不帶 `--base-branch`，用 repo 預設 base）。`--linear-issue` 有母票（對齊時使用者確認過）就綁母票號，看板代號因此顯示母票號；沒有母票或使用者否定母票就綁這張票本身；沒有票就不帶：
 
@@ -39,7 +39,7 @@
    資料夾名稱＝照 `branch-naming.md` 的預設格式與描述規則取的英文短名（只決定資料夾）；預定 branch 不是 Linear branchName 時就直接用預定 branch 名稱。
 
    做需求訪談時一定要加 `--comment interview`：目標檔寫出來之前，看板靠這個標記把階段顯示成規劃中；不做就不加。
-2. 取回 `result.worktree.path` 與 `result.agentTerminalHandle`（舊版只有 `result.startupTerminal.handle`），跑 `console.mjs title --terminal <handle> -- "<任務標題>"`：一句 ≤ 15 字、說得出這個 session 要做什麼的中文（例如「修登入頁錯誤訊息」），不放票號。`git -C <path> branch --show-current` 與預定名稱不同（Orca 會把 `/` 換成 `-`；用 Linear branchName 時資料夾名稱本來就不同）就 `git -C <path> branch -m "<預定名稱>"`。沒有票時 `orca worktree set --worktree path:<path> --display-name <暱稱> --json`：看板、回報、指揮都靠這個顯示名稱認出暱稱（3～8 個英文字母且不等於 branch 名稱）。
+2. 取回 `result.worktree.path` 與 `result.agentTerminalHandle`（舊版只有 `result.startupTerminal.handle`），跑 `console.mjs title --terminal <handle> --name <名稱，沒給就是看板代號（綁的票號或暱稱）> -- "<任務標題>"`：一句 ≤ 15 字、說得出這個 session 要做什麼的中文（例如「修登入頁錯誤訊息」），不放票號。`git -C <path> branch --show-current` 與預定名稱不同（Orca 會把 `/` 換成 `-`；用 Linear branchName 時資料夾名稱本來就不同）就 `git -C <path> branch -m "<預定名稱>"`。沒有票時 `orca worktree set --worktree path:<path> --display-name <暱稱> --json`：看板、回報、指揮都靠這個顯示名稱認出暱稱（3～8 個英文字母且不等於 branch 名稱）。使用者給了名稱時再跑 `console.mjs rename --repo "$REPO" <path 的 branch> <名稱>` 存下名稱。
 3. `console.mjs await-start --path <path> --expect "<首則指令前 40 字>" [--interview]`，把輸出逐字轉貼。
    - 未開工：`orca terminal read --terminal <handle> --screen --json` 看畫面；是 trust／onboarding 對話框就用 `orca terminal send --terminal <handle> --text "<對應按鍵>" --enter --json` 回應，之後重送一次首則指令、再跑一次 `await-start`。仍失敗就回報原因並停下，不自行重試第三次。
 4. 首則指令：

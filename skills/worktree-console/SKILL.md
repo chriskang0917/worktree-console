@@ -18,12 +18,12 @@ description: 在單一 Claude Code session 透過 orca CLI 或 herdr 當中控�
 3. 腳本一律用本 skill 載入時給的 base directory 組絕對路徑：`node <base>/scripts/console.mjs …`、`node <base>/scripts/watch.mjs …`，不要依賴 cwd。orca 執行檔可用 `ORCA_BIN` 覆寫。接著跑 `console.mjs prompt`，用 Read 完整讀它印的 `檔案：` 那份中控台 prompt，照其中〈中控台〉一段做；**每次啟動都要讀，不可略過**（使用者的自訂版本放在中控台設定目錄的 `prompt.md`，有就取代內建版本）。
 4. 清殘留：`pgrep -f "worktree-console/scripts/watch.mjs"` 找到的程序中，`ps -o ppid= -p <pid>` 為 1 的（孤兒）直接 `kill`。
 5. 跑 `console.mjs board --repo "$REPO"`，再跑 `console.mjs archived --repo "$REPO"`，兩段輸出依序原樣貼給使用者（`archived` 沒輸出就不貼）。
-6. 掛 watcher（見〈主動回報〉），第一次掛不帶 `--baseline`，watcher 會以第一輪輪詢為基準。印 `[watch] already-running` 表示另一個中控台（或舊版帶 `--repo` 的 watcher）正在監看：問「已有另一個中控台在監看，要不要由這裡接手？」，回要就加 `--takeover` 重掛（會先停掉舊的），回不要就不掛，之後只在使用者開口時看板。中控台是被自動交棒開起來的（接手指令會寫明）時直接加 `--takeover`，不問。
+6. 掛 watcher（見〈主動回報〉），第一次掛不帶 `--baseline`；中控台這一輪停下後，watcher 會替中控台自己的 session 送一次 `/remote-control`（手機的 remote control 清單就看得到中控台），中控台不用自己送、也不要再送（重送會跳出對話框）。子 session 一律不開 remote control，watcher 會以第一輪輪詢為基準。印 `[watch] already-running` 表示另一個中控台（或舊版帶 `--repo` 的 watcher）正在監看：問「已有另一個中控台在監看，要不要由這裡接手？」，回要就加 `--takeover` 重掛（會先停掉舊的），回不要就不掛，之後只在使用者開口時看板。中控台是被自動交棒開起來的（接手指令會寫明）時直接加 `--takeover`，不問。
 7. 跑 `console.mjs todo --repo "$REPO"`（見〈待開工的票〉）。
 
 orca `--json` 回傳一律是 `{ok, result}`；`ok:false` 時看 `error.code`（例如 `timeout`、`terminal_handle_stale`、`linear_issue_required`）。branch 顯示前剝掉 `refs/heads/`。
 
-## 腳本一覽（除 `answer`、`send`、`close`、`prune`、`handoff`、`ask`、`ask-tab` 外不動 Orca 與 git；封存、專注模式與問問題的子指令見各自段落）
+## 腳本一覽（除 `answer`、`send`、`close`、`prune`、`handoff`、`ask`、`ask-tab`、`rename` 外不動 Orca 與 git；封存、專注模式與問問題的子指令見各自段落）
 
 | 指令 | 用途 |
 | --- | --- |
@@ -34,6 +34,7 @@ orca `--json` 回傳一律是 `{ok, result}`；`ok:false` 時看 `error.code`（
 | `console.mjs answer --repo R <票號>[#n] <答案>` | 代按子 session 開著的選單，或回 🔐 授權請求 `允許`／`拒絕`（見〈指揮〉），送完等它離開等待狀態；輸出 `[票號] 已選擇：…`／`[票號] 已允許`／`[票號] 已拒絕`，失敗 exit 1 且不送任何按鍵 |
 | `console.mjs send --terminal H --tag T -- <文字>` | 把文字送進子 session 並讀畫面確認（見〈指揮〉第 1 步）：`[T] 已送出`、`[T] 已送出（排隊中）`、`[T] 已送出（已按 Esc 退回對話後重送）`；子 session 執行中卻還沒在畫面上看到那句時印未確認狀態 `[T] 已送出（子 session 執行中，畫面上還沒看到這句，等它停下再確認）` 並 exit 0；未送達印 `[T] 未送達：<原因>` 加畫面最後幾行並 exit 1 |
 | `console.mjs nickname --repo R <branch 或代號> <暱稱>` | 存中控台替 worktree 取的暱稱（3～5 個英文小寫字母）：`[<暱稱>] 已存暱稱：<branch>（<repo>）`；格式不對印 `[<暱稱>] 暱稱要 3～5 個英文小寫字母`、跟任何 repo 已有的暱稱或代號撞名印 `[<暱稱>] 暱稱已被使用，請換一個`，都 exit 1 |
+| `console.mjs rename --repo R <代號> <名稱>` | 「<代號> 改名 <名稱>」：存下名稱，看板、專注橫條、待回覆清單、herdr 分頁名稱立刻換成新名稱；停著的 session 立刻送 `/rename <名稱>` 改 Claude Code session 名稱，還在跑（或等你回應、授權）的記下來，等它停下由 watcher 送。輸出 `[<名稱>] 已改名：<舊代號> → <名稱>`，有沒停下的再加一行 `<代號> 還沒停下，Claude Code session 名稱等它停下再改`；名稱不合格式或撞名印 `[<名稱>] 不能用：<原因>` 並 exit 1 |
 | `watch.mjs [--baseline <快照>] [--takeover]` | 全機唯一的常駐監看，涵蓋 Orca 所有 repo；有 session 進入待你處理的狀態就輸出回報＋完整看板並結束；暫存 worktree 的最後一個分頁關掉後，乾淨的自動移除（見 `references/ask.md`） |
 
 狀態只有五種（herdr 模式多一種 ⚠️ session 異常，需手動排程，見 `references/herdr.md`）：🔄 執行中（子 session 正在做事）、🔐 等待授權（等你允許它執行工具）、💬 等待回應（問了問題或開了選單在等你答）、⏸ 回覆完畢（這一輪回完，等你下一步指令）、💤 閒置（沒有在跑）；「待你處理」包含等待授權、等待回應、回覆完畢三種。
@@ -42,7 +43,19 @@ orca `--json` 回傳一律是 `{ok, result}`；`ok:false` 時看 `error.code`（
 
 要知道是哪個 💤 閒置 session，看專注面板的「全部」分頁（卡片標「閒置」），或用代號跑 `detail`（`resolve`、指揮照樣找得到閒置 session）。watcher 回報後的看板與 `after-send` 貼的看板同一規則。為了讓整列壓在 100 欄內（中文與 emoji 算 2 格），狀態、票號、階段三欄保持原字，剩下的寬度分給摘要與最後動態，放不下就截短並以「…」結尾；完整票名看「詳情」。
 
-同一個 worktree 有兩個以上 claude session（扣掉中控台自己）時，依開啟順序編號成 `<票號>#1`、`<票號>#2`（Orca 沒給建立時間就依 paneKey 固定排序）；只有一個時不加編號。`resolve` 候選與 `detail` 用最後一則指令區分各 session；指令為空（例如接續舊對話的 session）就改顯示 `說：<該 session 最後回覆最後一段的前 20 字>`，兩者都空才顯示「（無）」。回報標題、看板列、`resolve` 的 `tag`、`detail` 都用同一套編號。不同 repo 的代號撞名時（例如兩個 repo 的主 checkout 都是 `dev`），看板、回報、待回覆清單、`resolve` 都改用 `<repo 名稱>/<代號>`（如 `proj-v2/dev`），指揮也用它；沒撞名時代號不加前綴。
+同一個 worktree 有兩個以上 claude session（扣掉中控台自己）時，依開啟順序編號成 `<票號>#1`、`<票號>#2`（Orca 沒給建立時間就依 paneKey 固定排序）；只有一個時不加編號。`resolve` 候選與 `detail` 用最後一則指令區分各 session；指令為空（例如接續舊對話的 session）就改顯示 `說：<該 session 最後回覆最後一段的前 20 字>`，兩者都空才顯示「（無）」。回報標題、看板列、`resolve` 的 `tag`、`detail` 都用同一套編號。不同 repo 的代號撞名時，看板、回報、待回覆清單、`resolve` 都改用加了 repo 的代號，指揮也用它；沒撞名時代號不加 repo：
+
+- 同一張票開在多個 repo：票號後面接 repo 的縮寫，例如 `sara-v2-frontend` 與 `sara-v2-backend` 的 `SARA-7063` 顯示成 `SARA-7063-fe`、`SARA-7063-be`。縮寫先看 `~/.config/worktree-console/config.json` 的 `repoAbbreviations`（`{"<repo 名稱>": "<縮寫>"}`），沒設定就把這幾個 repo 名稱共同的開頭字去掉，再把 `frontend`／`backend` 縮成 `fe`／`be`；縮完兩邊還是一樣時改接完整 repo 名稱（`SARA-7063-sara-v2-frontend`），不會出現兩個一樣的代號。
+- 其他代號撞名（例如兩個 repo 的主 checkout 都是 `dev`）：改用 `<repo 名稱>/<代號>`（如 `proj-v2/dev`）。
+
+## 名稱
+
+中控台開的每個 session 都有名稱：開 claude 時一律帶 `claude --name <名稱>`（正式開工、暫存 session、臨時分頁、`open`、`move`、需求訪談交棒、自動交棒都一樣；Orca 用 `orca worktree create` 開的 session 改由 watcher 在它停下時送 `/rename`），herdr 模式的分頁也一律有名稱，中控台自己的分頁叫 `console`。名稱沒另外給時就是它的代號（票號、暱稱或 branch）。
+
+- 使用者可以在開工或開暫存 session 時給名稱（例如「PROJ-123 開工，名稱 login-fix」「問：README 在講什麼？名稱 docs」），開了之後用「<代號> 改名 <名稱>」改（跑 `console.mjs rename`，輸出逐字轉貼）。沒給名稱就照舊由中控台取暱稱。
+- 名稱只收英文小寫、數字、`-`，2～20 字元，不能和既有名稱、任何代號（含票號）或 repo 名稱重複；名稱同時是指揮用的代號，所以不合格式或撞名一律拒絕並印原因（大寫、中文、空白、21 字元都會被拒絕）。
+- 有名稱的 session，看板、專注橫條、待回覆清單、回報都顯示名稱，不顯示票號，也不加 repo；票號只出現在「詳情」的 `票號：` 一行。打名稱或原本的票號都指揮得到它。
+- herdr 模式：watcher 每一輪會替名稱還是純數字、裡面有 claude 在跑的分頁補上名稱（有使用者名稱用名稱，否則有票號用票號，再不然用 branch 或資料夾名），已經有非數字名稱的分頁不改；中控台自己的分頁改成 `console`。Orca 模式不改分頁名稱。
 
 沒票也沒暱稱的 worktree（同票同 repo 有多個 worktree 時括號裡那段也是）由中控台替它取暱稱：`board`、`after-send`、watcher 回報最後出現 `待取暱稱：<branch>（<repo>）、…` 時，這一輪先替每個 branch 取一個 3～5 個英文小寫字母、念得出意思的暱稱（例如 `feat/backend-api-request-comment` → `cmnt`），用 `console.mjs nickname` 存下（撞名就換一個再存），不必告訴使用者，存好再處理其他事。暱稱存在 `~/.config/worktree-console/nicknames.json`，之後看板、卡片、回報、`/focus-show` 都用它當代號（同票同 repo 是 `<票號>(<暱稱>)`），不加 repo 前綴；還沒取名前代號是拿掉類型前綴、截到 8 格加「…」的 branch（例如 `backend…`）。指揮時打暱稱、截短代號或完整 branch 名稱都認得。
 
@@ -57,6 +70,7 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 ```
 
 - 整台機器只掛一支（所有 repo 共用）；腳本自己會用 `pgrep` 檢查，印 `[watch] already-running` 時照〈硬需求與啟動〉第 6 步問要不要接手。
+- 每一輪順手做三件不出聲的事（不叫醒中控台、不印任何東西）：中控台自己的 session 停下後送一次 `/remote-control`（每個中控台 session 只送一次，自動交棒換成新的中控台 session 時再送一次）；herdr 模式替純數字的分頁補名稱、把中控台的分頁改成 `console`（見〈名稱〉）；送出等 session 停下的 `/rename`。
 - 被 watcher 叫醒時，讀它的輸出：
   - 回報：每則以 `### <emoji> <票號[#n]> <等你回應／等你選擇／等你授權／回覆完畢>` 開頭，空一行後是子 session 原文（引用框內、不截斷）或選單表格；同一輪有幾個 session 變動就有幾則。接著是先前回報過、還停在 💬／🔐 的 session，各自完整重貼一次，標題結尾加「（先前已回報，尚未回覆）」，免得使用者往上捲找。全部之後是 `---` 與一張完整看板；待回覆清單不是空的時，最後再附上。除了最後一行 `baseline:`，其餘**整段原樣貼出**，不改寫、不摘要、不合併、不摺疊。然後立刻帶 `baseline:` 後面的內容重掛。
   - 待回覆清單：標題 `### 📋 待回覆`（不含題數），下接表格 `狀態｜代號｜問題｜選項｜建議`，收 💬、🔐，以及 ⏸ 回覆完畢（子 session 回完一輪、在等你下一步指令；問題欄放最後一句；已推送 的也收）。代號就是看板的 tag，選單多題時每題一列並加圈號（`6923①`）；選項一律以 a、b、c 標示（數字留給專注橫條切題）：文字題的選項欄由腳本截取（只看最後一個「第 N 題」之後；子 session 問「選哪個／哪一種」、建議點名清單裡的代號、或選項標「（建議）」才算選項，是非題與理由清單一律「—」；大小寫字母與數字都認，照子 session 原寫法送出）成 `a 專注模式當預設／b 預設維持現在的全…`（行首粗體段，否則到第一個「，：。—（」為止，每項最多 8 個中文字；`**A（建議）：…**` 這種寫法也認），選單題是「字母 標籤」；回報的選單表格同樣用 a、b、c，文字題回報在引用框後附一份 `- a. …` 對照。建議只轉述子 session 自己給的（選單標 Recommended、文字寫「建議是：」「我建議」「推薦」或選項行標「（建議）」「（我的建議）」「（Recommended）」、⏸ 最後一段的「下一步建議…」），沒有就是「—」，**中控台不自己補建議**。
@@ -102,7 +116,7 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 | 使用者問為什麼是這個狀態或階段，或寫詳情建議需要判斷階段時 | `status-stage.md` |
 | 「封存 <代號>」（〈封存〉） | `archive.md` |
 | 中控台在 herdr 分頁裡（`HERDR_ENV=1`）：啟動前；使用者說「<票號> 狀態錯了，其實是 X」；「把 <票號> 搬到 <工作區>」；要看 herdr 試跑評估 | `herdr.md` |
-| 「問 <repo>：<問題>」、「<代號> 問：<問題>」，或開頭那個字像 repo 名稱（3 個字元以上）且不是中控台指令（〈問問題〉） | `ask.md` |
+| 「問：<問題>」、「問 <repo>：<問題>」、「<代號> 問：<問題>」，或開頭那個字像 repo 名稱（3 個字元以上）且不是中控台指令（〈問問題〉） | `ask.md` |
 | 對話出現 `/focus-show` 的輸出，或 `after-send` 印出 `等 <代號> 回應中…`（〈專注模式〉） | `focus.md` |
 
 ## 指揮（把話送進某張票）
@@ -125,7 +139,8 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
    - 扣掉剛回的仍有 💬／🔐 在等 → 只貼剩下的待回覆清單。
    - 已無 💬／🔐 在等（只剩 ⏸ 也算）→ 貼完整看板。
    - 送出失敗（未送出、`send` 回未送達、找不到票、`many` 反問要送哪一個、`answer` exit 1）→ 兩者都不貼，不跑 `after-send`。
-7. 「<代號> 照建議」（或 `<代號> 好`／`<代號> 可以` 等明確同意，或「<代號> 照建議，第 n 題改成…」）：中控台把該代號詳情建議的具體做法展開成一段完整指令（改過的題目換成使用者的版本，其餘照建議），照第 1 步用 `console.mjs send` 送出、照第 6 步跑 `after-send`；選單或授權畫面開著時照第 3 步用 `answer` 送建議的編號或允許。**不把「照建議」原文送進子 session**。
+7. 「<代號> 改名 <名稱>」：照〈名稱〉跑 `console.mjs rename --repo "$REPO" <代號> <名稱>`，輸出逐字轉貼，不跑 `after-send`，不送任何文字進子 session（`/rename` 由腳本送）。
+8. 「<代號> 照建議」（或 `<代號> 好`／`<代號> 可以` 等明確同意，或「<代號> 照建議，第 n 題改成…」）：中控台把該代號詳情建議的具體做法展開成一段完整指令（改過的題目換成使用者的版本，其餘照建議），照第 1 步用 `console.mjs send` 送出、照第 6 步跑 `after-send`；選單或授權畫面開著時照第 3 步用 `answer` 送建議的編號或允許。**不把「照建議」原文送進子 session**。
    - 只認本次對話最近一次對該代號貼出的詳情建議，且之後 watcher 沒再回報過該代號（子 session 沒有新回覆）。不符合就不送，回一行 `[代號] 沒有可用的詳情建議，請先看「<代號> 詳情」或直接回答案`；不改用看板或待回覆清單上子 session 自己的建議。
    - 為什麼值得加：子 session 看不懂「照建議」三個字，所以要展開成完整指令。限定最近一次詳情是因為畫面上同時有子 session 自己的建議，混用會不知道送出的是哪一份。
 
