@@ -459,7 +459,7 @@ export function agentStatus(agent) {
   if (state === "anomaly") return { kind: "anomaly", text: "", raw: agent.herdr?.raw ?? null, screen: agent.screen ?? [] };
   if (state === "working") return { kind: "busy", text: agent.prompt ?? "" };
   if ((state === "waiting" || state === "blocked") && agent.toolName === MENU_TOOL) {
-    return { kind: "waiting", menu: parseMenu(agent.toolInput), text: "" };
+    return { kind: "waiting", menu: parseMenu(agent.toolInput), text: "", ...(agent.menuLead ? { lead: agent.menuLead } : {}) };
   }
   if (state === "waiting" || state === "blocked") {
     const input = typeof agent.toolInput === "string" ? agent.toolInput : agent.toolInput ? JSON.stringify(agent.toolInput, null, 2) : "";
@@ -531,24 +531,29 @@ function menuFromTranscript(worktreePath, prompt) {
   }
   const want = (prompt || "").trim();
   const match = want ? pending.find((p) => p.prompts.some((x) => x.includes(want) || want.includes(x))) : null;
-  return (match ?? (pending.length === 1 ? pending[0] : null))?.questions ?? null;
+  return match ?? (pending.length === 1 ? pending[0] : null);
 }
 
 function pendingMenu(file) {
   let call = null;
+  let lead = "";
   const prompts = [];
   for (const entry of readEntries(file)) {
     const content = entry.message?.content;
-    if (entry.type === "user" && typeof content === "string") prompts.push(content.trim());
+    if (entry.type === "user" && typeof content === "string") (prompts.push(content.trim()), (lead = ""));
     if (!Array.isArray(content)) continue;
     for (const part of content) {
-      if (entry.type === "assistant" && part.type === "tool_use") call = part.name === MENU_TOOL ? part : null;
+      if (entry.type === "assistant" && part.type === "text" && part.text?.trim()) lead = lead ? `${lead}\n${part.text.trim()}` : part.text.trim();
+      if (entry.type === "assistant" && part.type === "tool_use") {
+        call = part.name === MENU_TOOL ? { ...part, lead } : null;
+        lead = "";
+      }
       if (entry.type === "user" && part.type === "tool_result" && part.tool_use_id === call?.id) call = null;
-      if (entry.type === "user" && part.type === "text" && part.text) prompts.push(part.text.trim());
+      if (entry.type === "user" && part.type === "text" && part.text) (prompts.push(part.text.trim()), (lead = ""));
     }
   }
   const questions = parseMenu(call?.input);
-  return questions ? { questions, prompts } : null;
+  return questions ? { questions, prompts, lead: call.lead } : null;
 }
 
 function userTexts(entry) {
@@ -893,7 +898,8 @@ export function goalOnScreen(handle) {
 
 function withMenu(status, agent, worktreePath) {
   if (status.kind !== "waiting" || status.menu || agent?.toolName !== MENU_TOOL || agent?.state === "done") return status;
-  return { ...status, menu: menuFromTranscript(worktreePath, agent.prompt) };
+  const hit = menuFromTranscript(worktreePath, agent.prompt);
+  return { ...status, menu: hit?.questions ?? null, ...(hit?.lead ? { lead: hit.lead } : {}) };
 }
 
 export function pickUrgent(statuses) {
@@ -1696,7 +1702,7 @@ export function reportLines(row, status, session = null, { again = false } = {})
   const tag = sessionTag(row, session);
   const title = (status.kind === "waiting" && status.menu ? TITLE.menu : TITLE[status.kind]) + (again ? "（先前已回報，尚未回覆）" : "");
   const lines = [`### ${LABELS[status.kind].split(" ")[0]} ${tag} ${title}`, ""];
-  if (status.kind === "waiting" && status.menu) return [...lines, ...menuLines(status.menu)];
+  if (status.kind === "waiting" && status.menu) return [...lines, ...(status.lead ? [...quote(status.lead), ""] : []), ...menuLines(status.menu)];
   if (status.kind === "waiting" && menuOpen(session?.agent)) {
     return [...lines, "> （讀不到選單內容，請到 Orca 分頁查看）"];
   }

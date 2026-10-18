@@ -43,6 +43,22 @@ test("回報裡的 markdown 表格留在引用框外面畫成表格：/focus-sho
   assert.deepEqual(tableIn(payload.sessions[0].report.split("\n")), TABLE, "/focus-show 印的回報同樣畫成表格");
 });
 
+test("選單前畫了表格：/focus-show 的回報先印選單前那段回覆文字（表格在引用框外），再印選項表；沒有回覆文字時只有選項表", () => {
+  const questions = [{ question: "要修掉警告嗎？", header: "警告", options: [{ label: "修", description: "" }, { label: "不修", description: "" }], multiSelect: false }];
+  const menuRow = (agent) => ({ ...rowOf(""), sessions: [{ n: null, paneKey: "t:1", handle: "h1", agent: { state: "blocked", toolName: "AskUserQuestion", stateStartedAt: 1 }, status: agentStatus({ state: "blocked", toolName: "AskUserQuestion", toolInput: { questions }, ...agent }) }] });
+  const row = menuRow({ menuLead: ["檢查完了：", "", ...TABLE].join("\n") });
+  const lines = reportLines(row, row.sessions[0].status, row.sessions[0]);
+  const at = lines.indexOf(TABLE[0]);
+  assert.deepEqual(tableIn(lines), TABLE, lines.join("\n"));
+  assert.ok(lines.indexOf("> 檢查完了：") < at && at < lines.indexOf("> **警告**　要修掉警告嗎？"), lines.join("\n"));
+  const view = syncFocus([row], { now: 10 });
+  const report = focusPayload([row], view, { now: 10 }).payload.sessions[0].report.split("\n");
+  assert.deepEqual(tableIn(report), TABLE, report.join("\n"));
+  const bare = menuRow({});
+  assert.deepEqual(reportLines(bare, bare.sessions[0].status, bare.sessions[0]).slice(2, 4), ["> **警告**　要修掉警告嗎？", ""]);
+  assert.equal(tableIn(reportLines(bare, bare.sessions[0].status, bare.sessions[0])), null);
+});
+
 test("程式碼區塊裡的 | 不當表格，照舊留在引用框", () => {
   const text = ["例子：", "```", ...TABLE, "```", "這樣可以嗎？"].join("\n");
   const row = rowOf(text);

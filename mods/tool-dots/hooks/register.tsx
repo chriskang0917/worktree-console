@@ -48,7 +48,7 @@ function summary(run: Call[]) {
   const counts = new Map<string, number>()
   for (const c of run) counts.set(nameOf(c.tool), (counts.get(nameOf(c.tool)) ?? 0) + 1)
   const errors = run.filter(c => c.errored).length
-  return ` tool_call: ${[...counts].map(([tool, n]) => `${tool} ×${n}`).join(' · ')}${errors ? ` - ${errors} error${errors > 1 ? 's' : ''}` : ''}`
+  return `tool_call: ${[...counts].map(([tool, n]) => `${tool} ×${n}`).join(' · ')}${errors ? ` - ${errors} error${errors > 1 ? 's' : ''}` : ''}`
 }
 
 const colorOf = (c: Call) => (c.running ? 'yellow' : c.errored ? 'red' : 'green')
@@ -69,9 +69,10 @@ async function drawLine($: EngineInterface, { Box, Text }: { Box: Element; Text:
   return (
     <Box flexDirection="row">
       <Text wrap="truncate-end">
+        {'  '}
         {dots.map((d, i) => <Text key={`dots:${i}`} color={d.color}>{'●'.repeat(d.n)}</Text>)}
         {more > 0 && <Text dimColor>{`+${more}`}</Text>}
-        <Text>{summary(shown)}</Text>
+        <Text dimColor>{`  ${summary(shown)}`}</Text>
       </Text>
     </Box>
   )

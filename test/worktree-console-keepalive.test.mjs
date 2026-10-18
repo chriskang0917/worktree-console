@@ -160,6 +160,7 @@ function screens(dir, home, now = Date.now()) {
       board: boardLines(data.rows).join("\n"),
       pending: pendingBlock(data.rows).join("\n"),
       focus: payload.sessions.filter((s) => s.pending).map((s) => ({ tag: s.tag, question: s.question, options: s.options, suggest: s.suggest })),
+      cards: payload.sessions.map(({ tag, status, stage, summary, question, options, report }) => ({ tag, status, stage, summary, question, options, report })),
       onScreen: view.current?.key ?? null,
       queue: [view.current, ...view.queue].filter(Boolean).map((e) => e.key),
     };
@@ -252,7 +253,10 @@ test("續命：子 session 只回固定短句時不出聲；從送出續命、�
     assert.equal(now2.board, before.board, `${name}：看板不變`);
     assert.equal(now2.pending, before.pending, `${name}：待回覆清單不變`);
     assert.deepEqual(now2.focus, before.focus, `${name}：專注面板的題目與選項不變`);
-    assert.ok(!(now2.board + now2.pending + JSON.stringify(now2.focus)).includes(KEEPALIVE_REPLY), `${name}：畫面不出現固定短句`);
+    assert.deepEqual(now2.cards, before.cards, `${name}：中控台卡片的節錄、狀態、問題列與回報不變`);
+    const shown = now2.board + now2.pending + JSON.stringify(now2.focus) + JSON.stringify(now2.cards);
+    assert.ok(!shown.includes(KEEPALIVE_REPLY), `${name}：畫面不出現固定短句`);
+    assert.ok(!shown.includes("中控台自動訊息"), `${name}：畫面不出現續命訊息`);
   }
   const replied = screens(world([{ ...stop, prompt: "用 A", text: "好，改前端。要不要也改樣式？", since: now - 30_000 }]), home);
   assert.match(replied.pending, /要不要也改樣式/, "使用者回覆後改顯示新的回覆");

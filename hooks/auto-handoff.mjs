@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readManaged } from "../skills/worktree-console/scripts/log.mjs";
+import { KEEPALIVE_REPLY, KEEPALIVE_TEXT } from "./keepalive-text.mjs";
 
 const SMALL_WINDOW = 200_000;
 const LARGE_WINDOW = 1_000_000;
@@ -20,8 +21,7 @@ const UNSUPPORTED = "自動交棒只支援 Orca 與 herdr：這個終端機兩�
 const ENDED = new Set(["end_turn", "stop_sequence", "max_tokens", "refusal"]);
 const SELF = fileURLToPath(import.meta.url);
 export const CACHE_HANDOFF_TEXT = "（中控台自動交棒，不是使用者的新指令）你的 prompt 快取快到期了，接下來會換新 session 接手：先不要做任何事，直接結束這一輪。";
-export const KEEPALIVE_REPLY = "收到";
-export const KEEPALIVE_TEXT = `（中控台自動訊息，不是使用者的新指令）只回「${KEEPALIVE_REPLY}」兩個字，不要做任何事，也不要呼叫任何工具。`;
+export { KEEPALIVE_REPLY, KEEPALIVE_TEXT };
 export const TAKEOVER_HEAD = "接手交棒：";
 export const CONSOLE_NAME = "console";
 

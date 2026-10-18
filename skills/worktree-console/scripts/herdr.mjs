@@ -210,6 +210,7 @@ export function transcriptState(entries, { truncated = false } = {}) {
   let turn = null;
   let prompted = truncated;
   let said = [];
+  let lead = "";
   let at = null;
   for (const e of entries) {
     if (e.isSidechain || (e.type !== "user" && e.type !== "assistant")) continue;
@@ -219,9 +220,16 @@ export function transcriptState(entries, { truncated = false } = {}) {
       if (isPrompt(e)) {
         prompted = true;
         said = [];
+        lead = "";
       }
     } else {
-      for (const p of parts) if (p.type === "tool_use") open.set(p.id, p);
+      for (const p of parts) {
+        if (p.type === "text" && p.text?.trim()) lead = lead ? `${lead}\n${p.text.trim()}` : p.text.trim();
+        if (p.type === "tool_use") {
+          open.set(p.id, { ...p, lead });
+          lead = "";
+        }
+      }
       const text = parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n").trim();
       if (text) said.push(text);
     }
@@ -233,7 +241,7 @@ export function transcriptState(entries, { truncated = false } = {}) {
   const pending = [...open.values()].at(-1) ?? null;
   const ended = last?.type === "assistant" ? ENDED.has(last.message?.stop_reason) : !!last && INTERRUPTED.test(promptText(last));
   const phase = pending ? "tool" : !prompted ? "fresh" : ended ? "replied" : "running";
-  return { phase, pending: pending ? { name: pending.name, input: pending.input } : null, text: said.join("\n\n"), final: said.at(-1) ?? "", at, turn, prompt: typedPrompt(lastInstruction(entries) ?? "") };
+  return { phase, pending: pending ? { name: pending.name, input: pending.input, lead: pending.lead } : null, text: said.join("\n\n"), final: said.at(-1) ?? "", at, turn, prompt: typedPrompt(lastInstruction(entries) ?? "") };
 }
 
 const graceMs = () => Number(process.env.HERDR_GRACE_MS ?? 30_000);
@@ -313,6 +321,7 @@ export function herdrAgent(a, readScreen = screenLines) {
     stateStartedAt: t?.at ?? null,
     toolName: blocked ? t.pending.name : null,
     toolInput: blocked ? toolInput(t.pending.name, t.pending.input) : null,
+    ...(blocked && t.pending.name === MENU_TOOL && t.pending.lead ? { menuLead: t.pending.lead } : {}),
     transcript: t ? file : null,
     ...(state === "anomaly" ? { screen: onScreen() } : {}),
     herdr: { raw, inferred: inferredKind(t, file, onScreen), transcript: !!t, name: a.name ?? null },
