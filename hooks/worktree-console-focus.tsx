@@ -6,6 +6,7 @@ type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '
 
 type Session = {
   key: string
+  id: string
   tag: string
   repo: string
   status: Status
@@ -268,16 +269,13 @@ function run($: EngineInterface, args: string[]) {
   return $.process.run(['node', `${$.plugin.root}/skills/worktree-console/scripts/console.mjs`, ...args], { timeoutMs: 60_000 })
 }
 
-// Must match stopId in mods/focus-show: names one stop so /focus-show can tell it is still on the band when it finally runs.
-const stopId = (key: string) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36)
-
 // Prints one question's full report through the focus-show mod, never through the model. A stop counts as printed only when
 // /focus-show answered with its report; anything else is sent again on the next poll, with a toast after 3 misses in a row.
 async function show($: EngineInterface, tag: string, key: string | null = null) {
   const s = sessions().find(x => x.tag === tag)
   if (!s || !focus.home) return
   await $.fs.write(`${focus.home}/show/${encodeURIComponent(tag)}.md`, s.report)
-  const id = key && stopId(key)
+  const id = key && s.id
   if (id) await $.fs.write(`${focus.home}/show/${encodeURIComponent(tag)}@${id}.md`, s.report)
   const res = await $.command.run({ command: 'focus-show', args: id ? `${tag} ${id}` : tag }).catch(() => null)
   if (!key) {

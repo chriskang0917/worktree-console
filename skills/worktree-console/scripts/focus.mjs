@@ -8,6 +8,11 @@ const MODS_TTL_MS = 30_000;
 const FILE = "focus.json";
 const CONSOLE_SESSIONS_MAX = 10;
 const REPLIED_MAX = 20;
+// The focus.json format version mods/focus-show checks; when to bump it is in references/focus-contract.md.
+export const FOCUS_VERSION = 1;
+
+// Names one stop so /focus-show can tell it is still on the band when it finally runs. focus-show 0.1.2 and older compute it themselves, so keep the formula.
+export const stopId = (key) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36);
 
 export function emptyFocus() {
   return { modsAt: 0, current: null, currentAt: 0, reported: [], wait: null, answered: [], replied: [], back: {}, bumped: {}, seen: {}, titles: {}, firsts: {} };
@@ -24,7 +29,9 @@ export function loadFocus() {
 export function saveFocus(state) {
   try {
     fs.mkdirSync(consoleHome(), { recursive: true });
-    fs.writeFileSync(path.join(consoleHome(), FILE), JSON.stringify(state));
+    const currentId = state.current ? stopId(state.current) : null;
+    const queuedIds = Object.keys(state.seen ?? {}).map(stopId).filter((id) => id !== currentId);
+    fs.writeFileSync(path.join(consoleHome(), FILE), JSON.stringify({ ...state, version: FOCUS_VERSION, currentId, queuedIds }));
   } catch {}
 }
 
@@ -219,8 +226,10 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         item ? (item.entries.length > 1 ? item.entries.map((x) => x.question).join(" / ") : item.entries[0].question) : status.kind === "idle" ? "（閒置）" : lastActivity(status),
       );
       const report = needsYou(status.kind) ? reportLines(row, status, session) : plainReport(tag, status);
+      const key = keyOf.get(session) ?? session.paneKey;
       return {
-        key: keyOf.get(session) ?? session.paneKey,
+        key,
+        id: stopId(key),
         tag,
         repo: row.repo,
         status: STATUS[status.kind][1],

@@ -10,6 +10,7 @@ const HOME = '/tmp/wtc-home'
 
 type Card = {
   key: string
+  id: string
   tag: string
   repo: string
   status: string
@@ -24,6 +25,7 @@ type Card = {
 
 const card = (tag: string, extra: Partial<Card> = {}): Card => ({
   key: `${tag}@1`,
+  id: `id-${tag}-1`,
   tag,
   repo: 'agent-skills',
   status: '等待回應',
@@ -50,9 +52,9 @@ const SESSIONS = [
 
 const STATS = '等待回應 3 | 等待授權 1 | 回覆完畢 1 | 執行中 1 | 封存 1 | 閒置 1'
 const keyOf = (tag: string) => `${tag}@1`
-const stopId = (key: string) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36)
+const idOf = (key: string) => `id-${key.replace('@', '-')}`
 
-type World = { focus: any; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
+type World = { focus: any; answer?: string; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
 const appearanceConfig = new WeakMap<World, AppearanceConfig | string>()
 
@@ -145,6 +147,7 @@ async function start($: any, on: On, world: World, env: Record<string, string> =
       return {}
     }
     world.shown.push(e.args)
+    if (world.answer) return { text: world.answer }
     const [tag, id] = e.args.split(' ')
     return { text: world.writes[`${HOME}/show/${encodeURIComponent(tag)}${id ? `@${id}` : ''}.md`] ?? `[${tag}] 沒有可印的題目` }
   })
@@ -284,7 +287,7 @@ test('band keys: 1–5 switch to that question and print it, 8 (延後處理) se
   expect(await labels(ui)).not.toContain('9: 題目')
   await ui.press({ key: 'show' })
   await ui.press({ key: 'show' })
-  expect(w.shown.slice(-2)).toEqual(Array(2).fill(`PROJ-6668 ${stopId(keyOf('PROJ-6668'))}`))
+  expect(w.shown.slice(-2)).toEqual(Array(2).fill(`PROJ-6668 ${idOf(keyOf('PROJ-6668'))}`))
   expect(w.writes[`${HOME}/show/PROJ-6668.md`]).toBe(SESSIONS.find(s => s.tag === 'PROJ-6668')!.report)
   await ui.press({ key: 'pane' })
   expect(w.opened.at(-1)).toMatchObject({ id: PANE, focus: true })
@@ -325,7 +328,7 @@ test('an announce is printed once though polls repeat it, then reported with foc
   const clock = await start($, on, w)
   await clock.advance(5_000)
   await clock.advance(5_000)
-  expect(w.shown).toEqual([`perm ${stopId(keyOf('perm'))}`])
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
   const poll = w.calls.find(c => c[0] === 'focus')!
   expect(poll.slice(1)).toEqual(['--session', 'console-session'])
@@ -339,14 +342,14 @@ test('a stop that left the band and came back is announced again, so a print ski
   w.focus = { ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }
   await clock.advance(5_000)
   await clock.advance(5_000)
-  const id = stopId(keyOf('perm'))
-  expect(w.shown).toEqual([`perm ${id}`, `focusui ${stopId(keyOf('focusui'))}`, `perm ${id}`])
+  const id = idOf(keyOf('perm'))
+  expect(w.shown).toEqual([`perm ${id}`, `focusui ${idOf(keyOf('focusui'))}`, `perm ${id}`])
 })
 
 test('an announced stop is printed with its id from a file of its own, and the plain 代號 file stays fresh for a hand-typed /focus-show', async ($, on) => {
   const w = world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') })
   await start($, on, w)
-  const id = stopId(keyOf('perm'))
+  const id = idOf(keyOf('perm'))
   expect(w.shown).toEqual([`perm ${id}`])
   expect(w.writes[`${HOME}/show/perm@${id}.md`]).toBe(SESSIONS.find(s => s.tag === 'perm')!.report)
   expect(w.writes[`${HOME}/show/perm.md`]).toBe(SESSIONS.find(s => s.tag === 'perm')!.report)
@@ -355,7 +358,7 @@ test('an announced stop is printed with its id from a file of its own, and the p
 test('漏印重送: a /focus-show the console drops (it answers without the report) is not reported as shown and goes again on the next poll; printed once, then focus-shown once', async ($, on) => {
   const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, lost: 1 }
   const clock = await start($, on, w)
-  const id = stopId(keyOf('perm'))
+  const id = idOf(keyOf('perm'))
   expect(w.dropped).toEqual([`perm ${id}`])
   expect(w.shown).toEqual([])
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
@@ -371,7 +374,7 @@ test('漏印重送: a /focus-show the console drops (it answers without the repo
 test('漏印重送: three misses in a row toast 「[perm] 題目沒印出，按 Enter 印」 once; it keeps trying and prints once the console takes it', async ($, on) => {
   const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, lost: 4 }
   const clock = await start($, on, w)
-  const id = stopId(keyOf('perm'))
+  const id = idOf(keyOf('perm'))
   await clock.advance(5_000)
   expect(w.toasts).toEqual([])
   await clock.advance(5_000)
@@ -390,7 +393,7 @@ test('漏印重送: three misses in a row toast 「[perm] 題目沒印出，按 
 test('漏印重送: after the toast, Enter on the card prints the question and reports it shown, so the next poll does not print it again', async ($, on) => {
   const lone = { ...world({ ...focusOf('perm', []), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, lost: 3 }
   const clock = await start($, on, lone)
-  const id = stopId(keyOf('perm'))
+  const id = idOf(keyOf('perm'))
   await clock.advance(5_000)
   await clock.advance(5_000)
   expect(lone.toasts).toEqual(['[perm] 題目沒印出，按 Enter 印'])
@@ -416,25 +419,35 @@ test('漏印重送: a rejected /focus-show is never reported as shown; it is tri
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
 })
 
+test('a /focus-show that cannot read focus.json\'s format answers one line: polls never send it again, and it is not reported as shown', async ($, on) => {
+  const answer = '[perm] 印不出題目：focus-show 太舊，不認得這個檔案格式，請更新 focus-show'
+  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, answer }
+  const clock = await start($, on, w)
+  for (let i = 0; i < 4; i++) await clock.advance(5_000)
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
+  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
+  expect(w.toasts).toEqual([])
+})
+
 test('漏印重送: 回完答案後 60 秒內同一 session 又出題 while the console is still on its turn; /focus-show <代號> <編號> of the new stop is sent again and printed once', async ($, on) => {
   const first = focusOf('perm', ['focusui'])
   const w = { ...world({ ...first, announce: 'perm', announceKey: keyOf('perm') }), sticky: true }
   const clock = await start($, on, w)
-  expect(w.shown).toEqual([`perm ${stopId(keyOf('perm'))}`])
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
   w.focus = { ...first, current: null, waiting: { tag: 'perm', seconds: 60 }, announce: null, announceKey: null }
   await clock.advance(5_000)
   const next = 'perm@2'
   const report = '### 🔐 perm 等你授權\n\n> Bash rm -rf dist'
-  const sessions = SESSIONS.map(s => (s.tag === 'perm' ? { ...s, key: next, question: 'Bash rm -rf dist', report } : s))
+  const sessions = SESSIONS.map(s => (s.tag === 'perm' ? { ...s, key: next, id: idOf(next), question: 'Bash rm -rf dist', report } : s))
   w.focus = { ...first, current: next, sessions, waiting: null, announce: 'perm', announceKey: next }
   w.lost = 1
   await clock.advance(5_000)
-  expect(w.dropped).toEqual([`perm ${stopId(next)}`])
+  expect(w.dropped).toEqual([`perm ${idOf(next)}`])
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
   await clock.advance(5_000)
   await clock.advance(5_000)
-  expect(w.shown).toEqual([`perm ${stopId(keyOf('perm'))}`, `perm ${stopId(next)}`])
-  expect(w.writes[`${HOME}/show/perm@${stopId(next)}.md`]).toBe(report)
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`, `perm ${idOf(next)}`])
+  expect(w.writes[`${HOME}/show/perm@${idOf(next)}.md`]).toBe(report)
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')], ['focus-shown', next]])
 })
 
@@ -622,7 +635,7 @@ test('on 待回覆 a number switches the band to that card and the pane reorders
   expect((await ui.find({ key: `card:${keyOf('PROJ-6668')}` }))?.props.borderStyle).toBe('double')
   expect(w.calls.filter(c => c[0] === 'focus-pick')).toHaveLength(1)
   await ui.press({ key: `name:${keyOf('PROJ-6668')}` })
-  expect(w.shown).toEqual(['PROJ-6668', `PROJ-6668 ${stopId(keyOf('PROJ-6668'))}`])
+  expect(w.shown).toEqual(['PROJ-6668', `PROJ-6668 ${idOf(keyOf('PROJ-6668'))}`])
   await ui.unmount()
 })
 
@@ -656,7 +669,7 @@ test('arrow keys land on the nickname, so Enter always prints; the chosen card f
   expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
   await arrowTo($, 'perm')
   await ui.press({ key: `name:${keyOf('perm')}` })
-  expect(w.shown).toEqual([`perm ${stopId(keyOf('perm'))}`])
+  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
   await ui.unmount()
 })
 

@@ -4,18 +4,28 @@ async function home($: EngineInterface) {
   return (await $.env.get('WORKTREE_CONSOLE_HOME')) || `${await $.env.get('HOME')}/.config/worktree-console`
 }
 
-// Must match stopId in the worktree-console focus band.
-const stopId = (key: string) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36)
+// The only focus.json format this reads; the worktree-console plugin's references/focus-contract.md says when it changes.
+const VERSION = 1
 
-// Where that stop is now: on the band, still waiting in the queue (`seen` keeps only stops still waiting on you), or gone.
-async function placeOf($: EngineInterface, dir: string, id: string) {
+async function readFocus($: EngineInterface, dir: string) {
   try {
-    const { current, seen } = JSON.parse(await $.fs.read(`${dir}/focus.json`))
-    if (typeof current === 'string' && stopId(current) === id) return 'band'
-    return Object.keys(seen ?? {}).some(k => stopId(k) === id) ? 'queue' : 'gone'
+    return JSON.parse(await $.fs.read(`${dir}/focus.json`))
   } catch {
-    return 'unknown'
+    return null
   }
+}
+
+function versionError(tag: string, version: unknown) {
+  if (version === VERSION) return null
+  if (typeof version === 'number' && version > VERSION) return `[${tag}] 印不出題目：focus-show 太舊，不認得這個檔案格式，請更新 focus-show`
+  return `[${tag}] 印不出題目：worktree-console 太舊，不認得這個檔案格式，請更新 worktree-console`
+}
+
+// Where that stop is now: on the band, still waiting in the queue, or gone.
+function placeOf(state: any, id: string) {
+  if (!state) return 'unknown'
+  if (state.currentId === id) return 'band'
+  return Array.isArray(state.queuedIds) && state.queuedIds.includes(id) ? 'queue' : 'gone'
 }
 
 // `/focus-show <代號>`: the worktree-console focus band saves a question's report under the console home, and this prints it as markdown.
@@ -31,7 +41,10 @@ export const register: Register = on => {
     const [tag, id] = e.args.trim().split(/\s+/)
     if (!tag) return { text: '用法：/focus-show <代號>' }
     const dir = await home($)
-    const place = id ? await placeOf($, dir, id) : 'band'
+    const state = await readFocus($, dir)
+    const error = state && versionError(tag, state.version)
+    if (error) return { text: error }
+    const place = id ? placeOf(state, id) : 'band'
     if (place === 'queue') return { text: `[${tag}] 這題已退回排隊，輪到時再印` }
     if (place === 'gone') return { text: `[${tag}] 這題已回覆或已交棒，略過` }
     if (place === 'unknown') return { text: `[${tag}] 這題已不在橫條上，略過` }
