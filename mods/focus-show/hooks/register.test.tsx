@@ -3,8 +3,6 @@ import type { On } from 'claude-code'
 
 const ELSEWHERE = 'focus-show is not the plugin under test'
 
-const stopId = (key: string) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36)
-
 const REPORT = '### 💬 PROJ-6668 等你回應\n\n> 你要 A、A＋另開後端票做 B，還是其他做法？\n\n- a. 這張票只在卡片上顯示「缺多少」（建議）\n- b. 卡片直接顯示狀態標籤'
 
 async function start($: any, on: On, files: Record<string, string>, env: Record<string, string>) {
@@ -44,31 +42,43 @@ test('without WORKTREE_CONSOLE_HOME it reads the console home under ~/.config', 
 })
 
 test('a print the band queued carries the stop id: it prints that stop\'s own report only while that stop is still on the band', async ($, on) => {
-  const [old, now] = ['pane-a@100', 'pane-a@200']
+  const [old, now] = ['k1', 'k2']
   const files = {
-    '/tmp/wtc/focus.json': JSON.stringify({ current: now, seen: { [now]: 1 } }),
+    '/tmp/wtc/focus.json': JSON.stringify({ version: 1, currentId: now, queuedIds: [] }),
     '/tmp/wtc/show/PROJ-6668.md': '### ⏸ PROJ-6668 新題',
-    [`/tmp/wtc/show/PROJ-6668@${stopId(old)}.md`]: '### 💬 PROJ-6668 舊題',
-    [`/tmp/wtc/show/PROJ-6668@${stopId(now)}.md`]: '### ⏸ PROJ-6668 新題',
+    [`/tmp/wtc/show/PROJ-6668@${old}.md`]: '### 💬 PROJ-6668 舊題',
+    [`/tmp/wtc/show/PROJ-6668@${now}.md`]: '### ⏸ PROJ-6668 新題',
   }
   if (!(await start($, on, files, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
-  expect((await $.command.run({ command: 'focus-show', args: `PROJ-6668 ${stopId(old)}` })).text).toBe('[PROJ-6668] 這題已回覆或已交棒，略過')
-  expect((await $.command.run({ command: 'focus-show', args: `PROJ-6668 ${stopId(now)}` })).text).toBe('### ⏸ PROJ-6668 新題')
+  expect((await $.command.run({ command: 'focus-show', args: `PROJ-6668 ${old}` })).text).toBe('[PROJ-6668] 這題已回覆或已交棒，略過')
+  expect((await $.command.run({ command: 'focus-show', args: `PROJ-6668 ${now}` })).text).toBe('### ⏸ PROJ-6668 新題')
   expect((await $.command.run({ command: 'focus-show', args: 'PROJ-6668' })).text).toBe('### ⏸ PROJ-6668 新題')
 })
 
 test('a queued print whose stop went back to the queue says it prints when its turn comes', async ($, on) => {
-  const [queued, now] = ['pane-a@100', 'pane-b@200']
-  const files = { '/tmp/wtc/focus.json': JSON.stringify({ current: now, seen: { [queued]: 1, [now]: 2 } }), [`/tmp/wtc/show/request@${stopId(queued)}.md`]: '### 💬 request 等你回應' }
+  const [queued, now] = ['k1', 'k2']
+  const files = { '/tmp/wtc/focus.json': JSON.stringify({ version: 1, currentId: now, queuedIds: [queued] }), [`/tmp/wtc/show/request@${queued}.md`]: '### 💬 request 等你回應' }
   if (!(await start($, on, files, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
-  expect((await $.command.run({ command: 'focus-show', args: `request ${stopId(queued)}` })).text).toBe('[request] 這題已退回排隊，輪到時再印')
+  expect((await $.command.run({ command: 'focus-show', args: `request ${queued}` })).text).toBe('[request] 這題已退回排隊，輪到時再印')
 })
 
 test('a queued print is skipped when the band has no question, or focus.json cannot be read', async ($, on) => {
-  const id = stopId('pane-a@100')
-  const files = { '/tmp/wtc/focus.json': JSON.stringify({ current: null }), [`/tmp/wtc/show/ticket@${id}.md`]: '### ⏸ ticket 定稿完成' }
+  const id = 'k1'
+  const files = { '/tmp/wtc/focus.json': JSON.stringify({ version: 1, currentId: null, queuedIds: [] }), [`/tmp/wtc/show/ticket@${id}.md`]: '### ⏸ ticket 定稿完成' }
   if (!(await start($, on, files, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
   expect((await $.command.run({ command: 'focus-show', args: `ticket ${id}` })).text).toBe('[ticket] 這題已回覆或已交棒，略過')
   delete (files as any)['/tmp/wtc/focus.json']
   expect((await $.command.run({ command: 'focus-show', args: `ticket ${id}` })).text).toBe('[ticket] 這題已不在橫條上，略過')
+})
+
+test('a focus.json of a newer format than this focus-show knows prints one line saying to update focus-show, never the report', async ($, on) => {
+  const files = { '/tmp/wtc/focus.json': JSON.stringify({ version: 2, currentId: 'k1', queuedIds: [] }), '/tmp/wtc/show/perm@k1.md': '### 🔐 perm 等你授權', '/tmp/wtc/show/perm.md': '### 🔐 perm 等你授權' }
+  if (!(await start($, on, files, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  for (const args of ['perm k1', 'perm']) expect((await $.command.run({ command: 'focus-show', args })).text).toBe('[perm] 印不出題目：focus-show 太舊，不認得這個檔案格式，請更新 focus-show')
+})
+
+test('a focus.json with no version (worktree-console too old) prints one line saying to update worktree-console, never the report', async ($, on) => {
+  const files = { '/tmp/wtc/focus.json': JSON.stringify({ current: 'pane-a@100', seen: { 'pane-a@100': 1 } }), '/tmp/wtc/show/perm@k1.md': '### 🔐 perm 等你授權', '/tmp/wtc/show/perm.md': '### 🔐 perm 等你授權' }
+  if (!(await start($, on, files, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  for (const args of ['perm k1', 'perm']) expect((await $.command.run({ command: 'focus-show', args })).text).toBe('[perm] 印不出題目：worktree-console 太舊，不認得這個檔案格式，請更新 worktree-console')
 })
