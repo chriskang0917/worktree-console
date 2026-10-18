@@ -1,5 +1,13 @@
 # Changelog
 
+## tool-dots 0.1.1
+
+- fix(console): one-line band question, hide keepalive, align tool_call, menu lead text
+
+## 1.5.2
+
+- fix(console): one-line band question, hide keepalive, align tool_call, menu lead text
+
 ## 1.5.1
 
 - fix(console): wait for the turn to end before asking, keep tables, gate cache handoff
