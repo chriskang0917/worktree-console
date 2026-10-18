@@ -30,14 +30,17 @@ const state = load();
 state.seq ??= 100;
 const agentOf = (target) => state.agents.find((a) => a.pane_id === target || a.name === target);
 
+// Like herdr, a tab opened without a label, and the first tab of a new workspace, is called by its number.
 function newPane(workspace, cwd, label) {
   state.seq += 1;
-  const pane = { pane_id: `${workspace}:p${state.seq}`, tab_id: `${workspace}:t${state.seq}`, workspace_id: workspace, cwd, foreground_cwd: cwd, label };
+  const tabLabel = label ?? String(state.panes.filter((p) => p.workspace_id === workspace).length + 1);
+  const pane = { pane_id: `${workspace}:p${state.seq}`, tab_id: `${workspace}:t${state.seq}`, workspace_id: workspace, cwd, foreground_cwd: cwd, label: tabLabel };
   state.panes.push(pane);
   return pane;
 }
 
-// A prompt lands in the session's transcript as a user turn followed by a finished reply, like a real quick turn.
+// A prompt lands in the session's transcript as a user turn followed by a finished reply, like a real quick turn;
+// /rename and /remote-control are local commands that leave the session as it was.
 function converse(agent, text) {
   const tdir = process.env.FAKE_HERDR_TRANSCRIPTS;
   if (!tdir || !agent.agent_session) return;
@@ -51,7 +54,14 @@ function converse(agent, text) {
   fs.appendFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
 }
 
-if (cmd === "api snapshot") ok({ type: "session_snapshot", snapshot: { panes: state.panes, agents: state.agents, workspaces: state.workspaces ?? [] } });
+const tabs = () => [...new Map(state.panes.map((p) => [p.tab_id, { tab_id: p.tab_id, workspace_id: p.workspace_id, label: state.tabLabels?.[p.tab_id] ?? p.label ?? "1" }])).values()];
+if (cmd === "api snapshot") ok({ type: "session_snapshot", snapshot: { panes: state.panes, agents: state.agents, workspaces: state.workspaces ?? [], tabs: tabs() } });
+if (cmd === "tab rename") {
+  if (!state.panes.some((p) => p.tab_id === args[2])) error("tab_not_found");
+  (state.tabLabels ??= {})[args[2]] = args.slice(3).join(" ");
+  save(state);
+  ok({ type: "tab_info", tab: tabs().find((t) => t.tab_id === args[2]) });
+}
 if (cmd === "pane read") {
   const file = screenFile(args[2]);
   if (!state.panes.some((p) => p.pane_id === args[2])) error("pane_not_found");
@@ -88,7 +98,7 @@ if (cmd === "workspace create") {
   state.seq += 1;
   const ws = `w${state.seq}`;
   (state.workspaces ??= []).push({ workspace_id: ws, label: opt("--label") });
-  const pane = newPane(ws, opt("--cwd"), opt("--label"));
+  const pane = newPane(ws, opt("--cwd"), null);
   save(state);
   ok({ type: "workspace_created", workspace: { workspace_id: ws }, root_pane: pane });
 }
@@ -97,7 +107,7 @@ if (cmd === "agent start") {
   if (process.env.FAKE_HERDR_START_FAIL) error("agent_not_ready");
   const p = state.panes.find((x) => x.pane_id === pane);
   const argv = args.includes("--") ? args.slice(args.indexOf("--") + 1) : [];
-  const resumed = argv[0] === "--resume" && !process.env.FAKE_HERDR_RESUME_LOST ? argv[1] : null;
+  const resumed = argv.includes("--resume") && !process.env.FAKE_HERDR_RESUME_LOST ? argv[argv.indexOf("--resume") + 1] : null;
   const agent = { agent: "claude", name: args[2], pane_id: pane, cwd: p?.cwd, agent_status: "idle", agent_session: { kind: "id", value: resumed ?? `sess-${pane.replace(/:/g, "-")}` }, argv };
   state.agents.push(agent);
   save(state);
@@ -117,8 +127,11 @@ if (cmd === "agent prompt") {
   fs.appendFileSync(path.join(dir, "sends.jsonl"), `${JSON.stringify({ via: "prompt", pane: agent.pane_id, text })}\n`);
   if (text.startsWith("/goal ")) {
     fs.writeFileSync(screenFile(agent.pane_id), process.env.FAKE_HERDR_PASTE ? "❯ [Pasted text #1 +3 lines]\n  paste again to expand\n" : "⎿ Goal set: …\n❯\n");
-  } else converse(agent, text);
-  agent.agent_status = process.env.FAKE_HERDR_TRANSCRIPTS ? "done" : "working";
+    agent.agent_status = process.env.FAKE_HERDR_TRANSCRIPTS ? "done" : "working";
+  } else if (!/^\/(rename|remote-control)\b/.test(text)) {
+    converse(agent, text);
+    agent.agent_status = process.env.FAKE_HERDR_TRANSCRIPTS ? "done" : "working";
+  }
   save(state);
   ok({ type: "agent_prompted", agent });
 }

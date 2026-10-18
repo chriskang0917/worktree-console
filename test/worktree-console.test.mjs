@@ -2980,7 +2980,7 @@ test("focus-shown：題目還在橫條上才記成印過；已離開橫條的等
   assert.deepEqual(readJson(home, "focus.json").reported, ["b@2"]);
 });
 
-test("Orca 交棒：新分頁的 --command 是 claude，送 /goal、看到 Goal set 才關訪談分頁", () => {
+test("Orca 交棒：新分頁的 --command 是 claude --name <代號>，送 /goal、看到 Goal set 才關訪談分頁", () => {
   const dir = fake();
   fs.writeFileSync(path.join(dir, "terminal-read-term_new.json"), JSON.stringify({ ok: true, result: { terminal: { handle: "term_new", tail: ["Goal set"] } } }));
   const file = path.join(dir, "goal.txt");
@@ -2989,14 +2989,14 @@ test("Orca 交棒：新分頁的 --command 是 claude，送 /goal、看到 Goal 
   assert.equal(res.code, 0, res.out);
   assert.match(res.out, /已交棒執行$/);
   const created = fs.readFileSync(path.join(dir, "create.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-  assert.deepEqual(created.map((a) => a[a.indexOf("--command") + 1]), ["claude"]);
+  assert.deepEqual(created.map((a) => a[a.indexOf("--command") + 1]), ["claude --name PROJ-103"]);
   const calls = fs.readFileSync(path.join(dir, "calls.log"), "utf8");
   assert.match(calls, /terminal send --terminal term_new --text \/goal 做完 PROJ-103 --enter/);
   assert.match(calls, /terminal close --terminal term_old --tab/);
 });
 
-test("Orca open：--continue 時 --command 是 claude --continue，不帶時是 claude", () => {
-  for (const [extra, command] of [[["--continue"], "claude --continue"], [[], "claude"]]) {
+test("Orca open：--continue 時 --command 是 claude --name <代號> --continue，不帶時是 claude --name <代號>", () => {
+  for (const [extra, command] of [[["--continue"], "claude --name PROJ-103 --continue"], [[], "claude --name PROJ-103"]]) {
     const dir = fake();
     const res = run("console.mjs", ["open", "--path", wt("proj-103-idle"), ...extra], { dir });
     assert.equal(res.code, 0, res.out);

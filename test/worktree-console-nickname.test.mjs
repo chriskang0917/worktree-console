@@ -154,7 +154,7 @@ test("暱稱：沒票也沒暱稱的 worktree 取名前代號是拿掉類型前�
   assert.ok(!watched.out.includes("backend…"), watched.out);
 });
 
-test("暱稱：存檔時跨所有 repo 檢查不重複、撞名就拒絕，存下的暱稱不加 repo 前綴；同票同 repo 多個 worktree 顯示 <票號>(<暱稱>)；只有同一票號或同一 Orca 暱稱出現在多個 repo 才保留 repo 前綴", () => {
+test("暱稱：存檔時跨所有 repo 檢查不重複、撞名就拒絕，存下的暱稱不加 repo 前綴；同票同 repo 多個 worktree 顯示 <票號>(<暱稱>)；同一票號出現在多個 repo 時票號後面接 repo 名稱，同一 Orca 暱稱才保留 repo 前綴", () => {
   const dir = world();
   const home = homes();
   const first = tags(board(dir, home).out);
@@ -169,7 +169,7 @@ test("暱稱：存檔時跨所有 repo 檢查不重複、撞名就拒絕，存�
   assert.equal(consoleRun(dir, home, "nickname", "--repo", main("app"), "proj-1-beta", "alfa").code, 1, "括號裡的暱稱也照同一套查重");
   assert.equal(consoleRun(dir, home, "nickname", "--repo", main("app"), "proj-1-beta", "beto").code, 0);
   const after = tags(board(dir, home).out);
-  for (const t of ["cmnt", "othr", "PROJ-1(alfa)", "PROJ-1(beto)", "app/PROJ-2", "api/PROJ-2", "app/review", "api/review", "spike", "cleanups"]) assert.ok(after.includes(t), `${t} 不在 ${after.join(",")}`);
+  for (const t of ["cmnt", "othr", "PROJ-1(alfa)", "PROJ-1(beto)", "PROJ-2-app", "PROJ-2-api", "app/review", "api/review", "spike", "cleanups"]) assert.ok(after.includes(t), `${t} 不在 ${after.join(",")}`);
   assert.ok(!after.some((t) => /^(app|api)\/(cmnt|othr|PROJ-1)/.test(t)), after.join(","));
 });
 

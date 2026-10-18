@@ -52,6 +52,7 @@ export function runOrca(args) {
 }
 
 const ESC = "\u001b";
+const shellWord = (s) => (/^[\w.#-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
 const sent = (res) => (res.ok && res.result?.send?.accepted !== false ? { ok: true } : { ok: false, code: res.error?.code ?? "not-accepted" });
 const KEYS = { esc: ESC, enter: "\r" };
 
@@ -99,8 +100,8 @@ const orcaTerminals = {
   key(handle, key) {
     return this.send(handle, KEYS[key] ?? key);
   },
-  create(worktreePath, { args = [] } = {}) {
-    const res = runOrca(["terminal", "create", "--worktree", `path:${worktreePath}`, "--command", ["claude", ...args].join(" ")]);
+  create(worktreePath, { args = [], name = null } = {}) {
+    const res = runOrca(["terminal", "create", "--worktree", `path:${worktreePath}`, "--command", ["claude", ...(name ? ["--name", shellWord(name)] : []), ...args].join(" ")]);
     const handle = res.ok ? res.result?.terminal?.handle ?? res.result?.handle : null;
     return handle ? { ok: true, handle } : { ok: false, code: res.error?.code ?? "沒有 handle" };
   },
@@ -127,4 +128,6 @@ const orcaTerminals = {
     return res.ok ? { ok: true, issues: res.result.issues ?? [] } : { ok: false, code: res.error?.code ?? "linear-error" };
   },
   audit() {},
+  renameTab: () => ({ ok: false, code: "unsupported" }),
+  nameTabs: () => [],
 };

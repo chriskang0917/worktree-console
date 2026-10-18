@@ -122,6 +122,96 @@ export function writeNames(names) {
   fs.writeFileSync(path.join(consoleHome(), NAMES), JSON.stringify(names, null, 2));
 }
 
+// A name you give a session doubles as its tag, so it must read as one word and clash with no other tag or repo.
+export const NAME = /^[a-z0-9-]{2,20}$/;
+
+export function nameProblem(name, rows, repos, self = null) {
+  if (!NAME.test(name)) return "名稱只收英文小寫、數字、-，2～20 字元";
+  const lower = name.toLowerCase();
+  const repo = repos.find((r) => r.name.toLowerCase() === lower);
+  if (repo) return `和 repo「${repo.name}」同名`;
+  const saved = Object.entries(readNames()).filter(([p]) => p !== self?.path && fs.existsSync(p)).flatMap(([, n]) => [n.name, n.nickname]);
+  const tags = rows.filter((r) => r !== self).flatMap((r) => [r.label, r.base, r.ticket, r.nickname, r.alias, r.given, r.branch.replace(/^(.*\/)?ask-/, "")]);
+  const hit = [...saved, ...tags].find((t) => (t ?? "").toLowerCase() === lower);
+  return hit ? `和既有的名稱或代號「${hit}」重複` : null;
+}
+
+export function saveName(row, name) {
+  const names = Object.fromEntries(Object.entries(readNames()).filter(([p]) => fs.existsSync(p)));
+  const prev = names[row.path]?.branch === row.branch ? names[row.path] : {};
+  writeNames({ ...names, [row.path]: { ...prev, name, branch: row.branch, repo: row.repo, at: Date.now() } });
+}
+
+const RENAMES = "renames.json";
+
+// `/rename` waiting for a session to stop, by handle; the watcher sends it.
+export function readRenames() {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(consoleHome(), RENAMES), "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeRenames(value) {
+  fs.mkdirSync(consoleHome(), { recursive: true });
+  fs.writeFileSync(path.join(consoleHome(), RENAMES), JSON.stringify(value, null, 2));
+}
+
+export function queueRename(handle, name, source) {
+  if (handle) writeRenames({ ...readRenames(), [handle]: { name, source, at: Date.now() } });
+}
+
+export const STOPPED = new Set(["done", "idle"]);
+
+// Sends every queued `/rename` whose session has stopped; a handle no longer listed drops its entry.
+export function flushRenames(rows, terminals, manager) {
+  const queue = readRenames();
+  const handles = Object.keys(queue).filter((h) => ownRecord(queue[h], manager.name));
+  if (handles.length === 0) return [];
+  const alive = new Set(terminals.map((t) => t.handle));
+  const sessions = new Map(rows.flatMap((r) => r.sessions.filter((s) => s.handle).map((s) => [s.handle, s])));
+  const sent = [];
+  for (const h of handles) {
+    const s = sessions.get(h);
+    if (!s && alive.has(h)) continue;
+    if (s && !STOPPED.has(s.agent?.state)) continue;
+    if (s && !manager.send(h, `/rename ${queue[h].name}`, { enter: true }).ok) continue;
+    if (s) sent.push({ handle: h, name: queue[h].name });
+    delete queue[h];
+  }
+  writeRenames(queue);
+  return sent;
+}
+
+export function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(consoleHome(), "config.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+const SHORT_WORDS = { frontend: "fe", backend: "be" };
+const WORD_SEP = /[-_.]/;
+
+// What tells apart one tag in several repos: `config.json` repoAbbreviations first, else each repo name without the words
+// all of them start with, frontend/backend cut to fe/be; full repo names when two would still read the same.
+export function repoSuffixes(names, abbr = readConfig()?.repoAbbreviations ?? {}) {
+  const words = names.map((n) => n.split(WORD_SEP));
+  let same = 0;
+  while (same < Math.min(...words.map((w) => w.length)) - 1 && words.every((w) => w[same].toLowerCase() === words[0][same].toLowerCase())) same++;
+  const rest = (n) => {
+    let s = n;
+    for (let i = 0; i < same; i++) s = s.slice(s.search(WORD_SEP) + 1);
+    return s.split(/([-_.])/).map((w) => SHORT_WORDS[w.toLowerCase()] ?? w).join("");
+  };
+  const short = names.map((n) => (typeof abbr?.[n] === "string" && abbr[n] ? abbr[n] : rest(n)));
+  const distinct = new Set(short.map((s) => s.toLowerCase())).size === names.length;
+  return new Map(names.map((n, i) => [n, distinct ? short[i] : n]));
+}
+
 const TASKS = "tasks.json";
 export const TASK_MAX = 15;
 
@@ -981,8 +1071,8 @@ function managedState(data, consoles) {
   };
 }
 
-// Labels get a `<repo>/` prefix only when the same label shows up in another repo: board rows against board rows, the rest
-// against everything. A nickname the console gave is unique across repos, so it never gets one.
+// The same label in several repos: a ticket gets the repo's short form after it (`PROJ-1-fe`), anything else a `<repo>/`
+// prefix; board rows count against board rows, the rest against everything. Names and console nicknames are unique across repos.
 export function decorate(data, { withStage = true, withTitles = false } = {}) {
   const { rows, keys } = data;
   const names = readNames();
@@ -990,15 +1080,16 @@ export function decorate(data, { withStage = true, withTitles = false } = {}) {
   const dupKey = (r) => `${r.repo}\u0000${r.ticket}`;
   for (const r of rows) if (r.ticket && !r.unmanaged) counts.set(dupKey(r), (counts.get(dupKey(r)) ?? 0) + 1);
   for (const r of rows) {
-    const saved = names[r.path];
-    r.nickname = !r.ticket && r.displayName !== r.branch && NICKNAME.test(r.displayName ?? "") ? r.displayName : null;
+    const saved = names[r.path]?.branch === r.branch ? names[r.path] : null;
+    r.given = saved?.name ?? null;
+    r.nickname = !r.given && !r.ticket && r.displayName !== r.branch && NICKNAME.test(r.displayName ?? "") ? r.displayName : null;
     r.shared = !!r.ticket && counts.get(dupKey(r)) > 1;
-    r.alias = !r.isMain && !r.nickname && (!r.ticket || r.shared) && saved?.branch === r.branch ? saved.nickname : null;
+    r.alias = !r.given && !r.isMain && !r.nickname && (!r.ticket || r.shared) && saved?.nickname ? saved.nickname : null;
     const clip = !r.isMain && r.sessions.length > 0;
-    r.id = r.ticket ?? r.nickname ?? r.alias ?? (clip ? clipBranch(r.branch) : r.branch);
-    r.base = r.shared ? `${r.ticket}(${r.alias ?? (clip ? clipBranch : (b) => b)(shortBranch(r.branch, keys))})` : r.id;
+    r.id = r.given ?? r.ticket ?? r.nickname ?? r.alias ?? (clip ? clipBranch(r.branch) : r.branch);
+    r.base = r.shared && !r.given ? `${r.ticket}(${r.alias ?? (clip ? clipBranch : (b) => b)(shortBranch(r.branch, keys))})` : r.id;
   }
-  const prefixed = (r) => !r.alias;
+  const prefixed = (r) => !r.alias && !r.given;
   const reposBy = (list) => {
     const map = new Map();
     for (const r of list.filter(prefixed)) map.set(r.base.toUpperCase(), (map.get(r.base.toUpperCase()) ?? new Set()).add(r.repo));
@@ -1006,9 +1097,15 @@ export function decorate(data, { withStage = true, withTitles = false } = {}) {
   };
   const shown = reposBy(rows.filter((r) => r.sessions.length > 0));
   const all = reposBy(rows);
+  const suffixes = new Map();
+  const suffix = (repos, repo) => {
+    const key = [...repos].sort().join("\u0000");
+    if (!suffixes.has(key)) suffixes.set(key, repoSuffixes([...repos].sort()));
+    return suffixes.get(key).get(repo);
+  };
   for (const r of rows) {
     const repos = prefixed(r) ? (r.sessions.length > 0 ? shown : all).get(r.base.toUpperCase()) : null;
-    r.label = repos?.size > 1 ? `${r.repo}/${r.base}` : r.base;
+    r.label = !(repos?.size > 1) ? r.base : r.ticket ? `${r.base}-${suffix(repos, r.repo)}` : `${r.repo}/${r.base}`;
     if (r.sessions.length === 0) continue;
     if (withStage && !r.stage) r.stage = stageOf(r);
     if (withTitles) fillTitle(r, keys);
@@ -1018,7 +1115,7 @@ export function decorate(data, { withStage = true, withTitles = false } = {}) {
 
 // Worktrees on the board still waiting for the console to give them a nickname.
 export function unnamedRows(rows) {
-  return rows.filter((r) => r.sessions.length > 0 && !r.unmanaged && !r.isMain && !r.nickname && !r.alias && (!r.ticket || r.shared));
+  return rows.filter((r) => r.sessions.length > 0 && !r.unmanaged && !r.isMain && !r.given && !r.nickname && !r.alias && (!r.ticket || r.shared));
 }
 
 export function nameLines(rows) {
@@ -1561,7 +1658,7 @@ function matchRows(rows, query) {
 function looseMatch(rows, q) {
   if (/^\d+$/.test(q)) return rows.filter((r) => r.ticket && r.ticket.split("-")[1] === q);
   const upper = q.toUpperCase();
-  return rows.filter((r) => r.ticket === upper || r.branch === q || (r.base ?? r.label).toUpperCase() === upper || [r.nickname, r.alias].some((n) => n?.toUpperCase() === upper));
+  return rows.filter((r) => r.ticket === upper || r.branch === q || (r.base ?? r.label).toUpperCase() === upper || [r.given, r.nickname, r.alias].some((n) => n?.toUpperCase() === upper));
 }
 
 const RULE = /^─{20,}/;

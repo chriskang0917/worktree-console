@@ -31,5 +31,5 @@ description: 立刻把目前的 Claude Code session 交棒給新 session：先�
 
 1. Stop hook 擋下，要模型把交棒說明寫到指定檔；連停 2 次都沒寫，hook 從對話紀錄擷取一份保底（最初指令、`/goal` 原文、最後幾則對話、`git status`）。
 2. hook 在說明最後附上：最後一則在等使用者回答時的問題原文、進行中的 `/goal` 原文與「收工前須在本 session 重新執行並貼出 `/goal` 全部證據」。
-3. Orca 或 herdr 內（依 `HERDR_ENV=1`、`ORCA_TERMINAL_HANDLE` 判斷，herdr 優先；herdr 在同一個工作區開新分頁）：開新分頁（同一工作目錄、同一個 `--permission-mode`）→ 等就緒 → 送接手指令 → 確認送達 → 有 `/goal` 就送同一段並確認畫面出現 `Goal set` → 關舊分頁。任一步失敗都不關舊分頁，並告訴使用者卡在哪一步。
+3. Orca 或 herdr 內（依 `HERDR_ENV=1`、`ORCA_TERMINAL_HANDLE` 判斷，herdr 優先；herdr 在同一個工作區開新分頁）：開新分頁（同一工作目錄、同一個 `--permission-mode`；中控台開的 session 沿用原本的名稱帶 `claude --name`，herdr 分頁也用同一個名稱，中控台自己叫 `console`）→ 等就緒 → 送接手指令 → 確認送達 → 有 `/goal` 就送同一段並確認畫面出現 `Goal set` → 關舊分頁。任一步失敗都不關舊分頁，並告訴使用者卡在哪一步。
 4. 兩者以外：提示一次「自動交棒只支援 Orca 與 herdr」與交棒說明的路徑（有 `/goal` 時附原文），由使用者自己開新 session 接手。

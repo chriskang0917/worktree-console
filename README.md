@@ -20,6 +20,8 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 - **丟一張票，就有一個跑起來的 session。** 給它一張 Linear 票（或直接講任務）。它會讀票、找出母票、提議 repo 與 branch 名稱，你確認後就建好 worktree，並在那裡開一個 Claude Code session。
 - **session 自己回報。** watcher 盯著每個 session。哪個停下來問問題、做完了、或要授權，中控台就告訴你是哪張票、它要什麼。
 - **專注模式：一次一題，按一個鍵就回。** 輸入框上方的橫條永遠顯示目前這題和它的選項。回 `b`，中控台就送出那個 session 要的寫法（`B`、`2` 或正確的選單項目）。其他題在排隊列等著（`1`–`5` 跳過去、`8` 延後、`9` 再印一次題目、`0` 打開側邊面板，每個 session 一張卡片，分成「待回覆、全部、封存」三個分頁）。完整回報直接印進對話，不花 token。專注模式需要支援 mods（plugin 函式 hook）的 Claude Code，以及本 marketplace 另外提供的 `focus-show` plugin。
+- **用手機連上中控台。** 中控台啟動時會替自己的 session 打開 Remote Control（只開它自己，不開它開出來的 session），所以手機 Claude app 的 Remote Control 清單看得到中控台。中控台自動交棒換成新 session 後，會再打開一次。
+- **每個 session 都有名稱。** 中控台開的每個 session 都用 `claude --name <名稱>` 啟動；在 herdr 裡，它開的每個分頁也都有名稱（中控台自己的分頁叫 `console`）。開 session 時可以給名稱，之後也能改名；有名稱時，看板顯示名稱而不是票號。
 - **一張看板看全部。** `現在狀況` 每個 repo 印一張表：狀態、票號、摘要、階段（未開工、規劃中、實作中、已推送）與最後動態，每個 session 走到哪一眼看完。
 - **在同一個地方指揮、關閉、封存。** 用票號對任何 session 下指令，branch 合併後關掉 worktree，或把不想看到的 session 封存起來。
 - **自動交棒。** session 的 context 用量超過門檻，或你不在時 prompt 快取快過期，它會寫一份交棒說明，由新分頁裡的新 session 接手。`/worktree-console:handoff` 可以隨時手動交棒。
@@ -58,11 +60,24 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 | `現在狀況` | 印出看板 |
 | `<票號> 詳情` | 顯示那個 session 最近在做什麼 |
 | `b` 或任何回覆 | 回答專注橫條上目前這題 |
+| `問：<問題>` | 在中控台啟動的 repo 開一個暫存 worktree，在那裡問這個問題（herdr 與 Orca 都可以） |
+| `問 <repo>：<問題>` | 同上，開在指定的 repo |
+| `<票號>，名稱 <名稱>` 或 `問：<問題>，名稱 <名稱>` | 開 session 時順便給名稱（見〈[session 名稱](#session-名稱)〉） |
+| `<代號> 改名 <名稱>` | 替 session 改名：看板、專注橫條、herdr 分頁與 Claude Code session 名稱一起換 |
 | `關掉 <票號>` | 確認 worktree 可以安全移除，再關掉它 |
 | `清理 branch` 或 `prune` | 列出本機 branch 與 worktree，標 CANDIDATE 或 KEEP（已合併或 squash 合併，附原因）；你確認後才刪 |
 | `/worktree-console:handoff` | 把目前的 session 交棒給新的 session |
 
 狀態存在 `~/.config/worktree-console/`（中控台登記、專注狀態、封存、設定與你自己的 `prompt.md`）、`~/.config/claude-handoff/`（交棒設定與說明）和 `~/.worktree-console/`（過程紀錄）。用到 Linear token 時，它存在 macOS 鑰匙圈的 `worktree-console-linear`。
+
+## session 名稱
+
+中控台開的每個 session 都用 `claude --name <名稱>` 啟動：正式開工、暫存 session、臨時分頁、重新打開與搬移的 session、需求訪談交棒，以及自動交棒。你沒給名稱時，名稱就是 session 的代號（票號、暱稱或 branch）。在 Orca 裡，`orca worktree create` 開的 session 第一次停下時，中控台送 `/rename` 補上名稱。在 herdr 裡，中控台開的每個分頁都有名稱、不會是數字（新工作區的第一個分頁也一樣），中控台自己的分頁叫 `console`。watcher 看到跑著 Claude Code 的數字分頁，會照它的 session 補上名稱：有你給的名稱就用名稱，否則用票號，再沒有就用 branch 或資料夾名。已經有名稱的分頁不會被改。
+
+- **開的時候給名稱。** 在要求後面加 `名稱 <名稱>`，例如 `PROJ-123，名稱 login-fix` 或 `問：README 在講什麼？名稱 docs`。沒給的話，中控台照舊自己取暱稱。
+- **之後改名。** `<代號> 改名 <名稱>`（例如 `PROJ-123 改名 login-fix`）會一起換掉看板、專注橫條、待回覆清單、herdr 分頁與 Claude Code session 名稱。session 還在跑時，等它停下，watcher 才送 `/rename`。
+- **格式。** 只收英文小寫、數字和 `-`，2～20 個字元。名稱不能和別的 session 的名稱或代號（包含票號）重複，也不能和 repo 名稱相同，因為你也用它打字指揮 session。其他寫法（大寫、中文、空白、21 個字元）都會被拒絕，並印出原因。
+- **顯示在哪裡。** 有名稱的 session，在看板、專注橫條、待回覆清單和回報裡都顯示名稱，不顯示票號；`<名稱> 詳情` 仍列出票號。打名稱或原本的票號都指揮得到它。
 
 ## 安裝 task-list（選用）
 
@@ -138,6 +153,21 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 - **theme：** `neutral`（預設，用終端機的顏色）、`neutral-light`、`dracula`、`gruvbox` 或 `light`。`neutral` 讓前景文字維持終端機的預設色。
 - **motion：** `true`（預設）時，只有主要那題的圖示每 900ms 在 ◆／◇ 之間切換。目前這題優先，沒有的話是排隊列第一個問題或授權請求。所有看得到的授權 ◆ 同步呼吸：1.2 秒授權色、0.6 秒淡色；狀態字與橫條左側直線維持授權色。工作中與異常不動。`false` 讓所有圖示停在第一格，並關掉動畫計時器。
 
+### repo 縮寫
+
+同一張票開在好幾個 repo 時，看板在票號後面接 repo 的縮寫：`sara-v2-frontend` 和 `sara-v2-backend` 顯示成 `SARA-7063-fe` 和 `SARA-7063-be`。預設會去掉這幾個 repo 名稱相同的開頭，再把 `frontend`／`backend` 縮成 `fe`／`be`；兩個字都沒有的 repo 名稱就留下剩下的部分（`acme-billing` 和 `acme-admin-portal` 並列時顯示 `billing`）。要用自己的縮寫，設定 `repoAbbreviations`：
+
+```json
+{
+  "repoAbbreviations": {
+    "sara-v2-frontend": "web",
+    "sara-v2-backend": "api"
+  }
+}
+```
+
+縮完兩邊還是一樣時，看板改用完整 repo 名稱（`SARA-7063-sara-v2-frontend`），兩個 session 不會用到同一個代號。中控台每次列 session 都會讀這個鍵，不用重開。
+
 設定在 session 啟動時、以及每次打開面板時讀取，改完重開面板就生效。只有中控台自己的分頁會讀這個檔。沒寫的設定用預設值；不認得的值退回預設，同一個錯誤值在一個 session 裡只跳一次通知；檔案不是有效的 JSON 時全部用預設，跳一次通知。
 
 面板把執行中的 session 叫 **工作中**、問題叫 **待回答**、授權請求叫 **待授權**、回覆完畢叫 **已回覆**。這些只是顯示用的標籤；對話裡的看板維持原本的狀態用字。按鈕字型與快捷鍵顏色由 Claude Code 決定；可點的名稱與按鍵維持它原生的樣式。
@@ -161,6 +191,8 @@ npm test
 在 herdr 分頁裡跑測試要用 `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`。專注橫條、`focus-show` 與 `tool-dots` 的測試用 `claude plugin test .`、`claude plugin test mods/focus-show` 與 `claude plugin test mods/tool-dots` 跑。
 
 真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。本機沒有 `tmux` 時這些測試會略過並寫明原因；CI（設了 `CI` 環境變數）上沒有 `tmux` 則直接失敗。CI 由 `.github/workflows/ci.yml` 執行：安裝固定版本的 `@anthropic-ai/claude-code` 與 `tmux`，跑 `npm test`、`claude plugin test .`、`claude plugin test mods/focus-show` 與 `claude plugin test mods/tool-dots`。
+
+plugin 版號由 CI 在每個 pull request 自動升。`version` job 找出 PR 改到哪些 plugin（`mods/focus-show`、`mods/tool-dots`、`plugins/task-list`，其餘都算 `worktree-console`），以 `main` 目前的版號為基準各升一號（`feat` 升 minor，其他升 patch，PR 標題有 `!` 升 major），在 `CHANGELOG.md` 加一段 PR 標題，再推一個 `chore: bump plugin versions` commit 到 PR branch。它每次都從 `main` 重算，所以同一個 PR 推多次版號不變；別的 PR 先 merge 了，下次執行就改成下一號。你自己在那段 changelog 寫的說明會保留，只改版號標題。從 fork 開的 PR，CI 推不了 commit，改成檢查：沒升或升錯就失敗，並印出每個 plugin 該升成幾號。腳本是 `.github/scripts/plugin-versions.mjs`。
 
 不想換掉已安裝的版本、只想試本機 checkout 時：
 

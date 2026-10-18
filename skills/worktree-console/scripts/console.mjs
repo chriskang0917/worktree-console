@@ -47,6 +47,11 @@ import {
   nameLines,
   readNames,
   writeNames,
+  nameProblem,
+  saveName,
+  queueRename,
+  readConfig,
+  STOPPED,
 } from "./lib.mjs";
 import { consoleSessionOk, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
@@ -185,13 +190,15 @@ function nickname() {
   if (hits.length === 0) fail(`[${query}] 找不到這個 worktree`);
   if (hits.length > 1) fail(`[${query}] 對到多個 worktree：${hits.map((r) => r.branch).join("、")}`);
   const row = hits[0];
-  const names = Object.fromEntries(Object.entries(readNames()).filter(([p]) => p !== row.path && fs.existsSync(p)));
+  const names = Object.fromEntries(Object.entries(readNames()).filter(([p]) => fs.existsSync(p)));
+  const own = names[row.path]?.branch === row.branch ? names[row.path] : {};
+  delete names[row.path];
   const taken = [
     ...Object.values(names).map((n) => n.nickname),
     ...rows.filter((r) => r !== row).flatMap((r) => [r.label, r.base, r.nickname, r.displayName, r.branch.replace(/^(.*\/)?ask-/, "")]),
   ];
   if (taken.some((t) => (t ?? "").toLowerCase() === nick)) fail(`[${nick}] 暱稱已被使用，請換一個`);
-  writeNames({ ...names, [row.path]: { nickname: nick, branch: row.branch, repo: row.repo, at: Date.now() } });
+  writeNames({ ...names, [row.path]: { ...own, nickname: nick, branch: row.branch, repo: row.repo, at: Date.now() } });
   console.log(`[${nick}] 已存暱稱：${row.branch}（${row.repo}）`);
 }
 
@@ -295,6 +302,7 @@ function detail() {
     fillTitle(row, keys);
     console.log(`[${specific ? sessionTag(row, session) : row.label}] 詳情`);
     console.log(`摘要：${row.title ?? "—"}`);
+    if (row.given && row.ticket) console.log(`票號：${row.ticket}`);
     console.log(`repo: ${row.repo}`);
     console.log(`branch: ${row.branch}`);
     console.log(`worktree: ${row.path}`);
@@ -495,10 +503,12 @@ function saveTask(paneKey, title, handle) {
 // The task title of a session the console just opened, for its focus card.
 function title() {
   const text = positionals.join(" ").trim();
-  if (!values.terminal || !text) fail("用法：console.mjs title --terminal <handle> -- <任務標題>");
+  if (!values.terminal || !text) fail("用法：console.mjs title --terminal <handle> [--name <session 名稱>] -- <任務標題>");
   const paneKey = paneOf(values.terminal);
   if (!paneKey) fail(`找不到分頁 ${values.terminal}`);
   saveTask(paneKey, text, values.terminal);
+  // A session Orca started itself gets its Claude Code name from the watcher once it stops.
+  if (values.name) queueRename(values.terminal, values.name, manager().name);
 }
 
 function repoMatch() {
@@ -509,42 +519,81 @@ function repoMatch() {
 }
 
 // 「問 <repo>：…」: a temporary worktree with the question as its first instruction. Orca cannot open a tab in a detached
-// worktree, so it gets a throwaway branch that goes with it when it is removed.
+// worktree, so it gets a throwaway branch that goes with it when it is removed; herdr does the same with git itself.
 async function ask() {
-  if (manager().name !== "orca") fail("「問 <repo>：…」目前只支援 Orca");
+  const m = manager();
   const question = positionals.join(" ").trim();
-  const nick = values.nickname ?? "";
-  if (!values.target || !nick || !values.title || !question) fail("用法：console.mjs ask --repo R --target <repo> --nickname <暱稱> --title <任務標題> -- <問題>");
-  if (!ALIAS.test(nick)) fail(`[${nick}] 暱稱要 3～5 個英文小寫字母`);
+  const given = values.name ?? null;
+  const nick = given ?? values.nickname ?? "";
+  const usage = "用法：console.mjs ask --repo R [--target <repo>] (--nickname <暱稱> | --name <名稱>) --title <任務標題> -- <問題>";
+  if (!nick || !values.title || !question || (m.name === "orca" && !values.target)) fail(usage);
+  if (!given && !ALIAS.test(nick)) fail(`[${nick}] 暱稱要 3～5 個英文小寫字母`);
   const data = load({ withStage: false });
-  const lead = repoLead(values.target, data.repos);
-  if (lead.match === "many") fail(`「${values.target}」對到多個 repo：${lead.repos.map((r) => r.name).join("、")}`);
-  if (lead.match !== "one") fail(`找不到 repo「${values.target}」`);
-  const saved = Object.entries(readNames()).filter(([p]) => fs.existsSync(p)).map(([, n]) => n.nickname);
-  if (saved.includes(nick) || data.rows.some((r) => r.label.toLowerCase() === nick || (r.branch === `ask-${nick}` || r.branch.endsWith(`/ask-${nick}`)))) fail(`[${nick}] 暱稱已被使用，請換一個`);
-  const created = runOrca(["worktree", "create", "--repo", `path:${lead.repo.main}`, "--name", `ask-${nick}`, "--no-parent", "--setup", "skip", "--agent", "claude", "--prompt", question]);
-  const made = created.ok ? created.result?.worktree?.path : null;
-  if (!made) fail(`[${nick}] 未開工：開 worktree 失敗（${created.error?.code ?? "沒有路徑"}）`);
-  const target = realpath(made);
+  let repo = data.repos.find((r) => r.main === data.main) ?? { name: data.launchRepo, main: data.main };
+  if (values.target) {
+    const lead = repoLead(values.target, data.repos);
+    if (lead.match === "many") fail(`「${values.target}」對到多個 repo：${lead.repos.map((r) => r.name).join("、")}`);
+    if (lead.match !== "one") fail(`找不到 repo「${values.target}」`);
+    repo = lead.repo;
+  }
+  if (given) {
+    const problem = nameProblem(given, data.rows, data.repos);
+    if (problem) fail(`[${given}] 不能用：${problem}`);
+  } else {
+    const saved = Object.entries(readNames()).filter(([p]) => fs.existsSync(p)).map(([, n]) => n.nickname);
+    if (saved.includes(nick) || data.rows.some((r) => r.label.toLowerCase() === nick || (r.branch === `ask-${nick}` || r.branch.endsWith(`/ask-${nick}`)))) fail(`[${nick}] 暱稱已被使用，請換一個`);
+  }
+  const opened = m.name === "orca" ? askOrca(repo, nick, question) : askHerdr(repo, nick);
+  const { target, handle } = opened;
+  const branch = git(target, ["branch", "--show-current"]).out || null;
   const rec = {
     kind: "worktree",
-    source: manager().name,
+    source: m.name,
     path: target,
-    main: lead.repo.main,
-    repo: lead.repo.name,
-    branch: git(target, ["branch", "--show-current"]).out || null,
+    main: repo.main,
+    repo: repo.name,
+    branch,
     start: git(target, ["rev-parse", "HEAD"]).out || null,
     nickname: nick,
     title: Array.from(values.title.trim()).slice(0, TASK_MAX).join(""),
     at: Date.now(),
   };
   writeDisposable([...readDisposable().filter((d) => d.path !== target), rec]);
-  runOrca(["worktree", "set", "--worktree", `path:${target}`, "--display-name", nick]);
-  const handle = created.result?.agentTerminalHandle ?? created.result?.startupTerminal?.handle ?? null;
+  if (given) saveName({ path: target, branch, repo: repo.name }, given);
   if (handle) saveTask(paneOf(handle), rec.title, handle);
+  if (m.name === "orca") {
+    runOrca(["worktree", "set", "--worktree", `path:${target}`, "--display-name", nick]);
+    queueRename(handle, nick, m.name);
+  } else {
+    if (!opened.ready) fail(`[${nick}] 未開工：新分頁沒就緒（${opened.code}），用 \`${screenHint(handle)}\` 看畫面`);
+    const sent = m.send(handle, question, { enter: true });
+    if (!sent.ok) fail(`[${nick}] 未開工：送問題失敗（${sent.code}）`);
+  }
   const { ok, reason } = await waitStart(target, Array.from(question).slice(0, EXPECT_MAX).join(""));
   if (ok) writeDisposable(readDisposable().map((d) => (d.path === target ? { ...d, seen: true } : d)));
-  print(ok ? `[${nick}] 已開暫存 worktree（${lead.repo.name}），問題已送出` : `[${nick}] 未開工：${reason}`, ok ? 0 : 1);
+  print(ok ? `[${nick}] 已開暫存 worktree（${repo.name}），問題已送出` : `[${nick}] 未開工：${reason}`, ok ? 0 : 1);
+}
+
+function askOrca(repo, nick, question) {
+  const created = runOrca(["worktree", "create", "--repo", `path:${repo.main}`, "--name", `ask-${nick}`, "--no-parent", "--setup", "skip", "--agent", "claude", "--prompt", question]);
+  const made = created.ok ? created.result?.worktree?.path : null;
+  if (!made) fail(`[${nick}] 未開工：開 worktree 失敗（${created.error?.code ?? "沒有路徑"}）`);
+  return { target: realpath(made), handle: created.result?.agentTerminalHandle ?? created.result?.startupTerminal?.handle ?? null };
+}
+
+function askHerdr(repo, nick) {
+  const branch = `ask-${nick}`;
+  if (git(repo.main, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok) fail(`[${nick}] 暱稱已被使用，請換一個`);
+  rememberRepo(repo.main);
+  const want = path.join(worktreeHome(), path.basename(repo.main), branch);
+  fs.mkdirSync(path.dirname(want), { recursive: true });
+  const add = git(repo.main, ["worktree", "add", "-b", branch, want]);
+  if (!add.ok) fail(`[${nick}] 未開工：建 worktree 失敗：${add.err}`);
+  const target = realpath(want);
+  recordWorktree(target, { ticket: null, displayName: nick, interview: false, repo: repo.name });
+  const opened = manager().create(target, { label: nick, name: nick });
+  if (!opened.ok) fail(`[${nick}] 未開工：開分頁失敗（${opened.code}）`);
+  return { target, handle: opened.handle, ready: opened.ready, code: opened.code };
 }
 
 // 「<代號> 問：…」: one more tab in that worktree, marked throwaway, with the question as its first instruction.
@@ -559,7 +608,7 @@ async function askTab() {
   const row = rows[0];
   if (row.isMain) fail(`[${row.label}] 主 checkout 不開臨時分頁，改用「問 ${row.repo}：…」`);
   const m = manager();
-  const created = m.create(row.path);
+  const created = m.create(row.path, { name: `${row.label}-ask` });
   if (!created.ok) fail(`[${row.label}] 未開臨時分頁：${created.code}`);
   const handle = created.handle;
   const idle = m.waitReady(handle, 60000);
@@ -844,7 +893,7 @@ async function handoff() {
     if (!ok) console.log(["\/goal 原文：", "```", goal, "```"].join("\n"));
     process.exit(ok ? 0 : 1);
   };
-  const created = m.create(target, { label });
+  const created = m.create(target, { label, name: label });
   handle = created.ok ? created.handle : null;
   if (!handle) done(false, `[${label}] 交棒失敗：開新分頁（${created.code}），訪談分頁保留`, `開新分頁：${created.code}`);
   const idle = m.waitReady(handle, 60000);
@@ -882,14 +931,6 @@ function report() {
 
 function distilled() {
   console.log(markDistilled());
-}
-
-function readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(consoleHome(), "config.json"), "utf8"));
-  } catch {
-    return null;
-  }
 }
 
 function todo() {
@@ -933,7 +974,12 @@ function open() {
   if (!values.path) fail("用法：console.mjs open --path <worktree> [--continue]");
   const target = realpath(values.path);
   const m = manager();
-  const created = m.create(target, { args: values.continue ? ["--continue"] : [] });
+  let row = null;
+  try {
+    row = collect(mainCheckout(target), { withStage: false }).rows.find((r) => r.path === target) ?? null;
+  } catch {}
+  const name = row?.label ?? path.basename(target);
+  const created = m.create(target, { args: values.continue ? ["--continue"] : [], name });
   if (!created.ok) fail(`未開分頁：${created.code}`);
   const ready = m.waitReady(created.handle, 60000);
   if (!ready.ok) fail(`未就緒：${ready.code}（terminal ${created.handle}）`);
@@ -944,14 +990,20 @@ function open() {
 function start() {
   const text = positionals.join(" ").trim();
   if (!values.repo || !values.branch || !values.dir || !text) {
-    fail("用法：console.mjs start --repo R --branch B --dir <資料夾名稱> [--ticket KEY-n | --name <暱稱>] [--interview] [--path P] -- <首則指令>");
+    fail("用法：console.mjs start --repo R --branch B --dir <資料夾名稱> [--ticket KEY-n] [--name <名稱>] [--interview] [--path P] -- <首則指令>");
   }
   const m = manager();
   if (m.name !== "herdr") fail("Orca 模式照 kickoff.md 用 orca worktree create 開工");
   const main = mainCheckout(realpath(repoArg()));
   rememberRepo(main);
-  const label = values.ticket?.toUpperCase() ?? values.name ?? values.branch;
+  const given = values.name ?? null;
+  const label = given ?? values.ticket?.toUpperCase() ?? values.branch;
   let target = gitWorktrees(main).find((w) => w.branch === values.branch)?.path ?? null;
+  if (given) {
+    const { rows, repos } = load({ withStage: false });
+    const problem = nameProblem(given, rows, repos, rows.find((r) => r.path === target) ?? null);
+    if (problem) fail(`[${given}] 不能用：${problem}`);
+  }
   if (!target) {
     const want = values.path ? path.resolve(values.path) : path.join(worktreeHome(), path.basename(main), values.dir);
     const has = git(main, ["rev-parse", "--verify", "--quiet", `refs/heads/${values.branch}`]).ok;
@@ -960,8 +1012,9 @@ function start() {
     if (!add.ok) fail(`[${label}] 未開工：建 worktree 失敗：${add.err}`);
     target = realpath(want);
     recordWorktree(target, { ticket: values.ticket?.toUpperCase() ?? null, displayName: values.name ?? null, interview: values.interview, repo: path.basename(main) });
+    if (given) saveName({ path: target, branch: values.branch, repo: path.basename(main) }, given);
   }
-  const opened = m.create(target, { label });
+  const opened = m.create(target, { label, name: label });
   if (!opened.ok) fail(`[${label}] 未開工：開分頁失敗（${opened.code}）`);
   console.log(`worktree: ${target}`);
   console.log(`terminal: ${opened.handle}`);
@@ -992,7 +1045,7 @@ async function move() {
   if (!dest.ok) fail(`[${tag}] 未搬：${dest.code === "no-workspace" ? `沒有叫「${dest.name}」的工作區` : dest.code}`);
   if (dest.already) return print(`[${tag}] 已在工作區「${dest.name}」，不用搬`, 0);
   const old = session.handle;
-  const created = m.create(row.path, { args: ["--resume", sessionId], label: tag, workspace: dest.workspace });
+  const created = m.create(row.path, { args: ["--resume", sessionId], label: tag, name: tag, workspace: dest.workspace });
   if (!created.ok) fail(`[${tag}] 未搬：開新分頁失敗（${created.code}），舊分頁保留`);
   const handle = created.handle;
   const abort = (why) => {
@@ -1018,6 +1071,32 @@ async function move() {
   logEvent("move", { repo: row.repo, ticket: tag, path: row.path, sessionId, oldHandle: old, newHandle: handle, workspace: dest.name, ok: closed.ok });
   if (!closed.ok) fail(`[${tag}] 已在工作區「${dest.name}」接上（${handle}），但關舊分頁 ${old} 失敗（${closed.code}）`);
   console.log(`[${tag}] 已搬到工作區「${dest.name}」：新分頁 ${handle}，舊分頁 ${old} 已關`);
+}
+
+// 「<代號> 改名 <名稱>」: board, focus band and herdr tab change now; the Claude Code session name too once it has stopped.
+function rename() {
+  const [query, name = ""] = positionals;
+  if (!query || !name) fail("用法：console.mjs rename --repo R <代號> <名稱>");
+  const data = load({ withStage: false }, { repoOptional: true });
+  const hits = [...new Set(matchSessions(data.rows, query).map((h) => h.row))];
+  if (hits.length === 0) fail(`[${query}] 找不到這個代號`);
+  if (hits.length > 1) fail(`[${query}] 對到多個 worktree：${hits.map((r) => r.label).join("、")}`);
+  const row = hits[0];
+  const problem = nameProblem(name, data.rows, data.repos, row);
+  if (problem) fail(`[${name}] 不能用：${problem}`);
+  saveName(row, name);
+  const m = manager();
+  const now = load({ withStage: false }, { repoOptional: true }).rows.find((r) => r.path === row.path) ?? row;
+  const later = [];
+  for (const s of now.sessions.filter((x) => x.handle)) {
+    const tag = sessionTag(now, s);
+    m.renameTab(s.handle, tag);
+    if (STOPPED.has(s.agent?.state) && m.send(s.handle, `/rename ${tag}`, { enter: true }).ok) continue;
+    queueRename(s.handle, tag, m.name);
+    later.push(tag);
+  }
+  console.log(`[${name}] 已改名：${row.label} → ${name}`);
+  if (later.length > 0) console.log(`${later.join("、")} 還沒停下，Claude Code session 名稱等它停下再改`);
 }
 
 const ACTUAL = [
@@ -1206,6 +1285,7 @@ const commands = {
   ask,
   "ask-tab": askTab,
   nickname,
+  rename,
   prune,
 };
 const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt", "prune"]);
