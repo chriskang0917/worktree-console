@@ -1,5 +1,13 @@
 # Changelog
 
+## focus-show 0.2.0
+
+- feat(focus): version the focus.json format focus-show reads
+
+## 1.5.0
+
+- feat(focus): version the focus.json format focus-show reads
+
 ## 1.4.0
 
 - feat(console): name every session, remote control, herdr ask, CI version bumps
