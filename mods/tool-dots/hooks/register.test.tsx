@@ -59,7 +59,7 @@ test('a run of calls with no reply text between them is one line: a dot per call
   if (!(await loaded($))) return
   for (const surface of ['terminal', 'desktop'] as const) {
     const first = await draw($, toolRow(run[0]!), surface)
-    expect(first.text).toBe('●●●●● tool_call: Bash ×3 · Read ×2')
+    expect(first.text).toBe('  ●●●●●  tool_call: Bash ×3 · Read ×2')
     expect(first.colours).toEqual(Array(5).fill('green'))
     for (const u of run.slice(1)) expect((await draw($, toolRow(u), surface)).hidden).toBe(true)
   }
@@ -72,12 +72,12 @@ test('running dots are yellow, finished green, failed red; failures add - 1 erro
   if (!(await loaded($))) return
   let line = await draw($, toolRow(run[0]!))
   expect(line.colours).toEqual(['green', 'red', 'yellow'])
-  expect(line.text).toBe('●●● tool_call: Bash ×2 · Read ×1 - 1 error')
+  expect(line.text).toBe('  ●●●  tool_call: Bash ×2 · Read ×1 - 1 error')
   messages = [reply('', [run[0]!, run[1]!, { id: 'c', tool: 'Read', error: true }])]
   line = await draw($, toolRow(run[0]!))
-  expect(line.text).toBe('●●● tool_call: Bash ×2 · Read ×1 - 2 errors')
+  expect(line.text).toBe('  ●●●  tool_call: Bash ×2 · Read ×1 - 2 errors')
   messages = [reply('', [{ id: 'a', tool: 'Bash' }])]
-  expect((await draw($, toolRow(run[0]!))).text).toBe('● tool_call: Bash ×1')
+  expect((await draw($, toolRow(run[0]!))).text).toBe('  ●  tool_call: Bash ×1')
 })
 
 test('reply text or a person\'s message between calls splits them into two lines; reminders riding on a tool result do not', async ($, on) => {
@@ -89,10 +89,10 @@ test('reply text or a person\'s message between calls splits them into two lines
     prompt('再跑一次'), reply('', [d!]), results([d!]),
   ])
   if (!(await loaded($))) return
-  expect((await draw($, toolRow(a!))).text).toBe('●● tool_call: Bash ×2')
+  expect((await draw($, toolRow(a!))).text).toBe('  ●●  tool_call: Bash ×2')
   expect((await draw($, toolRow(b!))).hidden).toBe(true)
-  expect((await draw($, toolRow(c!))).text).toBe('● tool_call: Bash ×1')
-  expect((await draw($, toolRow(d!))).text).toBe('● tool_call: Bash ×1')
+  expect((await draw($, toolRow(c!))).text).toBe('  ●  tool_call: Bash ×1')
+  expect((await draw($, toolRow(d!))).text).toBe('  ●  tool_call: Bash ×1')
 })
 
 test('past 24 calls only 24 dots are drawn, then a dim +N', async ($, on) => {
@@ -101,7 +101,7 @@ test('past 24 calls only 24 dots are drawn, then a dim +N', async ($, on) => {
   if (!(await loaded($))) return
   const line = await draw($, toolRow(run[0]!))
   expect(line.colours).toHaveLength(24)
-  expect(line.text).toBe(`${'●'.repeat(24)}+6 tool_call: Bash ×30`)
+  expect(line.text).toBe(`  ${'●'.repeat(24)}+6  tool_call: Bash ×30`)
   const plus = (function find(n: any): any {
     if (typeof n !== 'object' || !n) return undefined
     if (n.type === 'Text' && (n.children ?? []).join('') === '+6') return n
@@ -110,11 +110,35 @@ test('past 24 calls only 24 dots are drawn, then a dim +N', async ($, on) => {
   expect(plus?.props.dimColor).toBe(true)
 })
 
+test('the line is indented two cells under the reply text, two cells sit between the dots and tool_call whatever the dot count, and the tool_call text is dim while the dots keep their colours', async ($, on) => {
+  let messages: unknown[] = []
+  world(on, () => messages)
+  if (!(await loaded($))) return
+  const findDim = (n: any): any => {
+    if (typeof n !== 'object' || !n) return undefined
+    if (n.type === 'Text' && (n.children ?? []).join('').includes('tool_call')) return n
+    for (const c of n.children ?? []) { const hit = findDim(c); if (hit) return hit }
+  }
+  for (const n of [1, 9, 24, 30]) {
+    const run: Use[] = calls('Bash', n).map((u, i) => (i === 0 ? { ...u, error: true } : i === 1 ? { ...u, done: false } : u))
+    messages = [reply('', run)]
+    const line = await draw($, toolRow(run[0]!))
+    expect(line.text).toMatch(/^ {2}●+(\+\d+)? {2}tool_call: /)
+    expect(line.colours[0]).toBe('red')
+    if (n > 1) expect(line.colours[1]).toBe('yellow')
+    if (n > 2) expect(line.colours.at(-1)).toBe('green')
+    const text = findDim(line.root)
+    expect(text.props.dimColor).toBe(true)
+    expect(text.props.color).toBeUndefined()
+    expect((text.children ?? []).join('')).toContain(' - 1 error')
+  }
+})
+
 test('an MCP tool shows as server:tool', async ($, on) => {
   const run: Use[] = [{ id: 'm1', tool: 'mcp__linear-server__get_issue' }, { id: 'm2', tool: 'mcp__claude_ai_Gmail__authenticate' }, { id: 'm3', tool: 'mcp__linear-server__get_issue' }]
   world(on, () => [reply('', run)])
   if (!(await loaded($))) return
-  expect((await draw($, toolRow(run[0]!))).text).toBe('●●● tool_call: linear-server:get_issue ×2 · claude_ai_Gmail:authenticate ×1')
+  expect((await draw($, toolRow(run[0]!))).text).toBe('  ●●●  tool_call: linear-server:get_issue ×2 · claude_ai_Gmail:authenticate ×1')
 })
 
 test('folded, a result block draws nothing; with ctrl+o (or --verbose) every call and its result draw as the engine has them', async ($, on) => {
@@ -128,7 +152,7 @@ test('folded, a result block draws nothing; with ctrl+o (or --verbose) every cal
   expect((await draw($, result)).text).toBe('engine')
   await draw($, userRow(false))
   expect((await draw($, result)).hidden).toBe(true)
-  expect((await draw($, toolRow(run[0]!))).text).toBe('●● tool_call: Bash ×2')
+  expect((await draw($, toolRow(run[0]!))).text).toBe('  ●●  tool_call: Bash ×2')
 })
 
 test('a group the engine folds (reads, searches) joins the run: the group holding the first call draws the line, any other draws nothing; expanded it is the engine\'s', async ($, on) => {
@@ -140,7 +164,7 @@ test('a group the engine folds (reads, searches) joins the run: the group holdin
     props: { calls: members.map(u => ({ tool_use_id: u.id, tool: u.tool, input: {}, isRunning: false, isErrored: false, isInterrupted: false })), isActive: false, isExpanded },
   })
   expect((await draw($, group(run.slice(1)))).hidden).toBe(true)
-  expect((await draw($, group(run.slice(0, 3)))).text).toBe('●●●● tool_call: Bash ×1 · Read ×2 · Grep ×1')
+  expect((await draw($, group(run.slice(0, 3)))).text).toBe('  ●●●●  tool_call: Bash ×1 · Read ×2 · Grep ×1')
   expect((await draw($, group(run.slice(1), true))).text).toBe('engine')
   await draw($, userRow(false))
 })

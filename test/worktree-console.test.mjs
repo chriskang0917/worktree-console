@@ -263,7 +263,7 @@ const toolResult = (id) => ({ type: "user", message: { role: "user", content: [{
 
 const menuAgent = (prompt = "PROJ-103 選顏色尺寸") => ({ state: "waiting", toolName: "AskUserQuestion", toolInput: null, prompt, lastAssistantMessage: null });
 
-function withMenuSession(questions = MENU, extra = {}) {
+function withMenuSession(questions = MENU, extra = {}, before = []) {
   const prev = process.env.CLAUDE_PROJECTS_DIR;
   process.env.CLAUDE_PROJECTS_DIR = path.join(tmp, "claude-projects");
   try {
@@ -272,6 +272,7 @@ function withMenuSession(questions = MENU, extra = {}) {
       toolUse("t0", "AskUserQuestion", { questions: [{ question: "舊題？", header: "舊", options: [{ label: "x" }] }] }),
       toolResult("t0"),
       userText("PROJ-103 選顏色尺寸"),
+      ...before,
       toolUse("t1", "AskUserQuestion", { questions }),
     ]);
   } finally {
@@ -451,6 +452,15 @@ test("UX7 AskUserQuestion：狀態是 💬 等待回應，列出每題標籤、�
   assert.ok(!r.some((l) => l.includes("舊題")), "已回答過的舊選單不該被拿來用");
   assert.deepEqual(parseMenu(JSON.stringify({ questions: MENU })), MENU, "Orca 之後若帶 toolInput 就直接用");
   assert.equal(parseMenu(null), null);
+});
+
+test("UX7 Orca 選單前緊接的回覆文字（含表格）先印在回報裡、表格在引用框外，再印選項表", () => {
+  const table = ["| 色 | 價 |", "| --- | --- |", "| 紅 | 10 |"];
+  const said = { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: ["比較如下：", "", ...table].join("\n") }] } };
+  const r = blocks(run("watch.mjs", ["--baseline", baselineWith()], { dir: withMenuSession(MENU, {}, [said]) }).out).reports[0];
+  const at = r.indexOf(table[0]);
+  assert.deepEqual(r.slice(at, at + table.length), table, r.join("\n"));
+  assert.ok(r.indexOf("> 比較如下：") < at && at < r.indexOf("> 第 1 題 **顏色**　要哪個顏色？"), r.join("\n"));
 });
 
 test("UX8 回報沒有「↳ 回覆：」行與「摘要：…｜階段：…」行；多 session 標題帶 <票號>#n", () => {

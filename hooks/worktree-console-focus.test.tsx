@@ -253,19 +253,32 @@ test('band: the queue shows at most 5 (1–5) and a new one is marked ✨; nothi
   await alone.unmount()
 })
 
-test('band: a long question wraps whole and is cut with … only past the room the band has', async ($, on) => {
+test('band: the question takes one line, cut with … past the line; the header and key rows keep their rows and places', async ($, on) => {
   const long = '這是一題很長的問題，'.repeat(30)
-  const w = world({ ...pending(), sessions: SESSIONS.map(s => (s.tag === 'perm' ? { ...s, question: long } : s)) })
-  await start($, on, w)
-  const roomy = await $.ui.mount({ ...band(160, 20), surface: 'terminal' })
-  expect((await roomy.find({ key: 'question' }))?.text).toBe(long)
-  expect((await roomy.find({ type: 'Text', text: '這是一題' }))?.props.wrap).toBe('wrap')
-  await roomy.unmount()
-  const tight = await $.ui.mount({ ...band(40, 6), surface: 'terminal' })
-  const cut = (await tight.find({ key: 'question' }))!.text
-  expect(cut.endsWith('…')).toBe(true)
-  expect(long.startsWith(cut.slice(0, -1))).toBe(true)
-  await tight.unmount()
+  const shortQ = '要刪掉 build 嗎？'
+  const withQuestion = (question: string) => ({ ...pending(), sessions: SESSIONS.map(s => (s.tag === 'perm' ? { ...s, question } : s)) })
+  const w = world(withQuestion(long))
+  const clock = await start($, on, w)
+  const shape = (n: any): any => (typeof n === 'string' ? 's' : { type: n.type, height: n.props?.height, key: n.props?.key, children: (n.children ?? []).map(shape) })
+  const layout = async (ui: any) => shape(await ui.drawn()).children.map((row: any) => ({ ...row, children: row.key === undefined && row.height === 1 ? row.children.length : row.children }))
+  for (const cols of [160, 40]) {
+    w.focus = withQuestion(long)
+    await clock.advance(5_000)
+    const ui = await $.ui.mount({ ...band(cols, 20), surface: 'terminal' })
+    const cut = (await ui.find({ key: 'question' }))!.text
+    expect(cut.endsWith('…')).toBe(true)
+    expect(long.startsWith(cut.slice(0, -1))).toBe(true)
+    expect(columns(cut)).toBeLessThanOrEqual(cols - 6)
+    expect((await ui.find({ type: 'Text', text: '這是一題' }))?.props.wrap).toBe('truncate-end')
+    const before = await layout(ui)
+    await ui.unmount()
+    w.focus = withQuestion(shortQ)
+    await clock.advance(5_000)
+    const short = await $.ui.mount({ ...band(cols, 20), surface: 'terminal' })
+    expect((await short.find({ key: 'question' }))?.text).toBe(shortQ)
+    expect(await layout(short)).toEqual(before)
+    await short.unmount()
+  }
 })
 
 test('band keys: 1–5 switch to that question and print it, 8 (延後處理) sends it behind the queue and prints the next, 9 (顯示問題) prints the one on screen, 0 opens the pane with the keyboard', async ($, on) => {
@@ -1852,22 +1865,30 @@ test('寬度：✨ 算 2 欄，排隊名稱後的 ✨ 照 2 欄預留', () => {
   expect(rows.keyLines.flat().find(item => item.index === 2)?.width).toBe(columns('abc') + 3 + 7)
 })
 
-test('refined：80 與 46 欄操作在標題列不佔行，長多行問題取得剩餘行數', () => {
+test('refined：80 與 46 欄操作在標題列不佔行，題目最多一行，超過一行寬時截斷以 … 結尾，其他列行數不變', () => {
   for (const cols of [80, 46]) {
+    const inner = cols - 6
     const rows = focusBandRows({ cols, maxRows: 10, question: longBandQuestion, queue: longBandQueue, hiddenCount: 2 })
     expect(rows.actions).toBe(0)
     expect(rows.keys).toBe(cols === 80 ? 3 : 2)
-    expect(rows.question).toBe(cols === 80 ? 4 : 5)
-    expect(rows.margin + rows.separator + rows.header + rows.actions + rows.keys + rows.question).toBeLessThanOrEqual(10)
-    expect(rows.questionText.startsWith('第一行\n\n')).toBe(true)
+    expect(rows.question).toBe(1)
+    expect(rows.questionText.startsWith('第一行 問')).toBe(true)
     expect(rows.questionText.endsWith('…')).toBe(true)
-    expect(rows.questionText.includes('最後一行')).toBe(false)
-    const short = focusBandRows({ cols, maxRows: 10, question: '第一行\n\n最後一行', queue: longBandQueue, hiddenCount: 2 })
-    expect(short.question).toBe(3)
-    expect(short.questionText).toBe('第一行\n\n最後一行')
-    const wrapped = focusBandRows({ cols, maxRows: 10, question: '問'.repeat(40), queue: longBandQueue, hiddenCount: 2 })
-    expect(wrapped.question).toBe(2)
-    expect(wrapped.questionText).toBe('問'.repeat(40))
+    expect(rows.questionText.includes('\n')).toBe(false)
+    expect(columns(rows.questionText)).toBeLessThanOrEqual(inner)
+    const short = focusBandRows({ cols, maxRows: 10, question: '要怎麼做？', queue: longBandQueue, hiddenCount: 2 })
+    expect(short.question).toBe(1)
+    expect(short.questionText).toBe('要怎麼做？')
+    const exact = focusBandRows({ cols, maxRows: 10, question: '問'.repeat(inner / 2), queue: longBandQueue, hiddenCount: 2 })
+    expect(exact.questionText).toBe('問'.repeat(inner / 2))
+    const over = focusBandRows({ cols, maxRows: 10, question: '問'.repeat(inner / 2 + 1), queue: longBandQueue, hiddenCount: 2 })
+    expect(over.question).toBe(1)
+    expect(over.questionText.endsWith('…')).toBe(true)
+    expect(columns(over.questionText)).toBeLessThanOrEqual(inner)
+    for (const other of [short, exact, over]) {
+      expect([other.margin, other.separator, other.header, other.actions, other.keys]).toEqual([rows.margin, rows.separator, rows.header, rows.actions, rows.keys])
+      expect(other.keyLines).toEqual(rows.keyLines)
+    }
   }
 })
 

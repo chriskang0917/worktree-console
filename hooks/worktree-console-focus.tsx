@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { loadAppearance, THEMES, type Appearance, type ConsoleTheme } from './console-theme.ts'
 import { statusCell, columns, truncateColumns } from './status-view.ts'
+import { registerKeepaliveView } from './keepalive-view.tsx'
 
 type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
 
@@ -64,25 +65,6 @@ const LATER_WIDTH = 3 + 4 + 8
 // The band header's status cell: glyph, a space, the label padded to 6 cells, two spaces.
 const BAND_STATUS = 10
 
-function lineCount(text: string, w: number): number {
-  return text.split('\n').reduce((n, para) => {
-    let lines = 1
-    let used = 0
-    for (const tok of para.match(/[\u2e80-\uffff]|[^\s\u2e80-\uffff]+|\s+/g) ?? []) {
-      const tw = columns(tok)
-      if (used + tw <= w) used += tw
-      else if (/^\s/.test(tok)) (lines += 1), (used = 0)
-      else if (tw <= w) (lines += 1), (used = tw)
-      else {
-        if (used > 0) lines += 1
-        lines += Math.ceil(tw / w) - 1
-        used = tw % w || w
-      }
-    }
-    return n + lines
-  }, 0)
-}
-
 export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, hasCurrent = true }: {
   cols: number
   maxRows: number
@@ -115,19 +97,8 @@ export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, has
   const separator = 1
   const header = 1
   const available = Math.max(0, maxRows - margin - separator - header - keys)
-  const questionRows = hasCurrent ? Math.min(lineCount(question, inner), available) : 0
-  let questionText = questionRows ? question : ''
-  if (questionRows && lineCount(question, inner) > questionRows) {
-    const chars = [...question]
-    let low = 0
-    let high = chars.length
-    while (low < high) {
-      const mid = Math.ceil((low + high) / 2)
-      if (lineCount(chars.slice(0, mid).join('') + '…', inner) <= questionRows) low = mid
-      else high = mid - 1
-    }
-    questionText = chars.slice(0, low).join('') + '…'
-  }
+  const questionRows = hasCurrent ? Math.min(1, available) : 0
+  const questionText = questionRows ? truncateColumns(question.replace(/\s+/g, ' ').trim(), inner) : ''
   return { margin, separator, header, actions, keys, question: questionRows, questionText, queueLabels, keyLines }
 }
 
@@ -423,6 +394,7 @@ const countsText = () => {
 
 // The worktree-console focus band: polls `console.mjs focus`, draws the question on screen, the queue, the side pane and the counts.
 export const register: Register = on => {
+  registerKeepaliveView(on)
   on('session.start', async ($, e, next) => {
     if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || (await $.env.get('HERDR_ENV')) === '1') {
       sessionId = await $.session.id().catch(() => '')
@@ -685,7 +657,7 @@ export const register: Register = on => {
             </Box>
           ) : <Text color={theme.dim}>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>}
         </Box>
-        {cur && budget.question > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.question} flexShrink={0} overflow="hidden">{rail}<Box key="question" width={Math.max(1, cols - 6)} flexShrink={0}><Text color={theme.fg} wrap="wrap">{budget.questionText}</Text></Box></Box>}
+        {cur && budget.question > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.question} flexShrink={0} overflow="hidden">{rail}<Box key="question" width={Math.max(1, cols - 6)} flexShrink={0}><Text color={theme.fg} wrap="truncate-end">{budget.questionText}</Text></Box></Box>}
         <Box key="keys" flexDirection="column" height={budget.keys} flexShrink={0}>
           {budget.keyLines.map((items, row) => <Box key={`keys:${row}`} flexDirection="row" paddingLeft={2} height={1} flexShrink={0}>
             {items.map(item => <Box key={`key:${item.index}`} width={item.width} flexShrink={0}>{keyItems[item.index]}</Box>)}

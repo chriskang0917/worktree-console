@@ -907,6 +907,31 @@ test("選單與授權框不等 Stop hook：Stop hook 紀錄還是上一輪的，
   assert.match(boardRow(out, "PROJ-202"), /🔐 等待授權.*mkdir -p \/tmp\/x/);
 });
 
+test("選單前緊接的回覆文字（含表格）印在按 9 的回報裡、選項表之前；隔了別的工具呼叫或沒有回覆文字就只有選項表", () => {
+  const table = ["| 方案 | 成本 |", "| --- | --- |", "| 紅 | 低 |", "| 藍 | 高 |"];
+  const lead = ["兩個方案比較：", "", ...table].join("\n");
+  const menu = (entries) => {
+    const w = world([{ cwd: wt("proj-201-menu"), status: "blocked", session: "m" }], { transcripts: { m: { cwd: wt("proj-201-menu"), entries } } });
+    return w.run(["detail", "--repo", app(), "PROJ-201"]).out.split("\n");
+  };
+  const lines = menu([user("挑顏色", 0), said("更早的話", 1, "tool_use"), call("t0", "Bash", {}, 1), result("t0", 1), said(lead, 2, "tool_use"), call("t1", "AskUserQuestion", { questions: MENU }, 3)]);
+  const at = lines.indexOf(table[0]);
+  assert.deepEqual(lines.slice(at, at + table.length), table, lines.join("\n"));
+  assert.ok(lines.indexOf("> 兩個方案比較：") < at, lines.join("\n"));
+  assert.ok(at < lines.findIndex((l) => l.includes("要用哪個色？")), "回覆文字在選項表之前");
+  assert.ok(!lines.some((l) => l.includes("更早的話")), "不往前收更早的訊息");
+  for (const entries of [
+    [user("挑顏色", 0), call("t1", "AskUserQuestion", { questions: MENU }, 2)],
+    [user("挑顏色", 0), said(lead, 1, "tool_use"), call("t0", "Bash", {}, 1), result("t0", 1), call("t1", "AskUserQuestion", { questions: MENU }, 2)],
+  ]) {
+    const only = menu(entries);
+    assert.equal(only.indexOf(table[0]), -1, only.join("\n"));
+    const head = only.findIndex((l) => l.startsWith("### "));
+    assert.deepEqual(only.slice(head + 2, head + 3), ["> **顏色**　要用哪個色？"], only.join("\n"));
+  }
+  assert.equal(transcriptState([user("a"), said("看表", 1, "tool_use"), call("t", "AskUserQuestion", { questions: MENU })]).pending.lead, "看表");
+});
+
 test("herdr 新開的分頁還沒有對話紀錄、herdr 回 unknown：先顯示執行中，持續 30 秒以上仍讀不到才判 ⚠️", () => {
   const w = world([{ cwd: wt("proj-204-unknown"), status: "unknown", session: "new" }]);
   const slow = { HERDR_GRACE_MS: "30000" };
