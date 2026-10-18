@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1
+
+- fix(console): wait for the turn to end before asking, keep tables, gate cache handoff
+
 ## focus-show 0.2.0
 
 - feat(focus): version the focus.json format focus-show reads
