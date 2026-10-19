@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.3
+
+- fix(console): confirm delivery from the transcript, close a temp worktree the watcher already removed
+
 ## tool-dots 0.1.1
 
 - fix(console): one-line band question, hide keepalive, align tool_call, menu lead text
