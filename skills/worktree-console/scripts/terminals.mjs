@@ -1,6 +1,7 @@
 // The terminal manager the console runs in: Orca or herdr, picked from the environment, never from a setting.
 import { spawnSync } from "node:child_process";
 import { herdrTerminals } from "./herdr.mjs";
+import { NOTIFICATION, SKIP_PROMPT, promptText, readEntries, transcriptFor } from "./log.mjs";
 
 export const UNSUPPORTED = "worktree-console 只支援 Orca 與 herdr：請在 Orca 或 herdr 的分頁裡執行（環境裡沒有 HERDR_ENV=1，也沒有 ORCA_TERMINAL_HANDLE）";
 
@@ -90,6 +91,13 @@ const orcaTerminals = {
   readScreen(handle) {
     const res = runOrca(["terminal", "read", "--terminal", handle, "--screen"]);
     return res.ok ? { ok: true, terminal: res.result?.terminal ?? {} } : { ok: false, code: res.error?.code ?? "unknown" };
+  },
+  // The newest instruction in the transcript the console-log hook registered for the tab.
+  lastPrompt(handle) {
+    const file = transcriptFor(handle);
+    const entries = (file && readEntries(file)) || [];
+    const said = entries.filter((e) => !e.isSidechain).map(promptText).filter((t) => t && !SKIP_PROMPT.test(t) && !NOTIFICATION.test(t));
+    return said.at(-1)?.trim() ?? null;
   },
   send(handle, text, { enter = false } = {}) {
     return sent(runOrca(["terminal", "send", "--terminal", handle, "--text", text, ...(enter ? ["--enter"] : [])]));

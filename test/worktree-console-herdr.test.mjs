@@ -291,6 +291,30 @@ test("指揮：選單代按送數字鍵、授權允許送 1 拒絕送 Esc、文�
   assert.match(blocked.out, /\[PROJ-203\] 未送達：送出失敗：agent_blocked/);
 });
 
+test("指揮：多行文字畫面上沒看到，但對話紀錄最後一則指令就是這段 → 已送出；對話紀錄也沒有 → 未送達", () => {
+  const text = "第一行\n\n第二行：多行回覆被收成貼上區塊";
+  const chat = ["⏺ 好的", "", "─".repeat(40), "❯ ", "─".repeat(40), "  ? for shortcuts"];
+  const w = world(
+    [
+      { cwd: wt("proj-206-multi"), status: "idle", session: "s-multi" },
+      { cwd: wt("proj-207-other"), status: "idle", session: "s-other" },
+    ],
+    {
+      transcripts: {
+        "s-multi": { cwd: wt("proj-206-multi"), entries: [user(`<pasted_content>\n${text}\n</pasted_content>`), said("收到")] },
+        "s-other": { cwd: wt("proj-207-other"), entries: [user("上一則別的指令"), said("好")] },
+      },
+      screens: { "w1:p2": chat, "w1:p3": chat },
+    },
+  );
+  const ok = w.run(["send", "--terminal", "w1:p2", "--tag", "PROJ-206", "--", text]);
+  assert.deepEqual([ok.code, ok.out], [0, "[PROJ-206] 已送出"]);
+  const missing = w.run(["send", "--terminal", "w1:p3", "--tag", "PROJ-207", "--", text], { FAKE_HERDR_TRANSCRIPTS: path.join(w.dir, "elsewhere") });
+  assert.equal(missing.code, 1);
+  assert.match(missing.out, /^\[PROJ-207\] 未送達：畫面上沒看到這句話/);
+  assert.equal(w.sends().filter((x) => x.via === "prompt").length, 2, "各只送一次");
+});
+
 test("關閉：關掉 worktree 內的 herdr 分頁、git worktree remove、清掉自記紀錄，branch 保留", () => {
   const w = world([]);
   const target = path.join(tmp, "herdr-wt", "app", "close-me");

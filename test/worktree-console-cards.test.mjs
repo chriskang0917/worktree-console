@@ -289,13 +289,28 @@ test("watcher 清暫存 worktree：最後一個分頁關掉後乾淨的自動移
   assert.deepEqual(sweepIn(home, terminals, Date.now()), [], "同一個原因只印一次");
 });
 
-function closeRun(target, home) {
+// FAKE_SWEEP stands in for the watcher racing close once the tab closes: `watcher` runs its real pass, `remove` only removes the worktree.
+function closeRun(target, home, env = {}) {
   const orca = path.join(tmp, "close-orca");
-  fs.writeFileSync(orca, `#!/usr/bin/env node\nconst a = process.argv.slice(2).join(" ");\nconsole.log(JSON.stringify({ ok: true, result: a.startsWith("repo list") ? { repos: [] } : a.startsWith("terminal list") ? { terminals: [] } : { worktrees: [] } }));\n`);
+  fs.writeFileSync(
+    orca,
+    `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { sweepDisposable } from ${JSON.stringify(path.join(scripts, "disposable.mjs"))};
+const a = process.argv.slice(2).join(" ");
+if (a.startsWith("terminal close") && process.env.FAKE_SWEEP === "watcher") sweepDisposable([], Date.now(), { source: "orca" });
+if (a.startsWith("terminal close") && process.env.FAKE_SWEEP === "remove") {
+  for (const r of JSON.parse(fs.readFileSync(path.join(process.env.WORKTREE_CONSOLE_HOME, "disposable.json"), "utf8"))) spawnSync("git", ["-C", r.main, "worktree", "remove", r.path]);
+}
+console.log(JSON.stringify({ ok: true, result: a.startsWith("repo list") ? { repos: [] } : a.startsWith("terminal list") ? { terminals: [] } : { worktrees: [] } }));
+`,
+  );
   fs.chmodSync(orca, 0o755);
   return spawnSync(process.execPath, [path.join(scripts, "console.mjs"), "close", "--path", target], {
     encoding: "utf8",
-    env: { ...process.env, ORCA_BIN: orca, ORCA_TERMINAL_HANDLE: "term_none", ...home },
+    env: { ...process.env, ORCA_BIN: orca, ORCA_TERMINAL_HANDLE: "term_none", ...home, ...env },
   });
 }
 
@@ -319,4 +334,32 @@ test("「關掉 <代號>」關暫存 worktree：移除 worktree 且不留 branch
   assert.match(blocked.stdout, /未關閉：工作區有未 commit 的改動/);
   assert.ok(fs.existsSync(dirty.path) && branches(dirty.main).includes("ask-closedt"));
   assert.deepEqual(records(home).map((r) => r.nickname), ["closedt"]);
+});
+
+test("「關掉 <代號>」時 watcher 搶先移除暫存 worktree：worktree 和 branch 都清掉了就回「已關閉」；只剩 branch 時沒 commit 補刪、有 commit 保留並回報", () => {
+  const home = homes();
+  const swept = tempWorktree("swept");
+  putHome(home, "disposable.json", [swept]);
+  const ok = closeRun(swept.path, home, { FAKE_SWEEP: "watcher" });
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.equal(ok.stdout.trim(), "[ask-swept] 已關閉：暫存 worktree 已移除");
+  assert.ok(!fs.existsSync(swept.path) && !branches(swept.main).includes("ask-swept"));
+
+  const left = tempWorktree("left");
+  putHome(home, "disposable.json", [left]);
+  gitIn(left.main, "worktree", "remove", left.path);
+  const dropped = closeRun(left.path, home);
+  assert.equal(dropped.status, 0, dropped.stdout + dropped.stderr);
+  assert.equal(dropped.stdout.trim(), "[ask-left] 已關閉：暫存 worktree 已移除");
+  assert.ok(!branches(left.main).includes("ask-left"), "沒有新 commit 的 branch 補刪");
+  assert.ok(!gitIn(left.main, "worktree", "list").stdout.includes("ask-left"));
+
+  const worked = tempWorktree("worked");
+  gitIn(worked.path, "commit", "-q", "--allow-empty", "-m", "work");
+  putHome(home, "disposable.json", [worked]);
+  const kept = closeRun(worked.path, home, { FAKE_SWEEP: "remove" });
+  assert.equal(kept.status, 0, kept.stdout + kept.stderr);
+  assert.equal(kept.stdout.trim(), "[ask-worked] 已關閉：暫存 worktree 已移除，branch ask-worked 保留（含 1 個 commit）");
+  assert.ok(!fs.existsSync(worked.path) && branches(worked.main).includes("ask-worked"), "有 commit 的 branch 保留");
+  assert.deepEqual(records(home), []);
 });

@@ -122,7 +122,7 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 ## 指揮（把話送進某張票）
 
 1. 使用者的話開頭是數字或票號，可帶 `#n` 指定 session、`<repo>/` 指定 repo（例如「6923 跑測試」、「PROJ-6923 繼續」、「6923#2 停下」、「proj-v2/dev 繼續」）；任何 repo 的 session 都一樣送 → `console.mjs resolve --repo "$REPO" <開頭那段>`：
-   - `one` 且有 handle：`console.mjs send --terminal <handle> --tag <tag> -- "<其餘內容>"`，輸出逐字轉貼。不直接用 `orca terminal send`：它回 `accepted:true` 只代表 Orca 收下，子 session 停在 `/workflows` 這類檢視頁時文字會被吃掉。腳本送出後讀畫面：那句話已進對話或排隊中才算送達；子 session 執行中（畫面有轉圈行、Orca 回報不是停下，或查不到狀態都算）卻沒看到那句時，一律不送 Esc（執行中按 Esc 會中斷工作）、不重送，回報未確認（exit 0，算送出成功，照第 6 步接著跑）；子 session 已停下時，畫面不是一般對話（看不到輸入框或認出檢視頁）就送 Esc 退回對話重送一次；一般對話畫面卻沒看到（可能被收成 `Pasted text`）不送 Esc、不重送，直接回報未送達。未送達不自行再送。
+   - `one` 且有 handle：`console.mjs send --terminal <handle> --tag <tag> -- "<其餘內容>"`，輸出逐字轉貼。不直接用 `orca terminal send`：它回 `accepted:true` 只代表 Orca 收下，子 session 停在 `/workflows` 這類檢視頁時文字會被吃掉。腳本送出後讀畫面：那句話已進對話或排隊中才算送達；子 session 執行中（畫面有轉圈行、Orca 回報不是停下，或查不到狀態都算）卻沒看到那句時，一律不送 Esc（執行中按 Esc 會中斷工作）、不重送，回報未確認（exit 0，算送出成功，照第 6 步接著跑）；子 session 已停下時，畫面不是一般對話（看不到輸入框或認出檢視頁）就送 Esc 退回對話重送一次；一般對話畫面卻沒看到（可能被收成 `Pasted text`）時改讀子 session 對話紀錄的最後一則指令，含這段文字就算送達；紀錄也沒有才不送 Esc、不重送，直接回報未送達。未送達不自行再送。
    - `one` 但 handle 是 null（💤 閒置、沒有 claude 分頁）：
      `orca terminal create --worktree path:<path> --command "claude --continue" --json` →
      `orca terminal wait --terminal <新 handle> --for tui-idle --timeout-ms 60000 --json`，`satisfied:true` 才照上一條用 `console.mjs send --terminal <新 handle>` 送第一句；否則回報未送出。

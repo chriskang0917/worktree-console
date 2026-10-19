@@ -6,10 +6,10 @@ import { terminalKind } from "./terminals.mjs";
 export const UNSEEN_MS = 5 * 60 * 1000;
 const TASK_PRUNE_MS = 24 * 60 * 60 * 1000;
 
-// Commits made in a temporary worktree since it was opened.
+// Commits made in a temporary worktree since it was opened; once the worktree is gone, counted on its branch.
 export function commitsSince(rec) {
   if (!rec.start) return 0;
-  const res = git(rec.path, ["rev-list", "--count", `${rec.start}..HEAD`]);
+  const res = fs.existsSync(rec.path) ? git(rec.path, ["rev-list", "--count", `${rec.start}..HEAD`]) : git(rec.main, ["rev-list", "--count", `${rec.start}..refs/heads/${rec.branch}`]);
   return res.ok ? Number(res.out) || 0 : 0;
 }
 
