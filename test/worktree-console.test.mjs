@@ -1917,6 +1917,23 @@ test("send：一般對話畫面沒看到那句話（含被收成 Pasted text）�
   assert.deepEqual([stale.code, stale.out], [1, "[PROJ-103] 未送達：送出失敗：terminal_handle_stale"]);
 });
 
+test("send：畫面判成沒看到、但對話紀錄最後一則指令就是這段多行文字 → 已送出；對話紀錄也沒有 → 照舊未送達", () => {
+  const text = "第一行\n\n第二行：這段多行文字被收成貼上區塊，畫面上找不到原句";
+  const log = fs.mkdtempSync(path.join(tmp, "log-paste-"));
+  const transcript = path.join(log, "child.jsonl");
+  const day = new Date();
+  const name = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}.jsonl`;
+  fs.writeFileSync(path.join(log, name), JSON.stringify({ ts: day.toISOString(), event: "session", handle: "term_e", transcript }) + "\n");
+  fs.writeFileSync(transcript, [userText(`<pasted_content>\n${text}\n</pasted_content>`), assistantText("好")].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  assert.deepEqual(deliveryVerdict(screenOf("chat"), text), { verdict: "failed", reason: "畫面上沒看到這句話" });
+  const ok = sendRun(["chat"], text, { WORKTREE_CONSOLE_LOG_DIR: log });
+  assert.deepEqual([ok.code, ok.out], [0, "[PROJ-103] 已送出"]);
+  assert.equal(ok.sends.length, 1, "不重送");
+  fs.writeFileSync(transcript, [userText("上一則別的指令"), assistantText("好")].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const missing = sendRun(["chat"], text, { WORKTREE_CONSOLE_LOG_DIR: log });
+  assert.deepEqual([missing.code, missing.lines[0], missing.sends.length], [1, "[PROJ-103] 未送達：畫面上沒看到這句話", 1]);
+});
+
 const UNCONFIRMED = "[PROJ-103] 已送出（子 session 執行中，畫面上還沒看到這句，等它停下再確認）";
 
 test("send：upgrade 當時的真實畫面（✢ Moonwalking…、空輸入框、斜線指令沒顯示）→ 執行中回「未確認」，不送 Esc、不重送", () => {

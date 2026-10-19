@@ -1818,6 +1818,12 @@ export function deliveryVerdict(terminal, text) {
   return { verdict: "failed", reason: UNSEEN };
 }
 
+// The transcript's newest instruction holds the text sent, even when the screen folded it into a paste.
+export function promptHolds(prompt, text) {
+  const needle = squash(text).slice(-NEEDLE_MAX);
+  return !!needle && squash(prompt).includes(needle);
+}
+
 // A spinner line such as `✢ Moonwalking… (3s · …)` means the child is mid-turn.
 export function screenRunning(lines) {
   return (lines ?? []).some((l) => SPINNER.test(l));
