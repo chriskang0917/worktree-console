@@ -17,6 +17,7 @@ import {
   collect,
   consoleHome,
   deliveryVerdict,
+  promptHolds,
   fillTitle,
   git,
   gitFacts,
@@ -392,10 +393,13 @@ function gitOutput(target, row, facts) {
 }
 
 // close-check, close every tab, check again, then remove the worktree; the branch always stays.
+// A temporary worktree the watcher removed meanwhile counts as removed: only its branch may be left to drop.
 function close() {
   if (!values.path) fail("缺少 --path");
-  const target = realpath(values.path);
-  const main = mainCheckout(target);
+  const target = fs.existsSync(values.path) ? realpath(values.path) : path.join(realpath(path.dirname(values.path)), path.basename(values.path));
+  const temp = readDisposable().find((d) => d.kind === "worktree" && d.path === target) ?? null;
+  const gone = () => temp !== null && !fs.existsSync(target);
+  const main = temp?.main ?? mainCheckout(target);
   let row = null;
   try {
     row = collect(main, { withStage: false }).rows.find((r) => r.path === target) ?? null;
@@ -410,26 +414,26 @@ function close() {
     for (const l of [line, ...extra]) console.log(l);
     process.exit(ok ? 0 : 1);
   };
-  const first = closeReasons(target);
-  if (first.reasons.length) done(false, `[${label}] 未關閉：${first.reasons.join("；")}`, first.reasons.join("；"), first.ignored);
+  const first = gone() ? null : closeReasons(target);
+  if (first?.reasons.length) done(false, `[${label}] 未關閉：${first.reasons.join("；")}`, first.reasons.join("；"), first.ignored);
   const closed = manager().closeWorktree(target);
   if (!closed.ok) done(false, `[${label}] 未關閉：關分頁失敗（${closed.code}）`, `關分頁失敗：${closed.code}`);
-  const again = closeReasons(target);
-  if (again.reasons.length) done(false, `[${label}] 未關閉：分頁已關，但${again.reasons.join("；")}`, again.reasons.join("；"), again.ignored);
-  const temp = readDisposable().find((d) => d.kind === "worktree" && d.path === target) ?? null;
-  const commits = temp ? commitsSince(temp) : 0;
-  const removed = git(main, ["worktree", "remove", target]);
-  if (!removed.ok) done(false, `[${label}] 未關閉：分頁已關，移除 worktree 失敗：${removed.err}`, `移除 worktree 失敗：${removed.err}`);
+  const again = gone() ? null : closeReasons(target);
+  if (again?.reasons.length) done(false, `[${label}] 未關閉：分頁已關，但${again.reasons.join("；")}`, again.reasons.join("；"), again.ignored);
+  const removed = gone() ? { ok: true } : git(main, ["worktree", "remove", target]);
+  if (!removed.ok && !gone()) done(false, `[${label}] 未關閉：分頁已關，移除 worktree 失敗：${removed.err}`, `移除 worktree 失敗：${removed.err}`);
+  if (temp) git(main, ["worktree", "prune"]);
   try {
     writeArchive(readArchive().filter((a) => a.path !== target));
   } catch {}
   forgetWorktree(target);
   if (temp) {
-    const dropped = dropBranch(temp, commits);
+    const commits = commitsSince(temp);
+    dropBranch(temp, commits);
     try {
       writeDisposable(readDisposable().filter((d) => d.path !== target));
     } catch {}
-    if (dropped || !temp.branch) done(true, `[${label}] 已關閉：暫存 worktree 已移除`);
+    if (!temp.branch || !git(main, ["rev-parse", "--verify", "--quiet", `refs/heads/${temp.branch}`]).ok) done(true, `[${label}] 已關閉：暫存 worktree 已移除`);
     done(true, `[${label}] 已關閉：暫存 worktree 已移除，branch ${temp.branch} 保留${commits > 0 ? `（含 ${commits} 個 commit）` : ""}`);
   }
   done(true, `[${label}] 已關閉：worktree 已移除，branch ${branch} 保留${unpushed > 0 ? `（含 ${unpushed} 個未 push commit）` : ""}`);
@@ -764,6 +768,7 @@ async function deliver(handle, text) {
       continue;
     }
     result = { ...deliveryVerdict(read.terminal, text), lines: read.terminal?.tail ?? [] };
+    if (result.reason === UNSEEN && promptHolds(m.lastPrompt?.(handle), text)) result = { verdict: "delivered", lines: result.lines };
     if (landed(result)) break;
   }
   return result;
