@@ -8,6 +8,10 @@
 
 - fix(console): confirm delivery from the transcript, close a temp worktree the watcher already removed
 
+## tool-dots 0.1.2
+
+- A failed, denied or interrupted call is drawn as a red `✕` instead of a red dot, after the yellow and green dots of its line, so it no longer looks raised next to green dots. `✕` is one cell wide, so `tool_call:` starts in the same column as before.
+
 ## tool-dots 0.1.1
 
 - fix(console): one-line band question, hide keepalive, align tool_call, menu lead text

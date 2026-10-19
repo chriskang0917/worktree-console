@@ -27,21 +27,22 @@ const toolRow = (u: Use, extra: object = {}) => ({
 
 const userRow = (isExpanded: boolean) => ({ plugin: PLUGIN, component: 'UserMessage' as const, props: { text: 'hi', origin: { kind: 'user' }, isExpanded } as any })
 
-// What a row draws: the line's text, each dot run's colour, or nothing (a zero-height box) for a row the line already covers.
+// What a row draws: the line's text, each mark's colour and glyph, or nothing (a zero-height box) for a row the line already covers.
 async function draw($: any, target: any, surface: 'terminal' | 'desktop' = 'terminal') {
   const ui = await $.ui.mount({ ...target, surface })
   const root: any = await ui.drawn()
   await ui.unmount()
   const text = (n: any): string => (typeof n === 'string' ? n : (n?.children ?? []).map(text).join(''))
   const colours: string[] = []
+  const marks: string[] = []
   const walk = (n: any) => {
     if (typeof n !== 'object' || !n) return
-    if (n.type === 'Text' && n.props?.color) for (const c of text(n)) if (c === '●') colours.push(n.props.color)
+    if (n.type === 'Text' && n.props?.color) for (const c of text(n)) if (c === '●' || c === '✕') colours.push(n.props.color), marks.push(c)
     for (const c of n.children ?? []) walk(c)
   }
   walk(root)
   const hidden = root.type === 'Box' && root.props?.height === 0 && !(root.children ?? []).length
-  return { text: text(root), colours, hidden, root }
+  return { text: text(root), colours, marks, hidden, root }
 }
 
 // `claude plugin test` from the worktree-console root finds this file too; there tool-dots is not loaded and the test stands down.
@@ -65,17 +66,26 @@ test('a run of calls with no reply text between them is one line: a dot per call
   }
 })
 
-test('running dots are yellow, finished green, failed red; failures add - 1 error / - 2 errors, none adds nothing', async ($, on) => {
+test('running dots are yellow, finished green, failed a red ✕ after them on terminal and desktop; failures add - 1 error / - 2 errors, none adds nothing', async ($, on) => {
   const run: Use[] = [{ id: 'a', tool: 'Bash' }, { id: 'b', tool: 'Bash', error: true }, { id: 'c', tool: 'Read', done: false }]
-  let messages: unknown[] = [reply('', run)]
+  let messages: unknown[] = []
   world(on, () => messages)
   if (!(await loaded($))) return
-  let line = await draw($, toolRow(run[0]!))
-  expect(line.colours).toEqual(['green', 'red', 'yellow'])
-  expect(line.text).toBe('  ●●●  tool_call: Bash ×2 · Read ×1 - 1 error')
+  messages = [reply('', run)]
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const line = await draw($, toolRow(run[0]!), surface)
+    expect(line.colours).toEqual(['green', 'yellow', 'red'])
+    expect(line.marks).toEqual(['●', '●', '✕'])
+    expect(line.text).toBe('  ●●✕  tool_call: Bash ×2 · Read ×1 - 1 error')
+  }
   messages = [reply('', [run[0]!, run[1]!, { id: 'c', tool: 'Read', error: true }])]
+  let line = await draw($, toolRow(run[0]!))
+  expect(line.colours).toEqual(['green', 'red', 'red'])
+  expect(line.text).toBe('  ●✕✕  tool_call: Bash ×2 · Read ×1 - 2 errors')
+  messages = [reply('', [{ id: 'a', tool: 'Bash' }, { id: 'b', tool: 'Bash', error: true }, { id: 'c', tool: 'Read', done: false }, { id: 'd', tool: 'Read', error: true }, { id: 'e', tool: 'Bash' }])]
   line = await draw($, toolRow(run[0]!))
-  expect(line.text).toBe('  ●●●  tool_call: Bash ×2 · Read ×1 - 2 errors')
+  expect(line.colours).toEqual(['green', 'yellow', 'green', 'red', 'red'])
+  expect(line.text).toBe('  ●●●✕✕  tool_call: Bash ×3 · Read ×2 - 2 errors')
   messages = [reply('', [{ id: 'a', tool: 'Bash' }])]
   expect((await draw($, toolRow(run[0]!))).text).toBe('  ●  tool_call: Bash ×1')
 })
@@ -111,6 +121,9 @@ test('past 24 calls only 24 dots are drawn, then a dim +N', async ($, on) => {
 })
 
 test('the line is indented two cells under the reply text, two cells sit between the dots and tool_call whatever the dot count, and the tool_call text is dim while the dots keep their colours', async ($, on) => {
+  // ✕ (U+2715) is one cell wide: a single code point that is not an emoji, unlike ❌, which takes two.
+  expect([...'✕']).toHaveLength(1)
+  expect(/\p{Extended_Pictographic}|\p{Emoji_Presentation}/u.test('✕')).toBe(false)
   let messages: unknown[] = []
   world(on, () => messages)
   if (!(await loaded($))) return
@@ -123,10 +136,11 @@ test('the line is indented two cells under the reply text, two cells sit between
     const run: Use[] = calls('Bash', n).map((u, i) => (i === 0 ? { ...u, error: true } : i === 1 ? { ...u, done: false } : u))
     messages = [reply('', run)]
     const line = await draw($, toolRow(run[0]!))
-    expect(line.text).toMatch(/^ {2}●+(\+\d+)? {2}tool_call: /)
-    expect(line.colours[0]).toBe('red')
-    if (n > 1) expect(line.colours[1]).toBe('yellow')
-    if (n > 2) expect(line.colours.at(-1)).toBe('green')
+    expect(line.text).toMatch(/^ {2}●*✕(\+\d+)? {2}tool_call: /)
+    expect(line.text.indexOf('tool_call')).toBe(2 + Math.min(n, 24) + (n > 24 ? `+${n - 24}`.length : 0) + 2)
+    expect(line.colours.at(-1)).toBe('red')
+    if (n > 1) expect(line.colours[0]).toBe('yellow')
+    if (n > 2) expect(line.colours.at(-2)).toBe('green')
     const text = findDim(line.root)
     expect(text.props.dimColor).toBe(true)
     expect(text.props.color).toBeUndefined()

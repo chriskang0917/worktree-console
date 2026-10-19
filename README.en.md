@@ -91,10 +91,10 @@ It needs Node.js, macOS or Linux, and `ps` supporting `ps -p <pid> -o lstart=`; 
 
 ## Install tool-dots (optional)
 
-`tool-dots` is a separate mod that folds a run of tool calls in the conversation into one line: one dot per call (yellow while running, green when done, red when it failed), then each tool and its count in the order they first ran, and the number of failures when there are any:
+`tool-dots` is a separate mod that folds a run of tool calls in the conversation into one line: one dot per call (yellow while running, green when done; a failed, denied or interrupted call is a red `✕`, placed after the dots), then each tool and its count in the order they first ran, and the number of failures when there are any:
 
 ```text
-●●●●● tool_call: Bash ×3 · Read ×2 - 1 error
+●●●●✕ tool_call: Bash ×3 · Read ×2 - 1 error
 ```
 
 Reply text or a message from you starts a new line. Past 24 calls the dots stop and a dim `+N` follows. MCP tools show as `server:tool`. While folded, the tools' result blocks are hidden; ctrl+o (or `--verbose`) shows every call and its result as usual. It needs a Claude Code build with mods.

@@ -91,10 +91,10 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 
 ## 安裝 tool-dots（選用）
 
-`tool-dots` 是另一個 mod，把對話裡連續的工具呼叫收成一行：每次呼叫一個點（執行中黃、成功綠、失敗紅），接著照各工具第一次出現的先後列出工具與次數，有失敗時再註明幾個：
+`tool-dots` 是另一個 mod，把對話裡連續的工具呼叫收成一行：每次呼叫一個點（執行中黃點、成功綠點；失敗、被拒或被中斷畫成紅色 `✕`，排在同一列最後面），接著照各工具第一次出現的先後列出工具與次數，有失敗時再註明幾個：
 
 ```text
-●●●●● tool_call: Bash ×3 · Read ×2 - 1 error
+●●●●✕ tool_call: Bash ×3 · Read ×2 - 1 error
 ```
 
 中間出現回覆文字或你的訊息，就從下一行重新算。超過 24 次時點只畫 24 個，後面接淡色的 `+N`。MCP 工具顯示成 `server:tool`。折疊時工具的結果區塊不顯示；按 ctrl+o（或用 `--verbose`）時，每個工具呼叫和結果照原樣全部顯示。需要支援 mods 的 Claude Code。
