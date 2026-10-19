@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { LABELS, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
 import { isConsoleSession } from "./log.mjs";
+import { adviceFor, advisorHome, loadAdvice } from "./advice.mjs";
 
 export const FOCUS_WAIT_MS = 60_000;
 const MODS_TTL_MS = 30_000;
@@ -212,6 +213,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
   const titles = { ...(view.state.titles ?? {}) };
   const live = new Set(rows.flatMap((row) => row.sessions.map((s) => s.paneKey)));
   const firsts = Object.fromEntries(Object.entries(view.state.firsts ?? {}).filter(([k]) => live.has(k)));
+  const advice = loadAdvice(advisorHome(), now);
   const sessions = rows.flatMap((row) =>
     row.sessions.map((session) => {
       if (!(row.path in titles)) {
@@ -237,6 +239,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         summary: cardSummary(row, session, titles[row.path], firsts),
         question,
         options: item ? optionsOf(item) : [],
+        advice: item ? adviceFor(advice, { path: row.path, status, since: session.since ?? session.agent?.stateStartedAt, now }) : null,
         archived: !!session.archived,
         pending: !!item,
         report: report.join("\n"),

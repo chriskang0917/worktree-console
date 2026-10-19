@@ -281,6 +281,78 @@ test('band: the question takes one line, cut with … past the line; the header 
   }
 })
 
+const withAdvice = (advice: any, tag = 'focusui') => ({ ...focusOf(tag, ['logging']), sessions: SESSIONS.map(s => (s.tag === tag ? { ...s, advice } : s)) })
+const READY = { state: 'ready', text: '建議：b，兩邊都改才一致', answer: 'b', reason: '兩邊都改才一致', principle: null }
+const rowKeys = async (ui: any) => (await ui.drawn()).children.filter((c: any) => typeof c !== 'string').map((c: any) => (c.children ?? []).map((x: any) => x?.props?.key).find((k: any) => k === 'question' || k === 'advice') ?? c.props?.key ?? null)
+
+test('band advice: 建議產生中… under the question while the advisor runs, then 建議：<答案>，<理由> on the next poll; the keys row stays below', async ($, on) => {
+  const w = world(withAdvice({ state: 'pending', text: '建議產生中…' }))
+  const clock = await start($, on, w)
+  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(textOf(await ui.find({ key: 'advice' }))).toBe('建議產生中…')
+  expect(paintOf(await ui.drawn(), '建議產生中…')?.color).toBe(THEMES.neutral.dim)
+  expect(await rowKeys(ui)).toEqual([null, null, 'question', 'advice', 'keys', null])
+  await ui.unmount()
+  w.focus = withAdvice(READY)
+  await clock.advance(5_000)
+  const ready = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(textOf(await ready.find({ key: 'advice' }))).toBe('建議：b 橫條也改清單，兩邊都改才一致')
+  const root = await ready.drawn()
+  expect(paintOf(root, '建議：')?.color).toBe(THEMES.neutral.accent)
+  expect(paintOf(root, 'b')).toMatchObject({ bold: true })
+  expect(paintOf(root, ' 橫條也改清單')?.bold).toBeFalsy()
+  await ready.unmount()
+})
+
+test('band advice: no row when the prediction failed, for 🔐 or when nothing was predicted; the band keeps its old shape', async ($, on) => {
+  const w = world(withAdvice(null))
+  const clock = await start($, on, w)
+  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await ui.find({ key: 'advice' })).toBeUndefined()
+  expect(await rowKeys(ui)).toEqual([null, null, 'question', 'keys', null])
+  await ui.unmount()
+  w.focus = withAdvice(READY, 'perm')
+  w.focus.sessions = w.focus.sessions.map((s: any) => (s.tag === 'perm' ? { ...s, advice: null } : s))
+  w.focus.current = keyOf('perm')
+  await clock.advance(5_000)
+  const perm = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await perm.find({ key: 'advice' })).toBeUndefined()
+  await perm.unmount()
+})
+
+test('band advice: a principle question says its class in the waiting colour; a long reason is cut first with … and the answer, its option and the class stay', async ($, on) => {
+  const w = world(withAdvice({ ...READY, text: '建議：b，兩邊都改才一致（原則性：產品行為與 UX）', principle: '產品行為與 UX' }))
+  const clock = await start($, on, w)
+  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(textOf(await ui.find({ key: 'advice' }))).toBe('建議：b 橫條也改清單，兩邊都改才一致（原則性：產品行為與 UX）')
+  expect(paintOf(await ui.drawn(), '（原則性：產品行為與 UX）')?.color).toBe(THEMES.neutral.waiting)
+  await ui.unmount()
+  const reason = '這個理由寫得非常非常長，'.repeat(10)
+  w.focus = withAdvice({ ...READY, text: `建議：b，${reason}`, reason, principle: '不可逆或對外動作' })
+  await clock.advance(5_000)
+  for (const cols of [120, 60]) {
+    const cut = await $.ui.mount({ ...band(cols, 20), surface: 'terminal' })
+    const text = textOf(await cut.find({ key: 'advice' }))
+    expect(text.slice(0, 13)).toBe('建議：b 橫條也改清單，這')
+    expect(text.slice(-15)).toBe('…（原則性：不可逆或對外動作）')
+    expect(columns(text)).toBeLessThanOrEqual(cols - 6)
+    await cut.unmount()
+  }
+  const narrow = await $.ui.mount({ ...band(40, 20), surface: 'terminal' })
+  const tight = textOf(await narrow.find({ key: 'advice' }))
+  expect(tight.slice(0, 4)).toBe('建議：b')
+  expect(columns(tight)).toBeLessThanOrEqual(34)
+  await narrow.unmount()
+  expect(focusBandRows({ cols: 80, maxRows: 4, question: 'q', queue: [], hiddenCount: 0, advice: READY as any }).advice).toBe(0)
+  const exact = focusBandRows({ cols: 29, maxRows: 20, question: 'q', queue: [], hiddenCount: 0, advice: { ...READY, answer: 'b', reason: '一二三四五六七' } as any })
+  expect(exact.adviceParts.map(p => p.text).join('')).toBe('建議：b，一二三四五六七')
+  const longOption = '兩個通知下拉選單底部都加「通知設定」'
+  const roomy = focusBandRows({ cols: 110, maxRows: 20, question: 'q', queue: [], hiddenCount: 0, options: [longOption, '開關'], advice: { ...READY, answer: 'a', reason: '一鍵到設定頁最順手' } as any })
+  expect(roomy.adviceParts.map(p => p.text).join('')).toBe(`建議：a ${longOption}，一鍵到設定頁最順手`)
+  const bare = focusBandRows({ cols: 80, maxRows: 20, question: 'q', queue: [], hiddenCount: 0, advice: { ...READY, answer: '先跑測試', reason: '' } as any })
+  expect(bare.adviceParts.map(p => p.text).join('')).toBe('建議：先跑測試')
+})
+
 test('band keys: 1–5 switch to that question and print it, 8 (延後處理) sends it behind the queue and prints the next, 9 (顯示問題) prints the one on screen, 0 opens the pane with the keyboard', async ($, on) => {
   const w = world(pending())
   await start($, on, w)

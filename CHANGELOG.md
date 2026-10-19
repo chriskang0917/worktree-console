@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.0
+
+- The focus band shows the agent-skills advisor's suggestion on a row of its own under the question: `建議產生中…` while the background prediction runs, then `建議：<答案>，<一句理由>` on the next poll, with `（原則性：<類別>）` for a principle question. No row when the prediction failed, for 🔐 or ⏸, or without `~/.advisor/`; `/focus-show` reports stay as they were.
+
 ## 1.5.3
 
 - fix(console): confirm delivery from the transcript, close a temp worktree the watcher already removed

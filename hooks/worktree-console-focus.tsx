@@ -15,10 +15,14 @@ type Session = {
   summary: string
   question: string
   options: string[]
+  advice?: Advice | null
   archived: boolean
   pending: boolean
   report: string
 }
+
+// The advisor's prediction for the question, read by `console.mjs focus`: still running, or ready with an answer and a reason.
+type Advice = { state: 'pending' | 'ready'; text: string; answer?: string; reason?: string; principle?: string | null }
 
 type Focus = {
   active: boolean
@@ -65,13 +69,15 @@ const LATER_WIDTH = 3 + 4 + 8
 // The band header's status cell: glyph, a space, the label padded to 6 cells, two spaces.
 const BAND_STATUS = 10
 
-export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, hasCurrent = true }: {
+export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, hasCurrent = true, advice = null, options = [] }: {
   cols: number
   maxRows: number
   question: string
   queue: { tag: string; isNew: boolean }[]
   hiddenCount: number
   hasCurrent?: boolean
+  advice?: Advice | null
+  options?: string[]
 }) {
   const inner = Math.max(1, cols - 6)
   const nameLimit = Math.max(1, cols < 60 ? cols - 26 : 20)
@@ -99,7 +105,59 @@ export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, has
   const available = Math.max(0, maxRows - margin - separator - header - keys)
   const questionRows = hasCurrent ? Math.min(1, available) : 0
   const questionText = questionRows ? truncateColumns(question.replace(/\s+/g, ' ').trim(), inner) : ''
-  return { margin, separator, header, actions, keys, question: questionRows, questionText, queueLabels, keyLines }
+  const adviceRows = hasCurrent && advice ? Math.max(0, Math.min(1, available - questionRows)) : 0
+  const adviceParts = adviceRows ? fitParts(adviceSegments(advice!, options), inner) : []
+  return { margin, separator, header, actions, keys, question: questionRows, questionText, advice: adviceRows, adviceParts, queueLabels, keyLines }
+}
+
+type AdvicePart = { role: 'label' | 'answer' | 'option' | 'reason' | 'note' | 'pending'; text: string }
+
+// A bare a／b／c answer carries its option's own words, so the row reads without pressing 9.
+function optionWords(answer: string, options: string[]): string {
+  if (!/^[a-z](?:\s*[、,，]\s*[a-z])*$/i.test(answer)) return ''
+  const words = [...answer.toLowerCase().matchAll(/[a-z]/g)].map(m => options[m[0].charCodeAt(0) - 97]?.split(/[：:]/)[0]?.trim()).filter(Boolean)
+  return words.length ? ` ${words.join('、')}` : ''
+}
+
+function adviceSegments(advice: Advice, options: string[] = []): AdvicePart[] {
+  if (advice.state === 'pending' || !advice.answer) return [{ role: 'pending', text: advice.text }]
+  const answer = advice.answer.replace(/\s+/g, ' ').trim()
+  const words = optionWords(answer, options)
+  const reason = (advice.reason ?? '').replace(/\s+/g, ' ').trim()
+  return [
+    { role: 'label', text: '建議：' },
+    { role: 'answer', text: answer },
+    ...(words ? [{ role: 'option' as const, text: words }] : []),
+    ...(reason ? [{ role: 'reason' as const, text: `，${reason}` }] : []),
+    ...(advice.principle ? [{ role: 'note' as const, text: `（原則性：${advice.principle}）` }] : []),
+  ]
+}
+
+// Fits the parts in `width` columns: the reason gives way first (cut with …), then the option words; the answer and the principle note stay.
+function fitParts(parts: AdvicePart[], width: number): AdvicePart[] {
+  const total = (list: AdvicePart[]) => list.reduce((n, p) => n + columns(p.text), 0)
+  let out = parts
+  for (const role of ['reason', 'option'] as const) {
+    const over = total(out) - width
+    if (over <= 0) return out
+    const part = out.find(p => p.role === role)
+    if (!part) continue
+    const room = columns(part.text) - over
+    out = room >= 3 ? out.map(p => (p === part ? { ...p, text: truncateColumns(p.text, room) } : p)) : out.filter(p => p !== part)
+  }
+  if (total(out) <= width) return out
+  const cut: AdvicePart[] = []
+  let left = width
+  for (const p of out) {
+    if (columns(p.text) <= left) {
+      cut.push(p)
+      left -= columns(p.text)
+      continue
+    }
+    if (left > 0) cut.push({ ...p, text: truncateColumns(p.text, left) })
+    break
+  }
+  return cut
 }
 
 // Only a leading count lifts to the foreground; digits inside words (面板 v2 改版) stay dim.
@@ -626,7 +684,15 @@ export const register: Register = on => {
     const cols = e.props.bodyColumns
     const cell = cur && statusCell(cur.status, animationTick, { primary: cur.key === primaryKey(), animated: appearance.motion })
     const others = queue.slice(0, cols < 60 ? 1 : QUEUE_MAX)
-    const budget = focusBandRows({ cols, maxRows: e.props.maxRows, question: cur?.question ?? '', queue, hiddenCount: fullQueue.length - queue.length, hasCurrent: !!cur })
+    const budget = focusBandRows({ cols, maxRows: e.props.maxRows, question: cur?.question ?? '', queue, hiddenCount: fullQueue.length - queue.length, hasCurrent: !!cur, advice: cur?.advice ?? null, options: cur?.options ?? [] })
+    const paint: Record<AdvicePart['role'], { color: string | undefined; bold?: boolean }> = {
+      label: { color: theme.accent },
+      answer: { color: theme.fg, bold: true },
+      option: { color: theme.fg },
+      reason: { color: theme.muted ?? theme.dim },
+      note: { color: theme.waiting },
+      pending: { color: theme.dim },
+    }
     const rail = <Text color={cell ? theme[cell.color] : theme.dim}>│ </Text>
     const label = `── 待回覆 ${cur ? 1 : 0}/${fullQueue.length + (cur ? 1 : 0)} `
     const head = Math.max(1, cols - 4)
@@ -658,6 +724,7 @@ export const register: Register = on => {
           ) : <Text color={theme.dim}>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>}
         </Box>
         {cur && budget.question > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.question} flexShrink={0} overflow="hidden">{rail}<Box key="question" width={Math.max(1, cols - 6)} flexShrink={0}><Text color={theme.fg} wrap="truncate-end">{budget.questionText}</Text></Box></Box>}
+        {cur && budget.advice > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.advice} flexShrink={0} overflow="hidden">{rail}<Box key="advice" flexDirection="row" width={Math.max(1, cols - 6)} flexShrink={0}>{budget.adviceParts.map(p => <Text key={`advice:${p.role}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}</Box></Box>}
         <Box key="keys" flexDirection="column" height={budget.keys} flexShrink={0}>
           {budget.keyLines.map((items, row) => <Box key={`keys:${row}`} flexDirection="row" paddingLeft={2} height={1} flexShrink={0}>
             {items.map(item => <Box key={`key:${item.index}`} width={item.width} flexShrink={0}>{keyItems[item.index]}</Box>)}
