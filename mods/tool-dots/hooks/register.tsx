@@ -52,6 +52,8 @@ function summary(run: Call[]) {
 }
 
 const colorOf = (c: Call) => (c.running ? 'yellow' : c.errored ? 'red' : 'green')
+// A one-cell ✕ (not an emoji, which takes two) so a red mark next to green dots is not read as sitting higher.
+const markOf = (color: string) => (color === 'red' ? '✕' : '●')
 
 type Element = (props: any) => any
 
@@ -60,8 +62,8 @@ async function drawLine($: EngineInterface, { Box, Text }: { Box: Element; Text:
   const states = live ? await read($, calls) : {}
   const shown = run.map(c => ({ ...c, ...states[c.id] }))
   const dots: { color: string; n: number }[] = []
-  for (const c of shown.slice(0, DOTS_MAX)) {
-    const color = colorOf(c)
+  const drawn = shown.slice(0, DOTS_MAX).map(colorOf)
+  for (const color of [...drawn.filter(c => c !== 'red'), ...drawn.filter(c => c === 'red')]) {
     if (dots.at(-1)?.color === color) dots.at(-1)!.n += 1
     else dots.push({ color, n: 1 })
   }
@@ -70,7 +72,7 @@ async function drawLine($: EngineInterface, { Box, Text }: { Box: Element; Text:
     <Box flexDirection="row">
       <Text wrap="truncate-end">
         {'  '}
-        {dots.map((d, i) => <Text key={`dots:${i}`} color={d.color}>{'●'.repeat(d.n)}</Text>)}
+        {dots.map((d, i) => <Text key={`dots:${i}`} color={d.color}>{markOf(d.color).repeat(d.n)}</Text>)}
         {more > 0 && <Text dimColor>{`+${more}`}</Text>}
         <Text dimColor>{`  ${summary(shown)}`}</Text>
       </Text>
