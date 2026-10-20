@@ -844,9 +844,10 @@ const entryText = (e) => {
   return (typeof content === "string" ? content : Array.isArray(content) ? content.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n") : "").trim();
 };
 
-// What a model turn writes: replies, tool results and prompts, not a local command (/model) or a hook's meta note.
+// What a model turn writes: replies, tool results and prompts, not a local command (/model), a hook's meta note,
+// or what lands after the turn without starting one (a transcript-only notification, an idle compaction summary).
 export function turnEntry(e) {
-  if (e.isSidechain || e.isMeta || (e.type !== "user" && e.type !== "assistant")) return null;
+  if (e.isSidechain || e.isMeta || e.queueTranscriptOnly || e.isCompactSummary || (e.type !== "user" && e.type !== "assistant")) return null;
   const at = Date.parse(e.timestamp ?? "");
   const time = Number.isNaN(at) ? null : at;
   if (e.type === "assistant") return { at: time, stopped: !!e.isApiErrorMessage };

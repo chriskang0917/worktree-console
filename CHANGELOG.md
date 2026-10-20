@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.2
+
+- fix(console): skip transcript-only notices and idle compaction summaries when judging a turn over
+
 ## 1.6.1
 
 - fix(tool-dots): draw failed calls as a red ✕ after the dots

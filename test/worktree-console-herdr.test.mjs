@@ -7,7 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeProjectDir, pendingItems } from "../skills/worktree-console/scripts/lib.mjs";
+import { claudeProjectDir, pendingItems, turnEntry } from "../skills/worktree-console/scripts/lib.mjs";
 import { terminalKind } from "../skills/worktree-console/scripts/terminals.mjs";
 import { transcriptState } from "../skills/worktree-console/scripts/herdr.mjs";
 import { evaluate, conclusionLines } from "../skills/worktree-console/scripts/herdr-report.mjs";
@@ -909,6 +909,66 @@ test("被中斷的一輪沒有 Stop hook 紀錄，舊紀錄不會讓它一直顯
   });
   endTurn(w, "s", 1);
   assert.match(boardRow(w.run(["board", "--repo", app()]).out, "PROJ-205"), /⏸ 回覆完畢/);
+});
+
+// SARA-6299's notification: written 13ms after the Stop hook's end, sent to the transcript only, no new turn.
+const NOTICE =
+  '<task-notification>\n<task-id>a82e1658015008935</task-id>\n<tool-use-id>toolu_01827brcW71qnwvoBfjsJtaP</tool-use-id>\n<status>completed</status>\n<summary>Agent "Scout feedback for import wizard" finished</summary>\n</task-notification>';
+const noticeOnly = (at) => ({
+  type: "user",
+  isSidechain: false,
+  timestamp: new Date(at).toISOString(),
+  message: { role: "user", content: NOTICE },
+  permissionMode: "auto",
+  origin: { kind: "task-notification", producer: "session-task", runId: "0mveo9r0w-7b8a2fed" },
+  promptSource: "system",
+  queueSkipAttachments: true,
+  queueTranscriptOnly: true,
+  version: "2.1.303",
+});
+const noticeTurn = (at) => ({ ...noticeOnly(at), queueTranscriptOnly: undefined, origin: { kind: "task-notification", producer: "session-task" }, turnOrigin: "task_notification" });
+const compactSummary = (at) => ({ type: "user", isSidechain: false, timestamp: new Date(at).toISOString(), message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context." }, isVisibleInTranscriptOnly: true, isCompactSummary: true });
+
+test("queueTranscriptOnly：只寫紀錄的通知不算這一輪的最後一筆，phase 與 at 照舊", () => {
+  const late = Date.parse(ts(3)) + 13;
+  assert.equal(turnEntry(noticeOnly(late)), null);
+  assert.deepEqual(turnEntry(noticeTurn(late)), { at: late, stopped: false });
+  const plain = transcriptState(asked());
+  const t = transcriptState([...asked(), noticeOnly(late)]);
+  assert.deepEqual(t.turn, { at: Date.parse(ts(3)), stopped: false });
+  assert.equal(t.at, late);
+  assert.equal(t.phase, transcriptState([...asked(), noticeTurn(late)]).phase);
+  assert.equal(plain.phase, "replied");
+});
+
+test("isCompactSummary：壓縮摘要不算這一輪的最後一筆", () => {
+  const late = Date.parse(ts(3)) + 55 * 60_000;
+  assert.equal(turnEntry(compactSummary(late)), null);
+  assert.deepEqual(transcriptState([...asked(), compactSummary(late)]).turn, { at: Date.parse(ts(3)), stopped: false });
+});
+
+test("Stop hook 結束後 13ms 才寫進只寫紀錄的通知：herdr 說停了，看板不是執行中；會開新一輪的通知照舊是執行中", () => {
+  const late = Date.parse(ts(3)) + 13;
+  for (const [entry, busy] of [[noticeOnly(late), false], [noticeTurn(late), true]]) {
+    const w = world([{ cwd: wt("proj-201-menu"), status: "done", session: "s1" }], { transcripts: { s1: { cwd: wt("proj-201-menu"), entries: [...asked(), entry] } } });
+    endTurn(w, "s1", 3);
+    const row = boardRow(w.run(["board", "--repo", app()]).out, "PROJ-201");
+    if (busy) assert.match(row, /🔄 執行中/, row);
+    else assert.doesNotMatch(row, /🔄 執行中/, row);
+  }
+});
+
+test("閒置時自動壓縮：Stop hook 結束 55 分鐘後才寫進的壓縮摘要不讓看板顯示執行中；一輪中途壓縮、還沒新回覆時照舊是執行中", () => {
+  const idle = world([{ cwd: wt("proj-201-menu"), status: "idle", session: "s1" }], {
+    transcripts: { s1: { cwd: wt("proj-201-menu"), entries: [...asked(), compactSummary(Date.parse(ts(3)) + 55 * 60_000)] } },
+  });
+  endTurn(idle, "s1", 3);
+  assert.doesNotMatch(boardRow(idle.run(["board", "--repo", app()]).out, "PROJ-201"), /🔄 執行中/);
+  const mid = world([{ cwd: wt("proj-201-menu"), status: "done", session: "s1" }], {
+    transcripts: { s1: { cwd: wt("proj-201-menu"), entries: [user("a", 0), said("好了。", 1), user("再改", 2), call("t1", "Bash", { command: "npm test" }, 3), result("t1", 4), compactSummary(Date.parse(ts(5)))] } },
+  });
+  endTurn(mid, "s1", 1);
+  assert.match(boardRow(mid.run(["board", "--repo", app()]).out, "PROJ-201"), /🔄 執行中/);
 });
 
 test("選單與授權框不等 Stop hook：Stop hook 紀錄還是上一輪的，跳出來就立刻顯示 💬／🔐", () => {

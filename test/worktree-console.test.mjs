@@ -3058,3 +3058,25 @@ test("Orca 同樣以 Stop hook 紀錄判斷這一輪結束：紀錄還是上一�
     else process.env.WORKTREE_CONSOLE_HOME = prev;
   }
 });
+
+test("Orca 說 done：Stop hook 之後才寫進的只寫紀錄通知、閒置壓縮摘要不讓看板顯示執行中；會開新一輪的通知照舊是執行中", () => {
+  const home = fs.mkdtempSync(path.join(tmp, "turn-orca-late-"));
+  const prev = process.env.WORKTREE_CONSOLE_HOME;
+  process.env.WORKTREE_CONSOLE_HOME = home;
+  try {
+    const at = (n, ms = 0) => new Date(Date.UTC(2026, 9, 5, 6, 0, n) + ms).toISOString();
+    const reply = "登入頁做好了，要順便改註冊頁嗎？";
+    const notice = { type: "user", isSidechain: false, message: { role: "user", content: '<task-notification>\n<task-id>a82e1658015008935</task-id>\n<status>completed</status>\n<summary>Agent "Scout feedback for import wizard" finished</summary>\n</task-notification>' }, origin: { kind: "task-notification", producer: "session-task", runId: "0mveo9r0w-7b8a2fed" }, promptSource: "system", queueSkipAttachments: true, queueTranscriptOnly: true, version: "2.1.303" };
+    const summary = { type: "user", isSidechain: false, message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context." }, isVisibleInTranscriptOnly: true, isCompactSummary: true };
+    const agent = { ...agentsOf("proj-101-login")[0], state: "done", workingMode: undefined, mainAgent: undefined, toolName: null, prompt: LOGIN_PROMPT, lastAssistantMessage: reply };
+    fs.mkdirSync(path.join(home, "turn-ends"), { recursive: true });
+    fs.writeFileSync(path.join(home, "turn-ends", "s.json"), JSON.stringify({ at: Date.parse(at(3)) }));
+    const kind = (late) => withTranscripts({ "s.jsonl": [{ ...userText(LOGIN_PROMPT), timestamp: at(0) }, { ...assistantText(reply), timestamp: at(3) }, late] }, () => sessionStatus(agent, wt("proj-101-login")).kind);
+    assert.equal(kind({ ...notice, timestamp: at(3, 13) }), "waiting", "只寫紀錄的通知");
+    assert.equal(kind({ ...summary, timestamp: at(3, 55 * 60_000) }), "waiting", "閒置壓縮摘要");
+    assert.equal(kind({ ...notice, queueTranscriptOnly: undefined, turnOrigin: "task_notification", timestamp: at(3, 13) }), "busy", "會開新一輪的通知");
+  } finally {
+    if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
+    else process.env.WORKTREE_CONSOLE_HOME = prev;
+  }
+});
