@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { LABELS, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
 import { isConsoleSession } from "./log.mjs";
-import { adviceFor, advisorHome, loadAdvice } from "./advice.mjs";
+import { adviceFor, advisorHome, advisorState, loadAdvice } from "./advice.mjs";
 
 export const FOCUS_WAIT_MS = 60_000;
 const MODS_TTL_MS = 30_000;
@@ -16,7 +16,7 @@ export const FOCUS_VERSION = 1;
 export const stopId = (key) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36);
 
 export function emptyFocus() {
-  return { modsAt: 0, current: null, currentAt: 0, reported: [], wait: null, answered: [], replied: [], back: {}, bumped: {}, seen: {}, titles: {}, firsts: {} };
+  return { modsAt: 0, current: null, currentAt: 0, reported: [], wait: null, answered: [], replied: [], back: {}, bumped: {}, seen: {}, cancelled: {}, titles: {}, firsts: {} };
 }
 
 export function loadFocus() {
@@ -73,9 +73,9 @@ function focusEntries(rows) {
   });
 }
 
-// Five tiers, each first stopped first out: ⚠️, back after a reply, 🔐, the rest, then the skipped ones by when they were skipped.
+// Tiers, each first stopped first out: ⚠️, one the advisor will answer itself, back after a reply, 🔐, the rest, then the skipped ones by when they were skipped.
 function order(entries, state) {
-  const tier = (e) => (e.kind === "anomaly" ? -1 : state.back?.[e.key] ? 0 : e.kind === "permission" ? 1 : 2);
+  const tier = (e) => (e.kind === "anomaly" ? -1 : e.auto && !state.cancelled?.[e.key] ? -0.5 : state.back?.[e.key] ? 0 : e.kind === "permission" ? 1 : 2);
   const rank = (e) => (state.bumped?.[e.key] ? [3, state.bumped[e.key]] : [tier(e), e.since ?? state.seen[e.key] ?? 0]);
   return [...entries].sort((a, b) => {
     const [x, y] = [rank(a), rank(b)];
@@ -99,6 +99,7 @@ export function focusStep(prev, entries, now = Date.now(), busy = []) {
     replied: replied.filter((s) => !returned.some((e) => sameSession(s, e))),
     back: { ...keepLive(prev.back), ...Object.fromEntries(returned.map((e) => [e.key, replied.find((s) => after(s, e)).at ?? true])) },
     bumped: keepLive(prev.bumped),
+    cancelled: keepLive(prev.cancelled),
     seen: { ...keepLive(prev.seen), ...Object.fromEntries(fresh.map((e) => [e.key, now])) },
   };
   const open = order(entries.filter((e) => !state.answered.includes(e.key)), state);
@@ -155,6 +156,11 @@ export function focusPick(prev, key, now = Date.now()) {
   return { ...prev, wait: null, current: key, bumped: left ? { ...prev.bumped, [left]: now } : prev.bumped };
 }
 
+// 7 during the band's countdown: the question is not sent and stays on the band as an ordinary one.
+export function focusCancel(prev, key, now = Date.now()) {
+  return { ...prev, cancelled: { ...prev.cancelled, [key]: now } };
+}
+
 // Marks a question as shown once the mod has printed it, so an automatic change never prints the same stop twice.
 export function markReported(state, key) {
   return state.reported.includes(key) ? state : { ...state, reported: [...state.reported, key] };
@@ -171,7 +177,7 @@ export function waitLine(view) {
 
 // Loads the saved focus, applies `change` (a reply, a pick), steps it over `rows` and saves it back.
 export function syncFocus(rows, { now = Date.now(), change = null, heartbeat = false } = {}) {
-  const entries = focusEntries(rows);
+  const entries = markAuto(focusEntries(rows), now);
   const busy = rows.flatMap((row) => row.sessions.filter((s) => s.status.kind === "busy").map((s) => ({ paneKey: s.paneKey, handle: s.handle, tag: sessionTag(row, s) })));
   let state = loadFocus();
   if (change) state = change(state, entries, now);
@@ -179,6 +185,14 @@ export function syncFocus(rows, { now = Date.now(), change = null, heartbeat = f
   if (heartbeat) view.state.modsAt = now;
   saveFocus(view.state);
   return view;
+}
+
+// Which waiting questions the advisor would answer itself once they reach the band.
+function markAuto(entries, now) {
+  const advisor = advisorState(advisorHome());
+  if (!advisor) return entries;
+  const byPath = loadAdvice(advisorHome(), now);
+  return entries.map((e) => ({ ...e, auto: !!adviceFor(byPath, { path: e.item.row.path, status: e.item.session.status, since: e.since, now, advisor })?.auto }));
 }
 
 const STATUS = Object.fromEntries(Object.entries(LABELS).map(([k, v]) => [k, [v.slice(0, v.indexOf(" ")), v.slice(v.indexOf(" ") + 1)]]));
@@ -207,13 +221,14 @@ function plainReport(tag, status) {
 }
 
 // The focus band's and pane's data: every session as a card, the question on screen, the queue in order and the counts.
-export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(), announce = null, announceKey = null, keys = new Set() } = {}) {
+export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(), announce = null, announceKey = null, keys = new Set(), notice = null } = {}) {
   const items = new Map(pendingItems(rows).map((item) => [item.session, item]));
   const keyOf = new Map([view.current, ...view.queue].filter(Boolean).map((e) => [e.item.session, e.key]));
   const titles = { ...(view.state.titles ?? {}) };
   const live = new Set(rows.flatMap((row) => row.sessions.map((s) => s.paneKey)));
   const firsts = Object.fromEntries(Object.entries(view.state.firsts ?? {}).filter(([k]) => live.has(k)));
   const advice = loadAdvice(advisorHome(), now);
+  const advisor = advice ? advisorState(advisorHome()) : null;
   const sessions = rows.flatMap((row) =>
     row.sessions.map((session) => {
       if (!(row.path in titles)) {
@@ -239,7 +254,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         summary: cardSummary(row, session, titles[row.path], firsts),
         question,
         options: item ? optionsOf(item) : [],
-        advice: item ? adviceFor(advice, { path: row.path, status, since: session.since ?? session.agent?.stateStartedAt, now }) : null,
+        advice: item ? adviceFor(advice, { path: row.path, status, since: session.since ?? session.agent?.stateStartedAt, now, advisor, cancelled: !!view.state.cancelled?.[key] }) : null,
         archived: !!session.archived,
         pending: !!item,
         report: report.join("\n"),
@@ -255,6 +270,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
       current: view.current?.key ?? null,
       announce,
       announceKey,
+      notice,
       waiting: view.wait ? { tag: view.wait.tag, seconds: Math.max(0, Math.ceil((view.wait.until - now) / 1000)) } : null,
       queue: view.queue.map((e) => ({ key: e.key, isNew: (view.state.seen?.[e.key] ?? 0) > since })),
       stats: `${count(STATUS.anomaly[1]) ? `session 異常 ${count(STATUS.anomaly[1])} | ` : ""}等待回應 ${count("等待回應")} | 等待授權 ${count("等待授權")} | 回覆完畢 ${count("回覆完畢")} | 執行中 ${count("執行中")} | 封存 ${sessions.filter((s) => s.archived).length} | 閒置 ${count("閒置")}`,

@@ -192,7 +192,7 @@ test("真實終端：r 不是分頁鍵，按了分頁列與底線都不動", { t
   }
 });
 
-test("真實終端：橫條標題列左邊狀態與代號、右邊「9: 顯示問題 · 8: 延後處理」，右端與分隔線同寬，沒有獨立按鈕列", { timeout: 30_000 }, async () => {
+test("真實終端：橫條標題列左邊狀態與代號、右邊「8: 延後處理 · 9: 顯示問題」，右端與分隔線同寬，沒有獨立按鈕列", { timeout: 30_000 }, async () => {
   const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 120 });
   try {
     const frame = await terminal.waitFor(f => f.includes("0: 面板") && f.includes("9: 顯示問題"), "等待橫條");
@@ -200,7 +200,7 @@ test("真實終端：橫條標題列左邊狀態與代號、右邊「9: 顯示�
     const rule = lines.findIndex(line => line.startsWith("── 待回覆"));
     const head = lines[rule + 1];
     const width = text => [...text].reduce((sum, char) => sum + (char.codePointAt(0) > 0x2e80 ? 2 : 1), 0);
-    assert.match(head, /^ {2}│ ↩ 已回覆 {2}reply0 +9: 顯示問題 · 8: 延後處理$/, head);
+    assert.match(head, /^ {2}│ ↩ 已回覆 {2}reply0 +8: 延後處理 · 9: 顯示問題$/, head);
     assert.equal(width(head), width(lines[rule]), `${head}\n${lines[rule]}`);
     assert.equal(lines.filter(line => line.includes("顯示問題")).length, 1);
   } finally {

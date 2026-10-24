@@ -22,7 +22,8 @@ type Session = {
 }
 
 // The advisor's prediction for the question, read by `console.mjs focus`: still running, or ready with an answer and a reason.
-type Advice = { state: 'pending' | 'ready'; text: string; answer?: string; reason?: string; principle?: string | null }
+// `auto`: the type is open for auto-reply, so the band counts down `seconds` and then sends `answer`.
+type Advice = { state: 'pending' | 'ready'; text: string; answer?: string; reason?: string; principle?: string | null; auto?: { answer: string; meaning: string; seconds: number } }
 
 type Focus = {
   active: boolean
@@ -30,6 +31,7 @@ type Focus = {
   current?: string | null
   announce?: string | null
   announceKey?: string | null
+  notice?: string | null
   waiting?: { tag: string | null; seconds: number } | null
   queue?: { key: string; isNew: boolean }[]
   sessions?: Session[]
@@ -63,11 +65,13 @@ const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean
 ]
 
 const EMPTY = '目前沒有符合條件的 session'
-// The band header's right side: `9: 顯示問題`, and ` · 8: 延後處理` while the queue has one; four cells per hotkey decoration.
+// The band header's right side: `9: 顯示問題`, led by `8: 延後處理 · ` while the queue has one; four cells per hotkey decoration.
 const SHOW_WIDTH = 4 + 8
-const LATER_WIDTH = 3 + 4 + 8
+const LATER_WIDTH = 4 + 8 + 3
 // The band header's status cell: glyph, a space, the label padded to 6 cells, two spaces.
 const BAND_STATUS = 10
+// The countdown row's right side: `6: 立即送出 · 7: 取消`, four cells per hotkey decoration.
+const COUNTDOWN_KEYS = 4 + 8 + 3 + 4 + 4
 
 export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, hasCurrent = true, advice = null, options = [] }: {
   cols: number
@@ -188,6 +192,12 @@ let animationTick = 0
 let visibleKeys: string[] = []
 let bandKey: string | null = null
 const warned = new Set<string>()
+let inHerdr = false
+// One question counts down at a time, the one on the band; a question counted once is never counted again (sent, cancelled or refused).
+let countdown: { key: string; tag: string; answer: string; meaning: string; until: number; left: number } | null = null
+let countdownTick: { cancel(): void } | null = null
+const counted = new Set<string>()
+let sending = false
 async function loadPreferences($: EngineInterface) {
   const home = await $.env.get('WORKTREE_CONSOLE_HOME') || `${await $.env.get('HOME')}/.config/worktree-console`
   const warnings: string[] = []
@@ -340,6 +350,58 @@ async function announce($: EngineInterface, next: Focus, pressed: boolean) {
   void show($, next.announce, key)
 }
 
+function stopCountdown() {
+  countdownTick?.cancel()
+  countdownTick = null
+  countdown = null
+}
+
+// Starts the countdown when an open-for-auto-reply question reaches the band, and drops it once that question leaves or loses `auto`.
+async function syncCountdown($: EngineInterface) {
+  const cur = byKey(focus.current)
+  const auto = focus.active ? cur?.advice?.auto : undefined
+  if (!cur || !auto) return stopCountdown()
+  if (countdown?.key === cur.key || counted.has(cur.key)) return
+  stopCountdown()
+  counted.add(cur.key)
+  const now = await $.clock.now()
+  countdown = { key: cur.key, tag: cur.tag, answer: auto.answer, meaning: auto.meaning, until: now + auto.seconds * 1000, left: auto.seconds }
+  if (inHerdr) {
+    // herdr takes the title first; an option before it is refused.
+    void $.process.run(['herdr', 'notification', 'show', `[${cur.tag}] ${auto.seconds} 秒後代回 ${auto.answer}`, '--body', `${auto.meaning} · 6: 立即送出 · 7: 取消`, '--sound', 'request'], { timeoutMs: 10_000 }).catch(() => {})
+  }
+  countdownTick = $.clock.every(1000, () => void tickCountdown($))
+}
+
+// Each second: the row's number goes down; at 0 the answer goes, but not while the console's own turn runs (the user may be answering it).
+async function tickCountdown($: EngineInterface) {
+  if (!countdown) return
+  countdown.left = Math.max(0, Math.ceil((countdown.until - (await $.clock.now())) / 1000))
+  $.ui.invalidate('ui.render')
+  if (countdown.left === 0 && !turning) await sendAuto($)
+}
+
+// 6, or the countdown at 0: `console.mjs focus-auto` records the auto-reply through the advisor and sends it with `reply`.
+async function sendAuto($: EngineInterface) {
+  if (!countdown || sending) return
+  const key = countdown.key
+  sending = true
+  stopCountdown()
+  try {
+    await act($, ['focus-auto', key])
+  } finally {
+    sending = false
+  }
+}
+
+// 7: nothing is sent; the question stays on the band as an ordinary one.
+async function cancelAuto($: EngineInterface) {
+  if (!countdown) return
+  const key = countdown.key
+  stopCountdown()
+  await act($, ['focus-cancel', key])
+}
+
 async function apply($: EngineInterface, next: Focus, pressed = false) {
   // Only the console reads config.json, so another tab never toasts about it.
   if (next.active && !focus.active) await loadPreferences($)
@@ -355,6 +417,8 @@ async function apply($: EngineInterface, next: Focus, pressed = false) {
     for (const k of misses.keys()) if (k !== next.current) misses.delete(k)
   }
   focus = next
+  if (next.active && next.notice) $.ui.toast(next.notice)
+  await syncCountdown($)
   syncAnimation($)
   if (next.active) await announce($, next, pressed)
   $.ui.invalidate('ui.render')
@@ -454,7 +518,8 @@ const countsText = () => {
 export const register: Register = on => {
   registerKeepaliveView(on)
   on('session.start', async ($, e, next) => {
-    if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || (await $.env.get('HERDR_ENV')) === '1') {
+    inHerdr = (await $.env.get('HERDR_ENV')) === '1'
+    if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || inHerdr) {
       sessionId = await $.session.id().catch(() => '')
       void poll($)
       $.clock.every(POLL_MS, () => {
@@ -694,6 +759,11 @@ export const register: Register = on => {
       pending: { color: theme.dim },
     }
     const rail = <Text color={cell ? theme[cell.color] : theme.dim}>│ </Text>
+    const counting = cur && countdown?.key === cur.key ? countdown : null
+    const answerRoom = counting ? Math.max(1, cols - 4 - COUNTDOWN_KEYS - 1 - columns(`代回倒數 ${counting.left} 秒：`)) : 0
+    const countdownAnswer = counting ? truncateColumns(counting.answer, answerRoom) : ''
+    const meaningRoom = counting ? answerRoom - columns(countdownAnswer) - 1 : 0
+    const countdownMeaning = counting && countdownAnswer === counting.answer && meaningRoom >= 2 ? truncateColumns(counting.meaning.replace(/\s+/g, ' ').trim(), meaningRoom) : ''
     const label = `── 待回覆 ${cur ? 1 : 0}/${fullQueue.length + (cur ? 1 : 0)} `
     const head = Math.max(1, cols - 4)
     const actionsWidth = SHOW_WIDTH + (queue.length > 0 ? LATER_WIDTH : 0)
@@ -717,14 +787,28 @@ export const register: Register = on => {
                 <Box key="band-name" flexShrink={0}><Text bold color={theme.fg}>{truncateColumns(cur.tag, Math.max(1, head - BAND_STATUS - actionsWidth - 1))}</Text></Box>
               </Box>
               <Box key="band-actions" flexDirection="row" width={actionsWidth} flexShrink={0} justifyContent="flex-end">
+                {queue.length > 0 && <Box flexDirection="row"><Button key="later" hotkey="8" label="延後處理" plain onPress={() => act($, ['focus-later'])}><Text color={theme.dim}>延後處理</Text></Button><Text color={theme.dim}> · </Text></Box>}
                 <Button key="show" hotkey="9" label="顯示問題" plain onPress={() => void show($, cur.tag, cur.key)}><Text color={theme.dim}>顯示問題</Text></Button>
-                {queue.length > 0 && <Box flexDirection="row"><Text color={theme.dim}> · </Text><Button key="later" hotkey="8" label="延後處理" plain onPress={() => act($, ['focus-later'])}><Text color={theme.dim}>延後處理</Text></Button></Box>}
               </Box>
             </Box>
           ) : <Text color={theme.dim}>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>}
         </Box>
         {cur && budget.question > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.question} flexShrink={0} overflow="hidden">{rail}<Box key="question" width={Math.max(1, cols - 6)} flexShrink={0}><Text color={theme.fg} wrap="truncate-end">{budget.questionText}</Text></Box></Box>}
-        {cur && budget.advice > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.advice} flexShrink={0} overflow="hidden">{rail}<Box key="advice" flexDirection="row" width={Math.max(1, cols - 6)} flexShrink={0}>{budget.adviceParts.map(p => <Text key={`advice:${p.role}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}</Box></Box>}
+        {cur && budget.advice > 0 && counting && <Box flexDirection="row" paddingLeft={2} height={budget.advice} flexShrink={0} overflow="hidden">{rail}<Box key="countdown" flexDirection="row" width={head} flexShrink={0} justifyContent="space-between">
+          <Box key="countdown-left" flexDirection="row" flexShrink={1} overflow="hidden">
+            <Text color={theme.waiting}>代回倒數 </Text>
+            <Text bold color={theme.fg}>{String(counting.left)}</Text>
+            <Text color={theme.waiting}> 秒：</Text>
+            <Text bold color={theme.fg}>{countdownAnswer}</Text>
+            {countdownMeaning ? <Text color={theme.fg}>{` ${countdownMeaning}`}</Text> : null}
+          </Box>
+          <Box key="countdown-keys" flexDirection="row" width={COUNTDOWN_KEYS} flexShrink={0} justifyContent="flex-end">
+            <Button key="auto-now" hotkey="6" label="立即送出" plain onPress={() => void sendAuto($)}><Text color={theme.fg}>立即送出</Text></Button>
+            <Text color={theme.dim}> · </Text>
+            <Button key="auto-cancel" hotkey="7" label="取消" plain onPress={() => void cancelAuto($)}><Text color={theme.fg}>取消</Text></Button>
+          </Box>
+        </Box></Box>}
+        {cur && budget.advice > 0 && !counting && <Box flexDirection="row" paddingLeft={2} height={budget.advice} flexShrink={0} overflow="hidden">{rail}<Box key="advice" flexDirection="row" width={Math.max(1, cols - 6)} flexShrink={0}>{budget.adviceParts.map(p => <Text key={`advice:${p.role}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}</Box></Box>}
         <Box key="keys" flexDirection="column" height={budget.keys} flexShrink={0}>
           {budget.keyLines.map((items, row) => <Box key={`keys:${row}`} flexDirection="row" paddingLeft={2} height={1} flexShrink={0}>
             {items.map(item => <Box key={`key:${item.index}`} width={item.width} flexShrink={0}>{keyItems[item.index]}</Box>)}
