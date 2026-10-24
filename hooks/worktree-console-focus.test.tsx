@@ -54,7 +54,7 @@ const STATS = '等待回應 3 | 等待授權 1 | 回覆完畢 1 | 執行中 1 | 
 const keyOf = (tag: string) => `${tag}@1`
 const idOf = (key: string) => `id-${key.replace('@', '-')}`
 
-type World = { focus: any; answer?: string; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
+type World = { focus: any; notes?: string[][]; afterAuto?: any; answer?: string; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
 const appearanceConfig = new WeakMap<World, AppearanceConfig | string>()
 
@@ -75,6 +75,10 @@ const pending = () => focusOf('perm', ['focusui', 'logging', 'PROJ-6668', 'upgra
 // Answers `node console.mjs <sub>` from the world: focus-pick puts that key on the band, focus-later sends the current one to the back, unarchive clears that tag's archived flag.
 function fakeConsole(on: On, world: World) {
   on('process.run', async (_$, e) => {
+    if (e.argv[0] === 'herdr') {
+      world.notes = [...(world.notes ?? []), [...e.argv]]
+      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const args = e.argv.slice(2)
     world.calls.push([...args])
     const f = world.focus
@@ -84,6 +88,10 @@ function fakeConsole(on: On, world: World) {
     } else if (args[0] === 'focus-later' && f.active) {
       const [next, ...rest] = f.queue
       world.focus = { ...f, current: next.key, queue: [...rest, { key: f.current, isNew: false }], announce: f.sessions.find((s: Card) => s.key === next.key).tag }
+    } else if (args[0] === 'focus-auto' && f.active) {
+      world.focus = world.afterAuto ?? f
+    } else if (args[0] === 'focus-cancel' && f.active) {
+      world.focus = { ...f, sessions: f.sessions.map((s: any) => (s.key === args[1] && s.advice ? { ...s, advice: { ...s.advice, auto: undefined } } : s)) }
     } else if (args[0] === 'unarchive') {
       world.focus = { ...f, sessions: f.sessions.map((s: Card) => (s.tag === args[1] ? { ...s, archived: false } : s)) }
       return { value: { exitCode: 0, stdout: `[${args[1]}] 已取消封存\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -182,7 +190,7 @@ const headRow = async (ui: any) => {
   return findKey(root, 'band-head')
 }
 
-test('band header: status icon, status word and 代號 on the left, 9 顯示問題 · 8 延後處理 on the right in the dim colour; the whole question; 0 面板 and queue 1–5 below', async ($, on) => {
+test('band header: status icon, status word and 代號 on the left, 8 延後處理 · 9 顯示問題 on the right in the dim colour; the whole question; 0 面板 and queue 1–5 below', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   for (const surface of ['terminal', 'desktop'] as const) {
@@ -193,13 +201,13 @@ test('band header: status icon, status word and 代號 on the left, 9 顯示問�
     const [left, right] = head.children
     expect(textOf(left)).toBe('◆ 待授權  perm')
     expect(right.props.key).toBe('band-actions')
-    expect(drawnText(right)).toBe('9: 顯示問題 · 8: 延後處理')
+    expect(drawnText(right)).toBe('8: 延後處理 · 9: 顯示問題')
     expect((await ui.find({ key: 'show' }))?.props).toMatchObject({ hotkey: '9', label: '顯示問題' })
     expect((await ui.find({ key: 'later' }))?.props).toMatchObject({ hotkey: '8', label: '延後處理' })
     expect(paintOf(await ui.drawn(), '顯示問題')?.color).toBe(THEMES.neutral.dim)
     expect(paintOf(await ui.drawn(), '延後處理')?.color).toBe(THEMES.neutral.dim)
     expect((await ui.find({ key: 'question' }))?.text).toBe('Bash rm -rf build')
-    expect(await labels(ui)).toEqual(['9: 顯示問題', '8: 延後處理', '1: focusui', '2: logging', '3: PROJ-6668', '4: upgrade#2', '0: 面板'])
+    expect(await labels(ui)).toEqual(['8: 延後處理', '9: 顯示問題', '1: focusui', '2: logging', '3: PROJ-6668', '4: upgrade#2', '0: 面板'])
     expect((await ui.find({ key: 'queue:0' }))?.props.dimColor).toBe(true)
     await ui.unmount()
   }
@@ -229,7 +237,7 @@ test('band header at 40 columns: a long 代號 is cut with …, both buttons sta
     const name = (await ui.find({ key: 'band-name' }))!.text
     expect(name.endsWith('…')).toBe(true)
     expect(long.startsWith(name.slice(0, -1))).toBe(true)
-    expect(drawnText(head.children[1])).toBe('9: 顯示問題 · 8: 延後處理')
+    expect(drawnText(head.children[1])).toBe('8: 延後處理 · 9: 顯示問題')
     const used = cardWidth(textOf(head.children[0])) + cardWidth(drawnText(head.children[1]))
     expect(used).toBeLessThanOrEqual(cols - 4)
     expect(cardLines(head, cols - 4).filter(line => line.trim())).toHaveLength(1)
@@ -243,7 +251,7 @@ test('band: the queue shows at most 5 (1–5) and a new one is marked ✨; nothi
   w.focus.queue[1].isNew = true
   const clock = await start($, on, w)
   const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  expect(await labels(ui)).toEqual(['9: 顯示問題', '8: 延後處理', '1: t0', '2: t1 ✨', '3: t2', '4: t3', '5: t4', '0: 面板'])
+  expect(await labels(ui)).toEqual(['8: 延後處理', '9: 顯示問題', '1: t0', '2: t1 ✨', '3: t2', '4: t3', '5: t4', '0: 面板'])
   expect((await ui.findAll({ type: 'Button' })).filter((b: any) => ['6', '7'].includes(b.props.hotkey))).toEqual([])
   await ui.unmount()
   w.focus = focusOf('perm', [])
@@ -361,11 +369,11 @@ test('band keys: 1–5 switch to that question and print it, 8 (延後處理) se
   expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('PROJ-6668')])
   expect(w.shown).toEqual(['PROJ-6668'])
   expect(w.writes[`${HOME}/show/PROJ-6668.md`]).toContain('### 💬 PROJ-6668 等你回應')
-  expect(await labels(ui)).toEqual(['9: 顯示問題', '8: 延後處理', '1: perm', '2: focusui', '3: logging', '4: upgrade#2', '0: 面板'])
+  expect(await labels(ui)).toEqual(['8: 延後處理', '9: 顯示問題', '1: perm', '2: focusui', '3: logging', '4: upgrade#2', '0: 面板'])
   await ui.press({ key: 'later' })
   expect(w.calls.at(-1)).toEqual(['focus-later'])
   expect(w.shown.at(-1)).toBe('perm')
-  expect(await labels(ui)).toEqual(['9: 顯示問題', '8: 延後處理', '1: focusui', '2: logging', '3: upgrade#2', '4: PROJ-6668', '0: 面板'])
+  expect(await labels(ui)).toEqual(['8: 延後處理', '9: 顯示問題', '1: focusui', '2: logging', '3: upgrade#2', '4: PROJ-6668', '0: 面板'])
   await ui.press({ key: 'queue:3' })
   expect((await ui.find({ key: 'band-name' }))?.text).toBe('PROJ-6668')
   expect((await ui.find({ key: 'show' }))?.props).toMatchObject({ hotkey: '9', label: '顯示問題' })
@@ -1082,7 +1090,7 @@ test('band: with 6 or more queued it lists 1–5 only; 6 and 7 are no band key, 
   await start($, on, w)
   const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
   const hotkeys = (await ui.findAll({ type: 'Button' })).map((x: any) => x.props.hotkey).filter(Boolean)
-  expect(hotkeys).toEqual(['9', '8', '1', '2', '3', '4', '5', '0'])
+  expect(hotkeys).toEqual(['8', '9', '1', '2', '3', '4', '5', '0'])
   expect((await ui.findAll({ type: 'Button' })).filter((x: any) => x.key.startsWith('queue:')).map((x: any) => x.props.label)).toEqual(['q0', 'q1', 'q2', 'q3', 'q4'])
   for (const text of ['6', '7']) {
     const res = await $.prompt.submit({ text, wait: false, origin: { kind: 'user' } } as any)
@@ -2074,4 +2082,121 @@ test('中控台自己那一輪還在跑：橫條照樣換題但不送 /focus-sho
   expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`, `logging ${idOf(keyOf('logging'))}`])
   await clock.advance(5_000)
   expect(w.shown).toHaveLength(2)
+})
+
+// --- 代回倒數 ---
+
+const AUTO = { ...READY, auto: { answer: 'b', meaning: '橫條也改清單', seconds: 15 } }
+const countdownText = async (ui: any) => {
+  const row = findKey(await ui.drawn(), 'countdown')
+  return row ? `${drawnText(findKey(row, 'countdown-left'))} | ${drawnText(findKey(row, 'countdown-keys'))}` : null
+}
+const autoCalls = (w: World) => w.calls.filter(c => c[0] === 'focus-auto' || c[0] === 'focus-cancel')
+
+test('band countdown: an open question on the band gets a herdr notification (request sound, 代號 and answer in the title) and the row 代回倒數 N 秒：b 橫條也改清單 with 6: 立即送出 · 7: 取消 on the right, one second down per second; at 0 the band sends it with focus-auto', async ($, on) => {
+  const w = world(withAdvice(AUTO))
+  w.afterAuto = { ...focusOf('logging', []), notice: '[focusui] 已自動回覆：b' }
+  const clock = await start($, on, w, { HERDR_ENV: '1' })
+  expect(w.notes).toEqual([['herdr', 'notification', 'show', '[focusui] 15 秒後代回 b', '--body', '橫條也改清單 · 6: 立即送出 · 7: 取消', '--sound', 'request']])
+  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await countdownText(ui)).toBe('代回倒數 15 秒：b 橫條也改清單 | 6: 立即送出 · 7: 取消')
+  expect(await ui.find({ key: 'advice' })).toBeUndefined()
+  expect((await ui.find({ key: 'auto-now' }))?.props).toMatchObject({ hotkey: '6', label: '立即送出' })
+  expect((await ui.find({ key: 'auto-cancel' }))?.props).toMatchObject({ hotkey: '7', label: '取消' })
+  await ui.unmount()
+  await clock.advance(1_000)
+  const later = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await countdownText(later)).toBe('代回倒數 14 秒：b 橫條也改清單 | 6: 立即送出 · 7: 取消')
+  await later.unmount()
+  await clock.advance(13_000)
+  expect(autoCalls(w)).toEqual([])
+  await clock.advance(1_000)
+  expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
+  expect(w.toasts).toContain('[focusui] 已自動回覆：b')
+  const after = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await countdownText(after)).toBeNull()
+  await after.unmount()
+  expect(w.notes?.length).toBe(1)
+})
+
+test('band countdown: the keys sit flush right like the header buttons; a long answer is cut with … and both keys stay whole', async ($, on) => {
+  const long = { ...READY, auto: { answer: '先把整個橫條改成清單再補測試與文件，最後重截兩張主題截圖', meaning: '橫條也改清單', seconds: 15 } }
+  const w = world(withAdvice(long))
+  await start($, on, w)
+  for (const cols of [50, 60, 80]) {
+    const ui = await $.ui.mount({ ...band(cols, 20), surface: 'terminal' })
+    const row = findKey(await ui.drawn(), 'countdown')
+    expect(row.props.justifyContent).toBe('space-between')
+    const [left, right] = row.children
+    expect(right.props.key).toBe('countdown-keys')
+    expect(right.props.justifyContent).toBe('flex-end')
+    expect(drawnText(right)).toBe('6: 立即送出 · 7: 取消')
+    const shown = drawnText(left)
+    expect(shown.startsWith('代回倒數 15 秒：')).toBe(true)
+    expect(shown.endsWith('…')).toBe(true)
+    expect(row.props.width).toBe(cols - 4)
+    expect(row.props.width).toBe((await headRow(ui)).props.width)
+    expect(cardWidth(shown) + cardWidth(drawnText(right))).toBeLessThanOrEqual(cols - 4)
+    expect(cardLines(row, cols - 4).filter(line => line.trim())).toHaveLength(1)
+    await ui.unmount()
+  }
+})
+
+test('band countdown: 6 sends at once, and the countdown does not send it a second time', async ($, on) => {
+  const w = world(withAdvice(AUTO))
+  w.afterAuto = focusOf('logging', [])
+  const clock = await start($, on, w)
+  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  await ui.press({ key: 'auto-now' })
+  await ui.unmount()
+  expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
+  await clock.advance(20_000)
+  expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
+})
+
+test('band countdown: 7 cancels — focus-cancel, the row goes back to 建議, and nothing is sent when the time would have run out', async ($, on) => {
+  const w = world(withAdvice(AUTO))
+  const clock = await start($, on, w)
+  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  await ui.press({ key: 'auto-cancel' })
+  await ui.unmount()
+  expect(autoCalls(w)).toEqual([['focus-cancel', keyOf('focusui')]])
+  const after = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await countdownText(after)).toBeNull()
+  expect(textOf(await after.find({ key: 'advice' }))).toBe('建議：b 橫條也改清單，兩邊都改才一致')
+  await after.unmount()
+  await clock.advance(20_000)
+  expect(autoCalls(w)).toEqual([['focus-cancel', keyOf('focusui')]])
+})
+
+test('band countdown: outside herdr there is no notification, only the countdown; only the band question counts down, a queued open one waits its turn', async ($, on) => {
+  const both = { ...withAdvice(AUTO), sessions: SESSIONS.map(s => (s.tag === 'focusui' || s.tag === 'logging' ? { ...s, advice: AUTO } : s)) }
+  const w = world(both)
+  w.afterAuto = { ...focusOf('logging', []), sessions: both.sessions }
+  const clock = await start($, on, w)
+  expect(w.notes ?? []).toEqual([])
+  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await countdownText(ui)).toMatch(/^代回倒數 15 秒/)
+  await ui.unmount()
+  await clock.advance(15_000)
+  expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
+  const next = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await countdownText(next)).toMatch(/^代回倒數 15 秒/)
+  await next.unmount()
+  await clock.advance(15_000)
+  expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')], ['focus-auto', keyOf('logging')]])
+})
+
+test('band countdown: at 0 while the console\'s own turn runs it waits; the user answered that question meanwhile, so it left the band and nothing is sent', async ($, on) => {
+  const w = world(withAdvice(AUTO))
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', async (_$, e) => ({ text: e.answer }))
+  const clock = await start($, on, w)
+  await $.turn.start({ text: 'focusui a', turnId: 'console-turn' })
+  await clock.advance(16_000)
+  expect(autoCalls(w)).toEqual([])
+  w.focus = focusOf('logging', [])
+  await $.turn.complete({ answer: '[focusui] 已送出', durationMs: 1, isAborted: false, turnId: 'console-turn', reason: 'answer' })
+  await clock.advance(5_000)
+  expect(autoCalls(w)).toEqual([])
 })

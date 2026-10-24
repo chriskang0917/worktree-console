@@ -41,7 +41,7 @@ import {
   reportLines,
   sessionTag,
 } from "../skills/worktree-console/scripts/lib.mjs";
-import { FOCUS_WAIT_MS, emptyFocus, focusPick, focusReplied, focusSkip, focusStep, loadFocus, saveFocus, saveTitles } from "../skills/worktree-console/scripts/focus.mjs";
+import { FOCUS_WAIT_MS, emptyFocus, focusCancel, focusPick, focusReplied, focusSkip, focusStep, loadFocus, saveFocus, saveTitles } from "../skills/worktree-console/scripts/focus.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = path.join(root, "skills", "worktree-console", "scripts");
@@ -3079,4 +3079,72 @@ test("Orca 說 done：Stop hook 之後才寫進的只寫紀錄通知、閒置壓
     if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
     else process.env.WORKTREE_CONSOLE_HOME = prev;
   }
+});
+
+// --- 專注模式的代回倒數 ---
+
+// An advisor home where the waiting question of PROJ-102(question) is predicted `b` and its type is open; the advisor script is a stand-in that logs its calls.
+function advisorFor(dir, { types = { 流程關卡: "open" }, refuse = false } = {}) {
+  const home = fs.mkdtempSync(path.join(tmp, "advisor-"));
+  const log = path.join(home, "calls.log");
+  const script = path.join(home, "fake-advisor.mjs");
+  fs.writeFileSync(script, `import fs from "node:fs";\nconst args = process.argv.slice(2);\nfs.appendFileSync(${JSON.stringify(log)}, args.join(" ") + "\\n");\nif (args[0] === "auto") { if (${refuse}) process.exit(1); console.log("b"); }\n`);
+  fs.writeFileSync(path.join(home, "state.json"), JSON.stringify({ script, countdownSeconds: 15, types }));
+  const at = new Date(1790787800001).toISOString();
+  const target = fs.realpathSync(wt("chris-proj-102-question"));
+  fs.writeFileSync(path.join(home, "predictions.jsonl"), [
+    { event: "start", id: "p1", at, path: target, tag: "PROJ-102(question)", kind: "text", question: "- **A**：先改 API\n- **B**：先改畫面\n\n先做哪個？" },
+    { event: "done", ref: "p1", at, answer: "b", reason: "畫面先定", type: "流程關卡", principle: null, precedent: "h1" },
+  ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+  fs.writeFileSync(path.join(home, "answers.jsonl"), "");
+  return { home, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []), target };
+}
+
+test("代回倒數（專注）：時間到 focus-auto 先讓 advisor 記成代回、再用 reply 照子 session 寫法送出，回傳「已自動回覆」", () => {
+  const dir = replyWorld("- **A**：先改 API\n- **B**：先改畫面\n\n先做哪個？", "B");
+  const adv = advisorFor(dir);
+  const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), ADVISOR_HOME: adv.home, SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" };
+  const view = focusRun(dir, env);
+  const cur = view.sessions.find((x) => x.key === view.current);
+  assert.equal(cur.tag, "PROJ-102(question)");
+  assert.deepEqual(cur.advice.auto, { answer: "b", meaning: "畫面先定", seconds: 15 });
+  const sent = JSON.parse(run("console.mjs", ["focus-auto", view.current], { dir, env }).out);
+  assert.equal(sent.notice, "[PROJ-102(question)] 已自動回覆：b");
+  assert.deepEqual(adv.calls(), [`auto --tag PROJ-102(question) --path ${adv.target}`]);
+  assert.deepEqual(sentTo(dir), ["terminal send --terminal term_b --text B --enter"]);
+});
+
+test("代回倒數（專注）：使用者已先回答（advisor 拒絕代回）或題目已不在橫條時，focus-auto 什麼都不送", () => {
+  const dir = replyWorld("- **A**：先改 API\n- **B**：先改畫面\n\n先做哪個？", "B");
+  const adv = advisorFor(dir, { refuse: true });
+  const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), ADVISOR_HOME: adv.home, SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" };
+  const view = focusRun(dir, env);
+  assert.equal(JSON.parse(run("console.mjs", ["focus-auto", view.current], { dir, env }).out).notice, null);
+  assert.equal(JSON.parse(run("console.mjs", ["focus-auto", "not-on-band"], { dir, env }).out).notice, null);
+  assert.deepEqual(adv.calls(), [`auto --tag PROJ-102(question) --path ${adv.target}`]);
+  assert.equal(fs.existsSync(path.join(dir, "calls.log")) ? sentTo(dir).length : 0, 0);
+});
+
+test("代回倒數（專注）：按 7 focus-cancel 後題目照一般題留在橫條、不再帶 auto，之後 focus-auto 也不送", () => {
+  const dir = replyWorld("- **A**：先改 API\n- **B**：先改畫面\n\n先做哪個？", "B");
+  const adv = advisorFor(dir);
+  const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), ADVISOR_HOME: adv.home, SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" };
+  const view = focusRun(dir, env);
+  const cancelled = JSON.parse(run("console.mjs", ["focus-cancel", view.current], { dir, env }).out);
+  assert.equal(cancelled.current, view.current);
+  const cur = cancelled.sessions.find((x) => x.key === cancelled.current);
+  assert.equal(cur.advice.auto, undefined);
+  assert.equal(cur.advice.text, "建議：b，畫面先定");
+  assert.equal(JSON.parse(run("console.mjs", ["focus-auto", view.current], { dir, env }).out).notice, null);
+  assert.deepEqual(adv.calls(), []);
+});
+
+test("代回倒數（專注）：可代回的題目排到待回覆最前（⚠️ 之後），不搶走橫條上的題目；取消後回到原本的位置", () => {
+  const entries = [entry("a", "waiting", 1), entry("c", "permission", 2), entry("b", "waiting", 3, { auto: true }), entry("x", "anomaly", 4)];
+  const fresh = focusStep(emptyFocus(), entries, 10);
+  assert.deepEqual([fresh.current.key, fresh.queue.map((e) => e.key)], ["x", ["b", "c", "a"]]);
+  const held = focusStep({ ...emptyFocus(), current: "a" }, entries, 10);
+  assert.deepEqual([held.current.key, held.queue.map((e) => e.key)], ["a", ["x", "b", "c"]]);
+  const off = focusStep(focusCancel({ ...emptyFocus(), current: "a" }, "b", 5), entries, 10);
+  assert.deepEqual(off.queue.map((e) => e.key), ["x", "c", "b"]);
 });

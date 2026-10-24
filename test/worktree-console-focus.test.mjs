@@ -19,7 +19,7 @@ for (const name of [
   "empty pane: a round frame as wide as the pane, a blank line above and below grey text, 5 rows tall",
   "empty pane: the text sits in the middle of the frame at 80 and 144 columns, the two sides at most one column apart",
   "empty pane: the frame takes the theme border colour, never the chosen card accent",
-  "band header: status icon, status word and 代號 on the left, 9 顯示問題 · 8 延後處理 on the right in the dim colour; the whole question; 0 面板 and queue 1–5 below",
+  "band header: status icon, status word and 代號 on the left, 8 延後處理 · 9 顯示問題 on the right in the dim colour; the whole question; 0 面板 and queue 1–5 below",
   "band header: an empty queue leaves only 9 顯示問題, still on the right; the old row of buttons is gone and its row goes to the question",
   "band header at 40 columns: a long 代號 is cut with …, both buttons stay whole, and the header is one row",
   "band: the queue shows at most 5 (1–5) and a new one is marked ✨; nothing sits on 6 or 7; 8 延後處理 only while the queue has one",

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   LABELS,
@@ -54,7 +56,8 @@ import {
   readConfig,
   STOPPED,
 } from "./lib.mjs";
-import { consoleSessionOk, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
+import { advisorHome, advisorState } from "./advice.mjs";
+import { consoleSessionOk, focusCancel, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome } from "./herdr.mjs";
 import { herdrReport } from "./herdr-report.mjs";
@@ -256,12 +259,12 @@ function archived() {
 
 // The focus band's data for the mod, as JSON; only the console's own screen gets it, and each poll marks the band as drawn.
 // `announce` names the question to print in the conversation: a new one on screen, or the one a press just put there; it counts as shown only after `focus-shown`.
-function focusOut({ rows, keys }, { change = null, show = false } = {}) {
+function focusOut({ rows, keys }, { change = null, show = false, notice = null } = {}) {
   const now = Date.now();
   const view = syncFocus(rows, { now, change, heartbeat: true });
   const fresh = view.current && !view.state.reported.includes(view.current.key);
   const announced = view.current && (show || fresh) ? view.current : null;
-  const { payload, titles, firsts } = focusPayload(rows, view, { now, keys, announce: announced?.item.tag ?? null, announceKey: announced?.key ?? null });
+  const { payload, titles, firsts } = focusPayload(rows, view, { now, keys, notice, announce: announced?.item.tag ?? null, announceKey: announced?.key ?? null });
   saveTitles(titles, firsts);
   console.log(JSON.stringify(payload));
 }
@@ -287,6 +290,37 @@ function focusPickCommand() {
 // 8 on the band: the question on screen goes behind the queue and the first one in the queue comes up.
 function focusLater() {
   focusOut(load({}, { repoOptional: true }), { change: (state) => focusSkip(state), show: true });
+}
+
+// 7 during the band's countdown: nothing is sent and the question waits on the band for the user.
+function focusCancelCommand() {
+  if (!positionals[0]) fail("缺少題目代號");
+  focusOut(load({}, { repoOptional: true }), { change: (state, entries, now) => focusCancel(state, positionals[0], now) });
+}
+
+// The band's countdown ran out, or 6 was pressed: the advisor records the auto-reply and hands back the answer, which `reply` sends.
+// Only the question still on the band goes; one the user answered meanwhile has no open prediction, so the advisor refuses it.
+function focusAutoCommand() {
+  const key = positionals[0];
+  if (!key) fail("缺少題目代號");
+  const current = syncFocus(load({}, { repoOptional: true }).rows).current;
+  const advisor = advisorState(advisorHome());
+  let notice = null;
+  if (current?.key === key && advisor && !loadFocus().cancelled?.[key]) {
+    const { tag, row } = current.item;
+    const run = (script, args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8", env: process.env });
+    const auto = run(advisor.script, ["auto", "--tag", tag, "--path", row.path]);
+    const answer = auto.status === 0 ? auto.stdout.trim() : "";
+    if (answer) {
+      const sent = run(fileURLToPath(import.meta.url), ["reply", "--", `${tag} ${answer}`]);
+      if (sent.status === 0) notice = `[${tag}] 已自動回覆：${answer}`;
+      else {
+        run(advisor.script, ["undo", "--tag", tag]);
+        notice = `[${tag}] 代回沒送出，請自己回答`;
+      }
+    }
+  }
+  focusOut(load({}, { repoOptional: true }), { notice });
 }
 
 function detail() {
@@ -1278,6 +1312,8 @@ const commands = {
   "focus-pick": focusPickCommand,
   "focus-later": focusLater,
   "focus-shown": focusShown,
+  "focus-cancel": focusCancelCommand,
+  "focus-auto": focusAutoCommand,
   reply,
   distilled,
   open,

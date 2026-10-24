@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.0
+
+- feat(focus): count down before the advisor auto-replies on the band
+
 ## 1.6.2
 
 - fix(console): skip transcript-only notices and idle compaction summaries when judging a turn over
