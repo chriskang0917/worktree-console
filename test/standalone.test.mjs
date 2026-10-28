@@ -131,11 +131,11 @@ test("plugin 名稱是 worktree-console；marketplace 列出 worktree-console、
   assert.equal(json("plugins/task-list/.claude-plugin/plugin.json").name, "task-list");
 });
 
-test("hooks.json 註冊專注橫條、自動交棒與過程紀錄，指到的檔案都在", () => {
+test("hooks.json 註冊專注橫條、自動交棒、過程紀錄與子 session 摘要，指到的檔案都在", () => {
   const hooks = json("hooks/hooks.json");
   assert.deepEqual(hooks.modules, ["./worktree-console-focus.tsx"]);
   const commands = Object.values(hooks.hooks).flat().flatMap((g) => g.hooks.map((h) => h.command));
-  for (const want of ["auto-handoff.mjs\" session-start", "auto-handoff.mjs\" pre-tool-use", "auto-handoff.mjs\" stop", "console-log.mjs\" session-start", "console-log.mjs\" user-prompt"]) {
+  for (const want of ["auto-handoff.mjs\" session-start", "auto-handoff.mjs\" pre-tool-use", "auto-handoff.mjs\" stop", "console-log.mjs\" session-start", "console-log.mjs\" user-prompt", "summary.mjs\" stop"]) {
     assert.ok(commands.some((c) => c.includes(want)), want);
   }
   for (const c of commands) {

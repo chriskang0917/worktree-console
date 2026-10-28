@@ -2549,6 +2549,22 @@ function focusRun(dir, env, args = ["focus"], { printed = true } = {}) {
   return { ...payload, currentTag: tagOf(payload.current), queueTags: payload.queue.map((q) => tagOf(q.key)), tagOf };
 }
 
+test("有 mods 時子 session 回「定稿完成（動工）：」仍叫醒中控台：只印那一則回報，其他題照舊留在橫條；只回「定稿完成：」的不叫醒", () => {
+  const finalize = (line) => (ps) => {
+    stagger(ps);
+    Object.assign(agentIn(ps, "chris-proj-102-question")[0], { state: "done", lastAssistantMessage: line, finalMessage: line });
+  };
+  const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), WATCH_TIMEOUT_MS: "300" };
+  const go = run("watch.mjs", ["--baseline", allPanes("busy")], { dir: fake({ mutatePs: finalize("定稿完成（動工）：/repo/.goals/proj-102.md") }), env });
+  assert.notEqual(go.lines[0], "[watch] timeout", go.out);
+  assert.ok(go.out.includes("定稿完成（動工）：/repo/.goals/proj-102.md"), go.out);
+  assert.ok(!go.out.includes("等你授權"), "其他題不跟著印");
+  assert.match(go.out, /^baseline: /m);
+  const later = run("watch.mjs", ["--baseline", allPanes("busy")], { dir: fake({ mutatePs: finalize("定稿完成：/repo/.goals/proj-102.md") }), env: { ...env, WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) } });
+  assert.equal(later.lines[0], "[watch] timeout", later.out);
+  assert.ok(!later.out.includes("###"), later.out);
+});
+
 test("有 mods 時 watcher 不為題目叫醒中控台：題目停下只寫紀錄；重掛帶相同 baseline 也不輸出重複回報；沒有 mods 照舊整批回報", () => {
   const home = consoleHome({ mods: true });
   const env = { WORKTREE_CONSOLE_HOME: home, WATCH_TIMEOUT_MS: "300" };

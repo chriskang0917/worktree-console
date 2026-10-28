@@ -70,6 +70,8 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 
 狀態存在 `~/.config/worktree-console/`（中控台登記、專注狀態、封存、設定與你自己的 `prompt.md`）、`~/.config/claude-handoff/`（交棒設定與說明）和 `~/.worktree-console/`（過程紀錄）。用到 Linear token 時，它存在 macOS 鑰匙圈的 `worktree-console-linear`。
 
+中控台管理的子 session 每次停下，背景會用 `claude -p --model sonnet` 把這一輪回覆摘要成幾句白話：子 session 分頁的輸入框上方顯示摘要（輸入框空白時按 `0` 看全文），中控台面板的卡片按 Enter 跳出該 session 的摘要。要換模型就在 `config.json` 設 `"summaryModel": "haiku"`。每次呼叫的 token 與 `total_cost_usd` 記在 `~/.config/worktree-console/summary-usage.jsonl`。
+
 ## session 名稱
 
 中控台開的每個 session 都用 `claude --name <名稱>` 啟動：正式開工、暫存 session、臨時分頁、重新打開與搬移的 session、需求訪談交棒，以及自動交棒。你沒給名稱時，名稱就是 session 的代號（票號、暱稱或 branch）。在 Orca 裡，`orca worktree create` 開的 session 第一次停下時，中控台送 `/rename` 補上名稱。在 herdr 裡，中控台開的每個分頁都有名稱、不會是數字（新工作區的第一個分頁也一樣），中控台自己的分頁叫 `console`。watcher 看到跑著 Claude Code 的數字分頁，會照它的 session 補上名稱：有你給的名稱就用名稱，否則用票號，再沒有就用 branch 或資料夾名。已經有名稱的分頁不會被改。
