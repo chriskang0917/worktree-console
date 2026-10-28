@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { loadAppearance, THEMES, type Appearance, type ConsoleTheme } from './console-theme.ts'
 import { statusCell, columns, truncateColumns } from './status-view.ts'
 import { registerKeepaliveView } from './keepalive-view.tsx'
+import { SUMMARY_MAX_LINES, summaryLines } from './session-summary-view.tsx'
 
 type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
 
@@ -16,6 +17,7 @@ type Session = {
   question: string
   options: string[]
   advice?: Advice | null
+  brief?: Brief | null
   archived: boolean
   pending: boolean
   report: string
@@ -24,6 +26,9 @@ type Session = {
 // The advisor's prediction for the question, read by `console.mjs focus`: still running, or ready with an answer and a reason.
 // `auto`: the type is open for auto-reply, so the band counts down `seconds` and then sends `answer`.
 type Advice = { state: 'pending' | 'ready'; text: string; answer?: string; reason?: string; principle?: string | null; auto?: { answer: string; meaning: string; seconds: number } }
+
+// The tab's newest plain-language recap, written in the background after each stop.
+type Brief = { text: string | null; pending: boolean }
 
 type Focus = {
   active: boolean
@@ -43,6 +48,9 @@ const POLL_MS = 5_000
 const IDLE_EVERY = 3
 const PANE = 'worktree-console-pending'
 const PANE_TITLE = '中控台'
+const BRIEF = 'worktree-console-brief'
+const BRIEF_EMPTY = '還沒有摘要'
+const BRIEF_PENDING = '摘要產生中…'
 const QUEUE_MAX = 5
 const TOAST_MAX = 30
 const SUMMARY_MAX = 20
@@ -198,6 +206,7 @@ let countdown: { key: string; tag: string; answer: string; meaning: string; unti
 let countdownTick: { cancel(): void } | null = null
 const counted = new Set<string>()
 let sending = false
+let briefFor: { key: string; tag: string } | null = null
 async function loadPreferences($: EngineInterface) {
   const home = await $.env.get('WORKTREE_CONSOLE_HOME') || `${await $.env.get('HOME')}/.config/worktree-console`
   const warnings: string[] = []
@@ -335,7 +344,7 @@ async function show($: EngineInterface, tag: string, key: string | null = null) 
   misses.set(key, n)
   if (n !== MISS_TOAST) return
   const installed = res || (await $.command.list().catch(() => [])).some(c => c.name === 'focus-show')
-  $.ui.toast(installed ? `[${tag}] 題目沒印出，按 Enter 印` : '印不出題目：需要另外安裝 focus-show')
+  $.ui.toast(installed ? `[${tag}] 題目沒印出，按 9 印` : '印不出題目：需要另外安裝 focus-show')
 }
 
 // A poll repeats an announce until `focus-shown` lands; while the console's turn runs only a press prints, and once it
@@ -493,13 +502,24 @@ async function pickCard($: EngineInterface, s: Session) {
   if (!res.deny) held = ring.indexOf(`name:${s.key}`)
 }
 
-// Enter on a card, or a click on its nickname, prints the question; on a card waiting on you that is not on the band, it switches first.
+// The recap dialog's 印出完整回報, as Enter on a card once did: a card waiting on you that is not on the band switches first (the switch prints it).
 async function printCard($: EngineInterface, s: Session) {
   sel = s.key
   if (s.pending && s.key !== focus.current) await act($, ['focus-pick', s.key])
   else void show($, s.tag, s.key === focus.current ? s.key : null)
   $.ui.invalidate('ui.render')
 }
+
+// Enter on a card, or a click on its nickname, opens that session's recap in a dialog Esc closes; nothing reaches the conversation.
+async function openBrief($: EngineInterface, s: Session) {
+  sel = s.key
+  briefFor = { key: s.key, tag: s.tag }
+  const opened = $.ui.open({ id: BRIEF, title: `${s.tag} 摘要`, focus: true, closeOnEscape: true })
+  $.ui.invalidate('ui.render')
+  await opened
+}
+
+const briefSession = () => (briefFor ? (byKey(briefFor.key) ?? sessions().find(s => s.tag === briefFor!.tag) ?? null) : null)
 
 // The 封存 tab's button: runs `console.mjs unarchive` straight from the mod, so nothing reaches the conversation.
 async function unarchiveCard($: EngineInterface, s: Session) {
@@ -514,11 +534,91 @@ const countsText = () => {
   return `工作中 ${count('執行中')} · 已回覆 ${count('回覆完畢')}`
 }
 
+const SUMMARY_POLL_MS = 3_000
+const SUMMARY_PANE = 'worktree-console-summary'
+const SUMMARY_LABEL = '摘要'
+// The label and the gap after it; wrapped lines start under the text, not under the label.
+const SUMMARY_PREFIX = 6
+const SUMMARY_PENDING = '產生中…'
+const SUMMARY_TIMEOUT_MS = 120_000
+const SUMMARY_SLACK_MS = 60_000
+
+// A child tab's newest recap, written by scripts/summary.mjs after each stop.
+let recap: Brief = { text: null, pending: false }
+let recapHome = ''
+let recapHandle = ''
+let recapTheme: Appearance['theme'] = 'neutral'
+
+async function readJsonFile($: EngineInterface, file: string): Promise<any> {
+  try {
+    return JSON.parse(await $.fs.read(file))
+  } catch {
+    return null
+  }
+}
+
+// A recap only counts for the session now in the tab.
+async function pollRecap($: EngineInterface) {
+  const name = encodeURIComponent(recapHandle)
+  const [summary, marker, id, now] = await Promise.all([
+    readJsonFile($, `${recapHome}/summaries/${name}.json`),
+    readJsonFile($, `${recapHome}/summaries/${name}.pending.json`),
+    $.session.id().catch(() => ''),
+    $.clock.now(),
+  ])
+  const mine = (x: any) => !!x && (!x.sessionId || !id || x.sessionId === id)
+  const next: Brief = {
+    text: mine(summary) && typeof summary.text === 'string' && summary.text.trim() ? summary.text.trim() : null,
+    pending: mine(marker) && now - (marker.since ?? 0) < (marker.timeoutMs ?? SUMMARY_TIMEOUT_MS) + SUMMARY_SLACK_MS,
+  }
+  if (next.text === recap.text && next.pending === recap.pending) return
+  recap = next
+  $.ui.invalidate('ui.render')
+}
+
+// In an Orca or herdr tab, watch this tab's recap files.
+async function startRecap($: EngineInterface) {
+  const herdr = (await $.env.get('HERDR_ENV')) === '1'
+  recapHandle = (herdr ? await $.env.get('HERDR_PANE_ID') : await $.env.get('ORCA_TERMINAL_HANDLE')) ?? ''
+  if (!recapHandle) return
+  recapHome = (await $.env.get('WORKTREE_CONSOLE_HOME')) || `${await $.env.get('HOME')}/.config/worktree-console`
+  let config = '{}'
+  try { config = await $.fs.read(`${recapHome}/config.json`) } catch {}
+  recapTheme = loadAppearance(config, []).theme
+  await pollRecap($)
+  $.clock.every(SUMMARY_POLL_MS, () => void pollRecap($))
+}
+
+// A child session's tab: its newest recap above the prompt once a turn ends; null when there is none to show.
+function recapBand($: EngineInterface, e: any) {
+  if (!recapHandle || e.props.hasSurvey || e.props.isWorking || (!recap.text && !recap.pending)) return null
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const theme = THEMES[recapTheme]
+  const width = Math.max(1, e.props.bodyColumns - SUMMARY_PREFIX)
+  const lines = recap.pending ? [SUMMARY_PENDING] : summaryLines(recap.text!, width, Math.max(1, Math.min(SUMMARY_MAX_LINES, e.props.maxRows - 2)))
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {lines.map((line, i) => (
+        <Box key={`summary:${i}`} flexDirection="row" height={1} flexShrink={0}>
+          <Box key={`summary-label:${i}`} width={SUMMARY_PREFIX} flexShrink={0}>{i === 0 ? <Text color={theme.accent} bold>{SUMMARY_LABEL}</Text> : <Text> </Text>}</Box>
+          <Text color={recap.pending ? theme.dim : theme.fg} wrap="truncate-end">{line}</Text>
+        </Box>
+      ))}
+      {!recap.pending && (
+        <Box key="summary-keys" flexDirection="row" paddingLeft={SUMMARY_PREFIX} height={1} flexShrink={0}>
+          <Button key="summary-full" hotkey="0" label="完整摘要" plain dimColor onPress={() => void $.ui.open({ id: SUMMARY_PANE, title: SUMMARY_LABEL, focus: true, closeOnEscape: true })} />
+        </Box>
+      )}
+    </Box>
+  )
+}
+
 // The worktree-console focus band: polls `console.mjs focus`, draws the question on screen, the queue, the side pane and the counts.
 export const register: Register = on => {
   registerKeepaliveView(on)
   on('session.start', async ($, e, next) => {
     inHerdr = (await $.env.get('HERDR_ENV')) === '1'
+    await startRecap($)
     if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || inHerdr) {
       sessionId = await $.session.id().catch(() => '')
       void poll($)
@@ -538,6 +638,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const res = await next(e)
     if (e.agentId === undefined) {
+      if (recapHandle) void pollRecap($)
       turning = false
       if (focus.active) void poll($)
     }
@@ -588,6 +689,7 @@ export const register: Register = on => {
       visibleKeys = []
       syncAnimation($)
     }
+    if (e.id === BRIEF) briefFor = null
     return next(e)
   })
 
@@ -637,7 +739,7 @@ export const register: Register = on => {
       </Box>
     )
     const hidden = tab === 'hidden'
-    const press = (r: Session) => (hidden ? unarchiveCard($, r) : printCard($, r))
+    const press = (r: Session) => (hidden ? unarchiveCard($, r) : openBrief($, r))
     const inner = Math.max(1, cols - 6)
     const card = (r: Session, i: number) => {
       const isSel = r.key === chosen
@@ -646,7 +748,10 @@ export const register: Register = on => {
       // Stage is the ticket's progress, not a repo attribute: a quiet header tag where the name can spare it, else first on the bottom row.
       const stageWord = r.stage !== '—' && r.stage !== '未開工' ? r.stage : ''
       const stageInHeader = !!stageWord && cols >= 46
-      const tag = truncateColumns(r.tag, Math.max(1, inner - 13 - (hidden ? 10 : 0) - (stageInHeader ? 7 : 0)))
+      // The advisor's suggestion is ready: ✓ 建議, only the ✓ below 46 columns.
+      const ready = r.advice?.state === 'ready'
+      const hintWidth = ready ? (cols >= 46 ? 7 : 2) : 0
+      const tag = truncateColumns(r.tag, Math.max(1, inner - 13 - (hidden ? 10 : 0) - (stageInHeader ? 7 : 0) - hintWidth))
       const summary = truncateColumns(r.summary, cols <= 36 ? 15 : SUMMARY_MAX)
       const room = inner - columns(summary) - CORNER_GAP - (stageWord && !stageInHeader ? columns(stageWord) + 3 : 0)
       const repo = tab === 'pending' && room >= REPO_MIN && cols > 36 ? truncateColumns(r.repo, room) : ''
@@ -659,7 +764,12 @@ export const register: Register = on => {
               {hidden && <Text color={theme.fg}>{`${tag}  `}</Text>}
               <Button key={`name:${r.key}`} label={hidden ? '取消封存' : tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} />
             </Box>
-            {stageInHeader && <Box key={`stage:${r.key}`} width={columns(stageWord)} flexShrink={0} marginLeft={1}><Text color={theme.dim}>{stageWord}</Text></Box>}
+            {(ready || stageInHeader) && (
+              <Box key={`right:${r.key}`} flexDirection="row" flexShrink={0}>
+                {ready && <Box key={`hint:${r.key}`} flexDirection="row" flexShrink={0} marginLeft={1}><Text color={theme.accent}>✓</Text>{cols >= 46 && <Text color={theme.dim}> 建議</Text>}</Box>}
+                {stageInHeader && <Box key={`stage:${r.key}`} width={columns(stageWord)} flexShrink={0} marginLeft={1}><Text color={theme.dim}>{stageWord}</Text></Box>}
+              </Box>
+            )}
           </Box>
           <Text color={theme.dim} wrap="truncate-end">{truncateColumns(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
           <Box flexDirection="row" justifyContent="space-between">
@@ -722,6 +832,44 @@ export const register: Register = on => {
     )
   })
 
+  on('ui.render', { component: 'Pane', requestId: BRIEF }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const theme = THEMES[appearance.theme]
+    const s = briefSession()
+    if (!s) return <Text color={theme.dim}>{BRIEF_EMPTY}</Text>
+    const brief = s.brief ?? null
+    return (
+      <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
+        <Box key="brief-text">{brief?.text ? <Text color={theme.fg} wrap="wrap">{brief.text}</Text> : <Text color={theme.dim}>{brief?.pending ? BRIEF_PENDING : BRIEF_EMPTY}</Text>}</Box>
+        {brief?.text && brief.pending ? <Box key="brief-pending"><Text color={theme.dim}>{`新的${BRIEF_PENDING}`}</Text></Box> : null}
+        <Box key="brief-actions" marginTop={1} flexDirection="row">
+          <Button
+            key="brief-print"
+            label="印出完整回報"
+            autoFocus
+            onPress={async () => {
+              await $.ui.close({ id: BRIEF }).catch(() => {})
+              await printCard($, s)
+            }}
+          />
+          <Text color={theme.dim}>  Esc 關閉</Text>
+        </Box>
+      </Box>
+    )
+  })
+
+  // The whole recap, uncut, in the side pane 0 opens from a child tab.
+  on('ui.render', { component: 'Pane', requestId: SUMMARY_PANE }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const theme = THEMES[recapTheme]
+    return (
+      <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
+        <Box key="summary-text">{recap.text ? <Text color={theme.fg} wrap="wrap">{recap.text}</Text> : <Text color={theme.dim}>{BRIEF_EMPTY}</Text>}</Box>
+        {recap.pending && <Box key="summary-pending"><Text color={theme.dim}>{`新的摘要${SUMMARY_PENDING}`}</Text></Box>}
+      </Box>
+    )
+  })
+
   // The console's counts sit after 「auto mode on」 under the prompt box; any other session keeps the engine's hint.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     if (!focus.active) return next(e)
@@ -732,7 +880,7 @@ export const register: Register = on => {
     if (!focus.active || e.props.hasSurvey) {
       bandKey = null
       syncAnimation($)
-      return next(e)
+      return (!focus.active && recapBand($, e)) || next(e)
     }
     const cur = byKey(focus.current)
     const fullQueue = queueOf()

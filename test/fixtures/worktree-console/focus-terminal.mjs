@@ -33,7 +33,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
   fs.mkdirSync(path.join(plugin, "hooks"));
   fs.writeFileSync(path.join(plugin, ".claude-plugin/plugin.json"), JSON.stringify({ name: "worktree-console", version: "1.0.0" }));
   fs.writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ modules: ["./worktree-console-focus.tsx"] }));
-  for (const name of ["worktree-console-focus.tsx", "console-theme.ts", "status-view.ts", "keepalive-view.tsx", "keepalive-text.mjs"])
+  for (const name of ["worktree-console-focus.tsx", "console-theme.ts", "status-view.ts", "keepalive-view.tsx", "keepalive-text.mjs", "session-summary-view.tsx"])
     fs.copyFileSync(name === "worktree-console-focus.tsx" && source ? source : path.join(root, "hooks", name), path.join(plugin, "hooks", name));
   const input = path.join(home, "input");
   fs.mkdirSync(path.join(input, ".claude-plugin"), { recursive: true });

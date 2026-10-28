@@ -34,6 +34,9 @@ import { gitScene } from "./git-scene.mjs";
 // The git scene goes with each stop.
 const stopEvent = (row, x) => ({ ...stopFields(row, x), scene: gitScene(row.path, row.baseRef) });
 
+// An interview finalised with 「動工」 hands off without asking, so in focus mode its stop still wakes the console instead of waiting on the band.
+const goAhead = (x) => /^\s*定稿完成（動工）[：:]/m.test(x.status.text ?? "");
+
 const { values } = parseArgs({
   options: { baseline: { type: "string" }, takeover: { type: "boolean", default: false } },
 });
@@ -197,14 +200,17 @@ for (;;) {
       }
     }
     for (const { row, x } of changed) logEvent("stop", stopEvent(row, x));
-    if (changed.length > 0 && !focused) {
+    const wake = focused ? changed.filter(({ x }) => goAhead(x)) : changed;
+    if (wake.length > 0) {
       decorate(data, { withStage: true, withTitles: true });
-      const fresh = new Set(changed.map(({ x }) => x));
-      const unanswered = data.rows.flatMap((row) =>
-        row.sessions.filter((x) => x.agent && !x.archived && !fresh.has(x) && ["waiting", "permission"].includes(x.status.kind)).map((x) => ({ row, x })),
-      );
+      const fresh = new Set(wake.map(({ x }) => x));
+      const unanswered = focused
+        ? []
+        : data.rows.flatMap((row) =>
+            row.sessions.filter((x) => x.agent && !x.archived && !fresh.has(x) && ["waiting", "permission"].includes(x.status.kind)).map((x) => ({ row, x })),
+          );
       const reports = [
-        ...changed.map(({ row, x }) => reportLines(row, x.status, x)),
+        ...wake.map(({ row, x }) => reportLines(row, x.status, x)),
         ...unanswered.map(({ row, x }) => reportLines(row, x.status, x, { again: true })),
       ];
       const names = nameLines(data.rows);

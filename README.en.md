@@ -70,6 +70,8 @@ Open Claude Code in an Orca or herdr tab inside one of your repos, then:
 
 State lives in `~/.config/worktree-console/` (console registry, focus state, archive, settings and your own `prompt.md`), `~/.config/claude-handoff/` (handoff settings and notes) and `~/.worktree-console/` (the activity log). The Linear token, when used, is kept in the macOS keychain under `worktree-console-linear`.
 
+Each time a child session the console manages stops, a background `claude -p --model sonnet` call recaps that turn's reply in a few plain sentences: the child tab shows the recap above its prompt (press `0` on an empty prompt for the full text), and Enter on a card in the console panel opens that session's recap. Set `"summaryModel": "haiku"` in `config.json` to change the model. Every call's tokens and `total_cost_usd` go to `~/.config/worktree-console/summary-usage.jsonl`.
+
 ## Session names
 
 Every session the console opens is started with `claude --name <name>`: kickoff, temporary sessions, extra tabs, reopened and moved sessions, the interview handoff and automatic handoffs. Without a name of your own, the name is the session's tag (ticket, nickname or branch). In Orca, a session started by `orca worktree create` gets its name through `/rename` once it first stops. In herdr, every tab the console opens has a name instead of a number (the first tab of a new workspace included), the console's own tab is `console`, and the watcher names any numbered tab running Claude Code after its session: your name, else the ticket, else the branch or folder. Tabs that already have a name are left alone.

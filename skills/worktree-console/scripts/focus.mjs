@@ -3,6 +3,7 @@ import path from "node:path";
 import { LABELS, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
 import { isConsoleSession } from "./log.mjs";
 import { adviceFor, advisorHome, advisorState, loadAdvice } from "./advice.mjs";
+import { readSummary } from "./summary.mjs";
 
 export const FOCUS_WAIT_MS = 60_000;
 const MODS_TTL_MS = 30_000;
@@ -215,6 +216,12 @@ function cardSummary(row, session, title, firsts) {
   return sessionCaption(session, firsts[session.paneKey]) ?? plain;
 }
 
+// The tab's newest plain-language recap for the pane's recap dialog.
+function briefOf(home, handle, now) {
+  const { text, pending } = readSummary(home, handle, now);
+  return { text, pending };
+}
+
 function plainReport(tag, status) {
   const [icon, label] = STATUS[status.kind];
   return [`### ${icon} ${tag} ${label}`, "", `> ${lastActivity(status)}`];
@@ -255,6 +262,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         question,
         options: item ? optionsOf(item) : [],
         advice: item ? adviceFor(advice, { path: row.path, status, since: session.since ?? session.agent?.stateStartedAt, now, advisor, cancelled: !!view.state.cancelled?.[key] }) : null,
+        brief: briefOf(home, session.handle, now),
         archived: !!session.archived,
         pending: !!item,
         report: report.join("\n"),

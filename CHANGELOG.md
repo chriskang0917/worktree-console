@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.0
+
+- feat(focus): recap each child session's stop and mark ready suggestions on cards
+
 ## 1.7.0
 
 - feat(focus): count down before the advisor auto-replies on the band
