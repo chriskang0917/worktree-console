@@ -28,14 +28,27 @@ import { terminals } from "./terminals.mjs";
 import { handedOver, keepaliveStep, keepaliveUsage, sessionEntries } from "./keepalive.mjs";
 import { sweepDisposable } from "./disposable.mjs";
 import { loadFocus, modsActive } from "./focus.mjs";
-import { answeredStops, commitLog, distillReminder, logEvent, registerConsole, sessionFor } from "./log.mjs";
+import { answeredStops, commitLog, distillReminder, logEvent, registerConsole, sessionFor, stopLogged } from "./log.mjs";
 import { gitScene } from "./git-scene.mjs";
 
-// The git scene goes with each stop.
-const stopEvent = (row, x) => ({ ...stopFields(row, x), scene: gitScene(row.path, row.baseRef) });
+const stopSince = (x) => x.since ?? x.agent?.stateStartedAt ?? null;
 
-// An interview finalised with 「動工」 hands off without asking, so in focus mode its stop still wakes the console instead of waiting on the band.
-const goAhead = (x) => /^\s*定稿完成（動工）[：:]/m.test(x.status.text ?? "");
+// The git scene goes with each stop.
+const stopEvent = (row, x) => ({ ...stopFields(row, x), since: stopSince(x), scene: gitScene(row.path, row.baseRef) });
+
+// A finalised interview hands off or asks whether to start, so in focus mode its stop still wakes the console instead of waiting on the band.
+const finalized = (x) => /^\s*定稿完成(（動工）)?[：:]/m.test(x.status.text ?? "");
+
+// Started without a baseline: finalised stops the log has not seen were missed while no watcher ran, so they count as changed.
+function unreported(rows, current) {
+  const snap = new Map(current);
+  for (const row of rows) {
+    for (const x of row.sessions) {
+      if (x.agent && !x.archived && needsYou(x.status.kind) && finalized(x) && !stopLogged({ ...stopFields(row, x), since: stopSince(x) })) snap.delete(x.paneKey);
+    }
+  }
+  return snap;
+}
 
 const { values } = parseArgs({
   options: { baseline: { type: "string" }, takeover: { type: "boolean", default: false } },
@@ -130,10 +143,12 @@ for (;;) {
   commitLog(start ? { force: true, reason: "中控台啟動" } : {});
   first = false;
   const current = snapshot(data.rows);
+  if (start) baseline = unreported(data.rows, current);
+  const next = formatBaseline(start ? baseline : current);
   const distill = distillReminder({ start });
   if (distill) {
     console.log(distill);
-    console.log(`baseline: ${formatBaseline(baseline ?? current)}`);
+    console.log(`baseline: ${next}`);
     process.exit(0);
   }
   const handoffs = handoffLines(data.rows, handoffEvents());
@@ -157,13 +172,13 @@ for (;;) {
       });
     }
     writeKeepalive(kept);
-    console.log(`baseline: ${formatBaseline(current)}`);
+    console.log(`baseline: ${next}`);
     process.exit(0);
   }
   const unremoved = sweepDisposable(data.terminals);
   if (unremoved.length > 0) {
     for (const line of unremoved) console.log(line);
-    console.log(`baseline: ${formatBaseline(current)}`);
+    console.log(`baseline: ${next}`);
     process.exit(0);
   }
   const kept = keepaliveStep(data.rows, readKeepalive());
@@ -179,7 +194,7 @@ for (;;) {
   writeKeepalive(kept.state);
   if (kept.lines.length > 0) {
     for (const line of kept.lines) console.log(line);
-    console.log(`baseline: ${formatBaseline(current)}`);
+    console.log(`baseline: ${next}`);
     process.exit(0);
   }
   const answered = answeredStops();
@@ -200,11 +215,11 @@ for (;;) {
       }
     }
     for (const { row, x } of changed) logEvent("stop", stopEvent(row, x));
-    const wake = focused ? changed.filter(({ x }) => goAhead(x)) : changed;
+    const wake = focused ? changed.filter(({ x }) => finalized(x)) : changed;
     if (wake.length > 0) {
       decorate(data, { withStage: true, withTitles: true });
       const fresh = new Set(wake.map(({ x }) => x));
-      const unanswered = focused
+      const unanswered = focused || start
         ? []
         : data.rows.flatMap((row) =>
             row.sessions.filter((x) => x.agent && !x.archived && !fresh.has(x) && ["waiting", "permission"].includes(x.status.kind)).map((x) => ({ row, x })),

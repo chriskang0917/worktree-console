@@ -2004,10 +2004,11 @@ test("紀錄 watch：進入待你處理時寫停下事件（狀態、問題前 1
   assert.equal(code, 0);
   const stops = events.filter((e) => e.event === "stop");
   assert.deepEqual(
-    stops.map(({ ts, handle, paneKey, sessionId, ...rest }) => rest),
+    stops.map(({ ts, handle, paneKey, sessionId, since, ...rest }) => rest),
     [{ event: "stop", repo: "app", ticket: "PROJ-101", status: "waiting", question: "要先補測試還是直接接 API？", suggestion: "先加單元測試", scene: "A" }],
   );
   assert.equal(stops[0].handle, "term_a");
+  assert.equal(typeof stops[0].since, "number", "記下停下時間，重掛時認得同一次停下");
   const subjects = spawnSync("git", ["-C", log, "log", "--format=%s"], { encoding: "utf8" }).stdout;
   assert.match(subjects, /中控台啟動/);
   assert.equal(spawnSync("git", ["-C", log, "remote"], { encoding: "utf8" }).stdout.trim(), "");
@@ -2549,20 +2550,41 @@ function focusRun(dir, env, args = ["focus"], { printed = true } = {}) {
   return { ...payload, currentTag: tagOf(payload.current), queueTags: payload.queue.map((q) => tagOf(q.key)), tagOf };
 }
 
-test("有 mods 時子 session 回「定稿完成（動工）：」仍叫醒中控台：只印那一則回報，其他題照舊留在橫條；只回「定稿完成：」的不叫醒", () => {
-  const finalize = (line) => (ps) => {
-    stagger(ps);
-    Object.assign(agentIn(ps, "chris-proj-102-question")[0], { state: "done", lastAssistantMessage: line, finalMessage: line });
-  };
-  const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), WATCH_TIMEOUT_MS: "300" };
-  const go = run("watch.mjs", ["--baseline", allPanes("busy")], { dir: fake({ mutatePs: finalize("定稿完成（動工）：/repo/.goals/proj-102.md") }), env });
-  assert.notEqual(go.lines[0], "[watch] timeout", go.out);
-  assert.ok(go.out.includes("定稿完成（動工）：/repo/.goals/proj-102.md"), go.out);
-  assert.ok(!go.out.includes("等你授權"), "其他題不跟著印");
-  assert.match(go.out, /^baseline: /m);
-  const later = run("watch.mjs", ["--baseline", allPanes("busy")], { dir: fake({ mutatePs: finalize("定稿完成：/repo/.goals/proj-102.md") }), env: { ...env, WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) } });
-  assert.equal(later.lines[0], "[watch] timeout", later.out);
-  assert.ok(!later.out.includes("###"), later.out);
+const finalize = (line) => (ps) => {
+  stagger(ps);
+  Object.assign(agentIn(ps, "chris-proj-102-question")[0], { state: "done", lastAssistantMessage: line, finalMessage: line });
+};
+
+test("有 mods 時子 session 回「定稿完成（動工）：」或「定稿完成：」都叫醒中控台：只印那一則回報，其他題照舊留在橫條", () => {
+  for (const line of ["定稿完成（動工）：/repo/.goals/proj-102.md", "定稿完成：/repo/.goals/proj-102.md"]) {
+    const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), WATCH_TIMEOUT_MS: "300" };
+    const out = run("watch.mjs", ["--baseline", allPanes("busy")], { dir: fake({ mutatePs: finalize(line) }), env });
+    assert.notEqual(out.lines[0], "[watch] timeout", out.out);
+    assert.ok(out.out.includes(line), out.out);
+    assert.ok(!out.out.includes("等你授權"), "其他題不跟著印");
+    assert.match(out.out, /^baseline: /m);
+  }
+});
+
+test("watcher 不帶 baseline 啟動：停下紀錄裡沒有的定稿補叫醒一次、只印那一則；同一次停下再重掛不再叫醒；不是定稿的停下不補叫醒；專注與一般模式都一樣", () => {
+  for (const mods of [true, false]) {
+    for (const line of ["定稿完成（動工）：/repo/.goals/proj-102.md", "定稿完成：/repo/.goals/proj-102.md"]) {
+      const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods }), WORKTREE_CONSOLE_LOG_DIR: fs.mkdtempSync(path.join(tmp, "catchup-log-")), WATCH_TIMEOUT_MS: "300" };
+      const dir = fake({ mutatePs: finalize(line) });
+      const first = run("watch.mjs", ["--takeover"], { dir, env });
+      assert.notEqual(first.lines[0], "[watch] timeout", first.out);
+      assert.ok(first.out.includes(line), first.out);
+      assert.ok(!first.out.includes("等你授權") && !first.out.includes("先前已回報"), "其他題不跟著印");
+      assert.match(first.out, /^baseline: /m);
+      const again = run("watch.mjs", ["--takeover"], { dir, env });
+      assert.deepEqual([again.lines[0], again.out.includes(line)], ["[watch] timeout", false], again.out);
+    }
+    const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods }), WORKTREE_CONSOLE_LOG_DIR: fs.mkdtempSync(path.join(tmp, "catchup-log-")), WATCH_TIMEOUT_MS: "300" };
+    for (const mutatePs of [stagger, finalize("做完了，測試全過。")]) {
+      const out = run("watch.mjs", ["--takeover"], { dir: fake({ mutatePs }), env });
+      assert.deepEqual([out.lines[0], out.out.includes("###")], ["[watch] timeout", false], out.out);
+    }
+  }
 });
 
 test("有 mods 時 watcher 不為題目叫醒中控台：題目停下只寫紀錄；重掛帶相同 baseline 也不輸出重複回報；沒有 mods 照舊整批回報", () => {
