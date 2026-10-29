@@ -41,6 +41,7 @@ import {
   reportLines,
   sessionTag,
 } from "../skills/worktree-console/scripts/lib.mjs";
+import { addDays, decisionCards, localDay, splitBatch } from "../skills/worktree-console/scripts/automation.mjs";
 import { FOCUS_WAIT_MS, emptyFocus, focusCancel, focusPick, focusReplied, focusSkip, focusStep, loadFocus, saveFocus, saveTitles } from "../skills/worktree-console/scripts/focus.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -3195,4 +3196,279 @@ test("代回倒數（專注）：可代回的題目排到待回覆最前（⚠�
   assert.deepEqual([held.current.key, held.queue.map((e) => e.key)], ["a", ["x", "b", "c"]]);
   const off = focusStep(focusCancel({ ...emptyFocus(), current: "a" }, "b", 5), entries, 10);
   assert.deepEqual(off.queue.map((e) => e.key), ["x", "c", "b"]);
+});
+
+// --- 試營運：到期提醒（watcher） ---
+
+// A stand-in advisor whose trial-report writes the report where the real one would (--final) or to --out, and logs every call.
+function trialAdvisor({ fail = false } = {}) {
+  const home = fs.mkdtempSync(path.join(tmp, "trial-advisor-"));
+  const log = path.join(home, "calls.log");
+  const script = path.join(home, "fake-advisor.mjs");
+  fs.writeFileSync(
+    script,
+    `import fs from "node:fs";\nimport path from "node:path";\nconst args = process.argv.slice(2);\nfs.appendFileSync(${JSON.stringify(log)}, args.join(" ") + "\\n");\nif (${fail}) process.exit(1);\nconst at = (k) => args[args.indexOf(k) + 1];\nif (args[0] === "trial-report") {\n  const target = args.includes("--out") ? at("--out") : args.includes("--final") ? path.join(${JSON.stringify(home)}, "reports", "trial-" + at("--until") + ".md") : null;\n  if (target) { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, "# 試營運報告\\n"); console.log(target); }\n}\n`,
+  );
+  fs.writeFileSync(path.join(home, "state.json"), JSON.stringify({ script, countdownSeconds: 15, types: {} }));
+  return { home, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []), final: (until) => path.join(home, "reports", `trial-${until}.md`) };
+}
+
+function trialHome(automation) {
+  const home = consoleHome();
+  if (automation !== undefined) fs.writeFileSync(path.join(home, "automation.json"), typeof automation === "string" ? automation : JSON.stringify(automation));
+  return home;
+}
+
+const today = () => localDay(Date.now());
+const watchTrial = (home, adv, extra = {}) => run("watch.mjs", ["--baseline", baselineWith()], { env: { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: adv.home, WATCH_TIMEOUT_MS: "150", ...extra } });
+
+test("試營運到期：到期前不提醒、不產報告；到期當天跑 trial-report --final，印「[試營運] 到期，報告：<路徑>」與 baseline 後結束", () => {
+  const adv = trialAdvisor();
+  const before = watchTrial(trialHome({ version: 1, trial: { from: addDays(today(), -3), until: addDays(today(), 1) } }), adv);
+  assert.equal(before.lines.at(-2), "[watch] timeout");
+  assert.deepEqual(adv.calls(), []);
+  const until = today();
+  const from = addDays(until, -14);
+  const due = watchTrial(trialHome({ version: 1, trial: { from, until } }), adv);
+  assert.equal(due.code, 0);
+  assert.deepEqual(due.lines.slice(-2, -1), [`[試營運] 到期，報告：${adv.final(until)}`]);
+  assert.match(due.lines.at(-1), /^baseline: /);
+  assert.ok(!due.out.includes("[watch] timeout"));
+  assert.deepEqual(adv.calls(), [`trial-report --final --from ${from} --until ${until}`]);
+});
+
+test("試營運到期：同一期只提醒一次（報告檔已在就不再產、不再叫醒）；過了到期日才開的中控台第一次輪詢就補提醒", () => {
+  const adv = trialAdvisor();
+  const until = addDays(today(), -2);
+  const home = trialHome({ version: 1, trial: { from: addDays(until, -14), until } });
+  assert.equal(watchTrial(home, adv).lines.at(-2), `[試營運] 到期，報告：${adv.final(until)}`, "晚兩天開也補提醒");
+  const again = watchTrial(home, adv);
+  assert.equal(again.lines.at(-2), "[watch] timeout");
+  assert.equal(adv.calls().length, 1);
+});
+
+test("試營運到期：沒有 automation.json、檔案讀不懂、沒裝 advisor 或 advisor 失敗時什麼都不做，watcher 照常跑到 timeout", () => {
+  const adv = trialAdvisor();
+  for (const home of [trialHome(), trialHome("{壞掉")]) {
+    assert.equal(watchTrial(home, adv).lines.at(-2), "[watch] timeout");
+  }
+  assert.deepEqual(adv.calls(), []);
+  const due = { version: 1, trial: { from: addDays(today(), -14), until: today() } };
+  assert.equal(watchTrial(trialHome(due), { home: path.join(tmp, "no-advisor-here") }).lines.at(-2), "[watch] timeout", "沒裝 advisor");
+  const broken = trialAdvisor({ fail: true });
+  const res = watchTrial(trialHome(due), broken, { WATCH_TIMEOUT_MS: "300" });
+  assert.equal(res.lines.at(-2), "[watch] timeout", "advisor 失敗");
+  assert.equal(broken.calls().length, 1, "失敗了同一個 watcher 不每輪重跑");
+});
+
+test("試營運期中：開始第 7 天起只寫一次期中報告，不印、不叫醒中控台；之後輪詢不再重寫", () => {
+  const adv = trialAdvisor();
+  const from = addDays(today(), -7);
+  const until = addDays(from, 14);
+  const home = trialHome({ version: 1, trial: { from, until } });
+  const mid = path.join(adv.home, "reports", `trial-${until}-midterm.md`);
+  const res = watchTrial(home, adv, { WATCH_TIMEOUT_MS: "300" });
+  assert.equal(res.lines.at(-2), "[watch] timeout");
+  assert.ok(!res.out.includes("[試營運]"));
+  assert.ok(fs.existsSync(mid));
+  assert.deepEqual(adv.calls(), [`trial-report --from ${from} --until ${today()} --out ${mid}`]);
+  watchTrial(home, adv);
+  assert.equal(adv.calls().length, 1);
+  const early = trialAdvisor();
+  watchTrial(trialHome({ version: 1, trial: { from: addDays(today(), -6), until: addDays(today(), 8) } }), early);
+  assert.deepEqual(early.calls(), [], "第 6 天還不寫");
+});
+
+// --- 待決分頁：批次核可 ---
+
+const BATCH_Q = "- **A**：現在刪\n- **B**：先留著\n\n已合併的遠端 branch，選哪個做法？";
+
+// An advisor home whose open prediction for PROJ-102(question) has the given tier; `free` puts it in free-predictions.jsonl instead.
+function batchAdvisor({ tier = "batch", verb = "delete-remote-branch", free = false, answer = "a" } = {}) {
+  const home = fs.mkdtempSync(path.join(tmp, "batch-advisor-"));
+  const log = path.join(home, "calls.log");
+  const script = path.join(home, "fake-advisor.mjs");
+  fs.writeFileSync(script, `import fs from "node:fs";\nfs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`);
+  fs.writeFileSync(path.join(home, "state.json"), JSON.stringify({ script, countdownSeconds: 15, types: { 流程關卡: "open" } }));
+  const at = new Date(1790787800001).toISOString();
+  const target = fs.realpathSync(wt("chris-proj-102-question"));
+  const lines = [
+    { event: "start", id: "p1", at, path: target, tag: "PROJ-102(question)", kind: free ? "free" : "text", question: BATCH_Q },
+    { event: "done", ref: "p1", at, answer, reason: "已合併進 main", type: "流程關卡", principle: "不可逆", precedent: "h1", stage: "實作中", format: "訪談題", keywords: [], change: 10, verb, tier },
+  ];
+  fs.writeFileSync(path.join(home, free ? "free-predictions.jsonl" : "predictions.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  fs.writeFileSync(path.join(home, "answers.jsonl"), "");
+  return { home, target, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []) };
+}
+
+function batchHome(enabled) {
+  const home = consoleHome({ mods: true });
+  if (enabled !== undefined) fs.writeFileSync(path.join(home, "automation.json"), JSON.stringify({ version: 1, trial: { from: "2026-10-30", until: "2026-11-13", predictFree: true }, batch: { enabled } }));
+  return home;
+}
+
+const decisionsLog = (home) => (fs.existsSync(path.join(home, "decisions.jsonl")) ? fs.readFileSync(path.join(home, "decisions.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
+const onBand = (view, tag) => [view.current, ...view.queue.map((q) => q.key)].map(view.tagOf).includes(tag);
+
+test("待決關閉：沒有 automation.json 與 batch.enabled false 時 console.mjs focus 輸出逐字相同，沒有 decisions 欄位，第二級的題照舊上橫條", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const adv = batchAdvisor();
+  const outOf = (home) => run("console.mjs", ["focus"], { dir, env: { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: adv.home } }).out.replaceAll(home, "<home>");
+  const none = outOf(batchHome());
+  const off = outOf(batchHome(false));
+  assert.equal(off, none);
+  const payload = JSON.parse(none);
+  assert.ok(!("decisions" in payload));
+  assert.ok([payload.current, ...payload.queue.map((q) => q.key)].map((k) => payload.sessions.find((s) => s.key === k)?.tag).includes("PROJ-102(question)"));
+});
+
+test("待決關閉：splitBatch 原封不動交回同一份排隊題目，batch 是 null", () => {
+  const prev = process.env.WORKTREE_CONSOLE_HOME;
+  const entries = [{ key: "k", item: { row: { path: "/x" }, session: { status: { kind: "waiting" } } } }];
+  try {
+    for (const enabled of [undefined, false]) {
+      process.env.WORKTREE_CONSOLE_HOME = batchHome(enabled);
+      const res = splitBatch(entries);
+      assert.equal(res.open, entries);
+      assert.equal(res.batch, null);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
+    else process.env.WORKTREE_CONSOLE_HOME = prev;
+  }
+});
+
+test("待決打開：分題或組卡片出錯時退回 batch 關閉、卡片退回只用預測原文，橫條不受影響", () => {
+  const prev = process.env.WORKTREE_CONSOLE_HOME;
+  try {
+    const home = batchHome(true);
+    process.env.WORKTREE_CONSOLE_HOME = home;
+    const broken = [{ key: "k", item: { row: { path: "/x" } } }];
+    const res = splitBatch(broken);
+    assert.equal(res.open, broken);
+    assert.equal(res.batch, null);
+    const p = { id: "p1", tier: "batch", verb: "merge", kind: "text", question: "要合併嗎？", answer: "a", reason: "CI 綠了" };
+    const cards = decisionCards([{ entry: { key: "k", paneKey: "pk", tag: "T1", item: {} }, prediction: p }], () => { throw new Error("boom"); }, home);
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].predictionId, "p1");
+    assert.equal(cards[0].tag, "T1");
+    assert.equal(cards[0].action, "合併");
+    assert.equal(cards[0].context, "要合併嗎？");
+    assert.equal(cards[0].suggestion, "建議：a");
+  } finally {
+    if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
+    else process.env.WORKTREE_CONSOLE_HOME = prev;
+  }
+});
+
+test("待決打開：第二級的題列在 decisions、不進橫條排隊；第三級（ask）與一般題照舊上橫條", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const adv = batchAdvisor();
+  const env = { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: adv.home };
+  const view = focusRun(dir, env);
+  assert.ok(!onBand(view, "PROJ-102(question)"));
+  assert.deepEqual(view.decisions.map((d) => [d.id, d.tag, d.verb, d.action, d.answer, d.reason, d.failed]), [["p1", "PROJ-102(question)", "delete-remote-branch", "刪遠端 branch", "a", "已合併進 main", false]]);
+  assert.equal(view.decisions[0].question, "已合併的遠端 branch，選哪個做法？");
+  const [card] = view.decisions;
+  assert.deepEqual([card.paneKey, card.predictionId, card.tier, card.kind, card.fullQuestion, card.suggestion], [view.sessions.find((s) => s.tag === "PROJ-102(question)").key, "p1", "batch", "text", BATCH_Q, "建議：a，已合併進 main"]);
+  for (const tier of ["ask", "auto", null]) {
+    const other = batchAdvisor({ tier });
+    const v = focusRun(dir, { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: other.home });
+    assert.ok(onBand(v, "PROJ-102(question)"), `tier ${tier} 照舊上橫條`);
+    assert.deepEqual(v.decisions, []);
+  }
+});
+
+test("待決核可：decide <id> approve 先照〈使用者在中控台回答〉記下回答，再用 reply 送出，最後寫 decisions.jsonl；橫條原本的題目不被拿走", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const adv = batchAdvisor();
+  const home = batchHome(true);
+  const env = { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: adv.home, SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" };
+  const before = focusRun(dir, env);
+  const res = run("console.mjs", ["decide", "p1", "approve"], { dir, env });
+  assert.equal(res.code, 0, res.out);
+  assert.equal(res.out, "[PROJ-102(question)] 已核可並送出：a");
+  assert.deepEqual(adv.calls(), [["answer", "--tag", "PROJ-102(question)", "--path", adv.target, "--answer", "a", "--hit", "yes"]]);
+  assert.deepEqual(sentTo(dir), ["terminal send --terminal term_b --text A --enter"]);
+  const [rec] = decisionsLog(home);
+  assert.deepEqual({ ...rec, id: rec.id.startsWith("d"), at: !Number.isNaN(Date.parse(rec.at)) }, { event: "resolve", id: true, at: true, predictionId: "p1", tag: "PROJ-102(question)", verb: "delete-remote-branch", choice: "approve", by: "panel", sent: true });
+  assert.equal(readJson(home, "focus.json").current, before.current);
+  assert.equal(readJson(home, "focus.json").wait, null);
+});
+
+test("待決核可：送出失敗時撤回 advisor 的紀錄、decisions.jsonl 記 sent:false，題目留在清單標送出失敗；沒在清單上的 id 不送", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const adv = batchAdvisor();
+  const home = batchHome(true);
+  const env = { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: adv.home, SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" };
+  const res = run("console.mjs", ["decide", "--all", "approve"], { dir, env: { ...env, FAKE_ORCA_SEND_FAIL: "1" } });
+  assert.equal(res.code, 1);
+  assert.equal(res.out, "[PROJ-102(question)] 送出失敗，留在待決");
+  assert.deepEqual(adv.calls().map((c) => c[0]), ["answer", "undo"]);
+  assert.equal(decisionsLog(home)[0].sent, false);
+  fs.writeFileSync(path.join(adv.home, "answers.jsonl"), "");
+  const view = focusRun(dir, env);
+  assert.deepEqual(view.decisions.map((d) => [d.id, d.failed]), [["p1", true]]);
+  const stray = run("console.mjs", ["decide", "p9", "approve"], { dir, env });
+  assert.deepEqual([stray.code, stray.out], [1, "[p9] 不在待決清單"]);
+  assert.equal(decisionsLog(home).length, 1);
+});
+
+test("待決核可：batch 沒打開時 decide 拒絕、什麼都不送", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const adv = batchAdvisor();
+  const res = run("console.mjs", ["decide", "--all", "approve"], { dir, env: { WORKTREE_CONSOLE_HOME: batchHome(false), ADVISOR_HOME: adv.home } });
+  assert.deepEqual([res.code, res.out], [1, "待決分頁沒有打開：automation.json 的 batch.enabled 不是 true"]);
+  assert.deepEqual(adv.calls(), []);
+});
+
+test("待決：自由提問只取第二級的預測；核可時送給子 session 的就是預測的答案原文", () => {
+  const said = "先留著，等 release 後再刪";
+  const dir = replyWorld("這個遠端 branch 已合併，要現在刪嗎？", said);
+  const adv = batchAdvisor({ free: true, answer: said });
+  const home = batchHome(true);
+  const env = { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: adv.home, SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" };
+  const view = focusRun(dir, env);
+  assert.deepEqual(view.decisions.map((d) => [d.id, d.answer, d.options]), [["p1", said, []]]);
+  const res = run("console.mjs", ["decide", "p1", "approve"], { dir, env });
+  assert.equal(res.out, `[PROJ-102(question)] 已核可並送出：${said}`);
+  assert.deepEqual(sentTo(dir), [`terminal send --terminal term_b --text ${said} --enter`]);
+  const plain = batchAdvisor({ free: true, tier: null });
+  assert.deepEqual(focusRun(dir, { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: plain.home }).decisions, [], "不是第二級的自由提問不列");
+});
+
+test("待決自己回：decide <id> manual 寫一行 choice manual、sent null 的 decisions.jsonl，不找 advisor 記回答、不送；題目離開待決、直接成為橫條目前這題，之後也不再排回待決", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const adv = batchAdvisor();
+  const home = batchHome(true);
+  const env = { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: adv.home, SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" };
+  const before = focusRun(dir, env);
+  assert.notEqual(before.currentTag, "PROJ-102(question)");
+  const res = run("console.mjs", ["decide", "p1", "manual"], { dir, env });
+  assert.deepEqual([res.code, res.out], [0, "[PROJ-102(question)] 改成自己回，已放上橫條"]);
+  assert.deepEqual(adv.calls(), []);
+  assert.equal(fs.existsSync(path.join(dir, "calls.log")) ? sentTo(dir).length : 0, 0);
+  const [rec] = decisionsLog(home);
+  assert.deepEqual({ ...rec, id: rec.id.startsWith("d"), at: !Number.isNaN(Date.parse(rec.at)) }, { event: "resolve", id: true, at: true, predictionId: "p1", tag: "PROJ-102(question)", verb: "delete-remote-branch", choice: "manual", by: "panel", sent: null });
+  const after = focusRun(dir, env);
+  assert.deepEqual(after.decisions, []);
+  assert.equal(after.currentTag, "PROJ-102(question)");
+  assert.equal(focusRun(dir, env).currentTag, "PROJ-102(question)", "再輪詢一次也不會排回待決");
+  const again = run("console.mjs", ["decide", "p1", "approve"], { dir, env });
+  assert.deepEqual([again.code, again.out], [1, "[p1] 不在待決清單"]);
+  assert.equal(run("console.mjs", ["decide", "--all", "manual"], { dir, env }).code, 1, "自己回不收 --all");
+});
+
+test("待決詳情的資料：子 session 那則回覆全文（顯示問題印的同一份，不含標題與引用符號）、階段、advisor 記的前例題目與回答", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const adv = batchAdvisor();
+  fs.writeFileSync(path.join(adv.home, "history.jsonl"), JSON.stringify({ id: "h1", question: "要刪掉舊的遠端 branch 嗎？", answer: "a" }) + "\n");
+  const view = focusRun(dir, { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: adv.home });
+  const [card] = view.decisions;
+  const report = view.sessions.find((x) => x.tag === "PROJ-102(question)").report;
+  assert.equal(card.context, report.split("\n").slice(2).map((l) => l.replace(/^> ?/, "")).join("\n").trim());
+  assert.ok(card.context.includes(BATCH_Q));
+  assert.deepEqual(card.precedent, { question: "要刪掉舊的遠端 branch 嗎？", answer: "a" });
+  const none = batchAdvisor();
+  assert.equal(focusRun(dir, { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: none.home }).decisions[0].precedent, null, "前例找不到就是 null");
 });

@@ -30,6 +30,7 @@ import { sweepDisposable } from "./disposable.mjs";
 import { loadFocus, modsActive } from "./focus.mjs";
 import { answeredStops, commitLog, distillReminder, logEvent, registerConsole, sessionFor, stopLogged } from "./log.mjs";
 import { gitScene } from "./git-scene.mjs";
+import { trialStep } from "./automation.mjs";
 
 const stopSince = (x) => x.since ?? x.agent?.stateStartedAt ?? null;
 
@@ -125,6 +126,7 @@ function remoteControl(self, manager) {
 
 let baseline = values.baseline !== undefined ? parseBaseline(values.baseline) : null;
 const started = Date.now();
+const trialTried = new Set();
 let first = true;
 
 for (;;) {
@@ -148,6 +150,12 @@ for (;;) {
   const distill = distillReminder({ start });
   if (distill) {
     console.log(distill);
+    console.log(`baseline: ${next}`);
+    process.exit(0);
+  }
+  const trial = trialStep(Date.now(), trialTried);
+  if (trial) {
+    console.log(trial);
     console.log(`baseline: ${next}`);
     process.exit(0);
   }
