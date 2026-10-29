@@ -144,6 +144,14 @@ export function answeredStops(now = Date.now()) {
   return out;
 }
 
+// Whether this stop of this session is already in the log; older records without `since` match on the question.
+export function stopLogged({ handle, since, status, question }, now = Date.now()) {
+  if (!handle) return false;
+  return readEvents(since ?? now - 2 * 24 * 3600 * 1000).some(
+    (e) => e.event === "stop" && e.handle === handle && (since != null && e.since != null ? e.since === since : e.status === status && e.question === question),
+  );
+}
+
 function readJson(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
