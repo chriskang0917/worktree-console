@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.0
+
+- feat(trial): remind the console when the trial ends and batch second-tier questions in a 待決 tab
+
 ## 1.8.2
 
 - fix(stage): read dev-flow run folders under ~/.sara-dev-flow and add console.mjs stage
