@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.1
+
+- fix(watch): wake the console on every finalize and catch up missed ones on restart
+
 ## 1.8.0
 
 - feat(focus): recap each child session's stop and mark ready suggestions on cards
