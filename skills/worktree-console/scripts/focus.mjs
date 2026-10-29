@@ -4,6 +4,7 @@ import { LABELS, consoleHome, fillTitle, firstInstruction, lastActivity, needsYo
 import { isConsoleSession } from "./log.mjs";
 import { adviceFor, advisorHome, advisorState, loadAdvice } from "./advice.mjs";
 import { readSummary } from "./summary.mjs";
+import { decisionCards, splitBatch } from "./automation.mjs";
 
 export const FOCUS_WAIT_MS = 60_000;
 const MODS_TTL_MS = 30_000;
@@ -178,14 +179,14 @@ export function waitLine(view) {
 
 // Loads the saved focus, applies `change` (a reply, a pick), steps it over `rows` and saves it back.
 export function syncFocus(rows, { now = Date.now(), change = null, heartbeat = false } = {}) {
-  const entries = markAuto(focusEntries(rows), now);
+  const { open: entries, batch } = splitBatch(markAuto(focusEntries(rows), now), now);
   const busy = rows.flatMap((row) => row.sessions.filter((s) => s.status.kind === "busy").map((s) => ({ paneKey: s.paneKey, handle: s.handle, tag: sessionTag(row, s) })));
   let state = loadFocus();
   if (change) state = change(state, entries, now);
   const view = focusStep(state, entries, now, busy);
   if (heartbeat) view.state.modsAt = now;
   saveFocus(view.state);
-  return view;
+  return batch ? { ...view, decisions: batch } : view;
 }
 
 // Which waiting questions the advisor would answer itself once they reach the band.
@@ -283,6 +284,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
       queue: view.queue.map((e) => ({ key: e.key, isNew: (view.state.seen?.[e.key] ?? 0) > since })),
       stats: `${count(STATUS.anomaly[1]) ? `session 異常 ${count(STATUS.anomaly[1])} | ` : ""}等待回應 ${count("等待回應")} | 等待授權 ${count("等待授權")} | 回覆完畢 ${count("回覆完畢")} | 執行中 ${count("執行中")} | 封存 ${sessions.filter((s) => s.archived).length} | 閒置 ${count("閒置")}`,
       sessions,
+      ...(view.decisions ? { decisions: decisionCards(view.decisions, optionsOf, home) } : {}),
     },
     titles,
     firsts,

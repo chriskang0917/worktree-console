@@ -55,7 +55,7 @@ const STATS = '等待回應 3 | 等待授權 1 | 回覆完畢 1 | 執行中 1 | 
 const keyOf = (tag: string) => `${tag}@1`
 const idOf = (key: string) => `id-${key.replace('@', '-')}`
 
-type World = { focus: any; closes?: string[]; notes?: string[][]; afterAuto?: any; answer?: string; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
+type World = { focus: any; decideFails?: string[]; closes?: string[]; notes?: string[][]; afterAuto?: any; answer?: string; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
 const appearanceConfig = new WeakMap<World, AppearanceConfig | string>()
 
@@ -93,6 +93,16 @@ function fakeConsole(on: On, world: World) {
       world.focus = world.afterAuto ?? f
     } else if (args[0] === 'focus-cancel' && f.active) {
       world.focus = { ...f, sessions: f.sessions.map((s: any) => (s.key === args[1] && s.advice ? { ...s, advice: { ...s.advice, auto: undefined } } : s)) }
+    } else if (args[0] === 'decide' && args[2] === 'manual' && f.active) {
+      const d = f.decisions.find((x: any) => x.id === args[1])
+      world.focus = { ...f, decisions: f.decisions.filter((x: any) => x.id !== args[1]) }
+      return { value: { exitCode: 0, stdout: `[${d.tag}] 改成自己回，已放上橫條\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    } else if (args[0] === 'decide' && f.active) {
+      const ids = args[1] === '--all' ? f.decisions.map((d: any) => d.id) : [args[1]]
+      const fails = world.decideFails ?? []
+      const lines = f.decisions.filter((d: any) => ids.includes(d.id)).map((d: any) => (fails.includes(d.id) ? `[${d.tag}] 送出失敗，留在待決` : `[${d.tag}] 已核可並送出：${d.answer}`))
+      world.focus = { ...f, decisions: f.decisions.flatMap((d: any) => (!ids.includes(d.id) ? [d] : fails.includes(d.id) ? [{ ...d, failed: true }] : [])) }
+      return { value: { exitCode: fails.length ? 1 : 0, stdout: `${lines.join('\n')}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     } else if (args[0] === 'unarchive') {
       world.focus = { ...f, sessions: f.sessions.map((s: Card) => (s.tag === args[1] ? { ...s, archived: false } : s)) }
       return { value: { exitCode: 0, stdout: `[${args[1]}] 已取消封存\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -2313,5 +2323,239 @@ test('摘要小面板: 印出完整回報 closes the dialog and prints exactly t
   expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([['focus-pick', keyOf('logging')]])
   expect(w.shown.at(-1)).toBe('logging')
   expect(w.writes[`${HOME}/show/logging.md`]).toBe(report('logging'))
+  await ui.unmount()
+})
+
+// --- 待決 (automation.json batch on) ---
+
+const decision = (id: string, extra: object) => ({ id, key: `${id}@1`, tag: 'PROJ-7882', repo: 'proj-v2-frontend', group: 'PROJ-7882', verb: 'delete-remote-branch', action: '刪遠端 branch', question: '舊 branch 已合併，要刪掉遠端的嗎？', options: ['刪掉', '先留著'], answer: 'a', reason: '已合併進 dev，留著沒用', failed: false, ...extra })
+const DECISIONS = [
+  decision('p1', {}),
+  decision('p2', { tag: 'PROJ-7882#2', verb: 'linear-mention', action: 'Linear @ 同事', question: '要在票上 @ 後端請他補 API 嗎？', options: ['@ andrew', '先不要'], answer: 'a', reason: 'API 格式已定' }),
+  decision('p3', { tag: 'weekly', group: 'weekly', repo: 'agent-skills', verb: 'weekly-assign-write', action: '寫入每週分票', question: '草案確認了，要寫進 Linear 嗎？', options: [], answer: '照草案寫入', reason: '草案你已看過' }),
+]
+const withDecisions = (list: object[] = DECISIONS) => ({ ...pending(), decisions: list })
+const tabButtons = async (ui: any) => (await ui.findAll({ type: 'Button' })).filter((b: any) => b.key.startsWith('tab:')).map((b: any) => [b.key, b.props.hotkey, b.props.label])
+
+test('待決：batch 沒打開（payload 沒有 decisions）時分頁、按鍵、說明列都和原本一樣；打開才多一個 r: 待決 N，說明列換成 qwer', async ($, on) => {
+  const off = world(pending())
+  const clock = await start($, on, off)
+  await openPane($)
+  let ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  expect(await tabButtons(ui)).toEqual([['tab:pending', 'q', '待回覆 5'], ['tab:all', 'w', '全部 7'], ['tab:hidden', 'e', '封存 1']])
+  expect((await ui.findAll({ type: 'Button' })).filter((b: any) => ['r', 'a'].includes(b.props.hotkey))).toEqual([])
+  expect(await footerLines(ui)).toEqual(['qwe 切分頁 · 1-9,0/↑↓ 選卡片'])
+  await ui.unmount()
+  off.focus = withDecisions()
+  await clock.advance(5_000)
+  ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  expect(await tabButtons(ui)).toEqual([['tab:pending', 'q', '待回覆 5'], ['tab:all', 'w', '全部 7'], ['tab:hidden', 'e', '封存 1'], ['tab:decisions', 'r', '待決 3']])
+  expect(await footerLines(ui)).toEqual(['qwer 切分頁 · 1-9,0/↑↓ 選卡片'])
+  expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
+  await ui.unmount()
+})
+
+test('待決：依票分組，每組一條 `── 票 · repo ── N 題`；每張卡是動作、題目、建議三行，右上角 ✓ 核可；上方 N 題等你核可與 a: 全部核可', async ($, on) => {
+  const w = world(withDecisions())
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  expect((await ui.find({ key: 'tab:decisions' }))?.props.dimColor).toBe(false)
+  const all = await ui.find({ key: 'decide-all' })
+  expect([all?.props.hotkey, all?.props.label]).toEqual(['a', '全部核可'])
+  expect((await ui.find({ key: 'decide-count' }))?.text).toBe('3 題等你核可 · 核可後照建議送出')
+  const rules = (await texts(ui)).filter((t: string) => t.startsWith('── ') && t.endsWith(' 題'))
+  expect(rules.map((t: string) => [t.split(' ')[1], t.split(' ')[3], t.split(' ').slice(-2).join(' ')])).toEqual([['PROJ-7882', 'proj-v2-frontend', '2 題'], ['weekly', 'agent-skills', '1 題']])
+  const first = (await ui.find({ key: 'decision:p1' }))!.text
+  expect(first).toContain('刪遠端 branch')
+  expect(first).toContain('舊 branch 已合併，要刪掉遠端的嗎？')
+  expect(first).toContain('建議：a 刪掉，已合併進 dev，留著沒用')
+  expect((await ui.find({ key: 'decision:p2' }))!.text).toContain('PROJ-7882#2 · 要在票上 @ 後端')
+  expect((await ui.find({ key: 'decision:p3' }))!.text).toContain('建議：照草案寫入，草案你已看過')
+  expect((await ui.findAll({ type: 'Button' })).filter((b: any) => /^(approve|manual):/.test(b.key)).map((b: any) => [b.key, b.props.label])).toEqual([['approve:p1', 'y ✓ 核可'], ['manual:p1', 'm 自己回'], ['approve:p2', '✓ 核可'], ['manual:p2', '自己回'], ['approve:p3', '✓ 核可'], ['manual:p3', '自己回']])
+  expect((await ui.find({ key: 'decision-right:p1' }))?.text).toBe('y ✓ 核可 · m 自己回')
+  expect((await ui.find({ key: 'decision-right:p2' }))?.text).toBe('✓ 核可 · 自己回')
+  expect(await cardTags(ui)).toEqual([])
+  expect((await ui.find({ key: 'decide-footer' }))?.text).toBe('Enter 詳情 · y 核可 · m 自己回 · a 全部核可 · qwer 切分頁')
+  await ui.unmount()
+})
+
+test('待決：卡片的 ✓ 核可直接跑 console.mjs decide <id> approve 再輪詢，不經對話；那張卡離開、分頁數字減一、跳一則送出結果', async ($, on) => {
+  const w = world(withDecisions())
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await ui.press({ key: 'approve:p2' })
+  expect(w.calls.at(-2)).toEqual(['decide', 'p2', 'approve'])
+  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session'])
+  expect(w.toasts).toContain('[PROJ-7882#2] 已核可並送出：a')
+  expect(w.shown).toEqual([])
+  expect(await ui.find({ key: 'decision:p2' })).toBeFalsy()
+  expect((await ui.find({ key: 'tab:decisions' }))?.props.label).toBe('待決 2')
+  await ui.unmount()
+})
+
+test('待決：a 全部核可跑 decide --all approve；送出失敗的題留在清單標「送出失敗」，外框換成錯誤色，浮動通知寫成功與失敗各幾題', async ($, on) => {
+  const w = world(withDecisions())
+  w.decideFails = ['p3']
+  appearanceConfig.set(w, { theme: 'dracula', motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await ui.press({ key: 'decide-all' })
+  expect(w.calls.at(-2)).toEqual(['decide', '--all', 'approve'])
+  expect(w.toasts).toContain('已核可 2 題，1 題送出失敗')
+  expect((await ui.findAll({ type: 'Button' })).filter((b: any) => b.key.startsWith('approve:')).map((b: any) => b.key)).toEqual(['approve:p3'])
+  const failed = await ui.find({ key: 'decision:p3' })
+  expect(failed!.text).toContain('送出失敗')
+  expect((await ui.findAll({ type: 'Text' })).some((t: any) => t.text === '送出失敗' && t.props.color === THEMES.dracula.error)).toBe(true)
+  expect((await ui.find({ key: 'tab:decisions' }))?.props.label).toBe('待決 1')
+  await ui.unmount()
+})
+
+test('待決：空清單是置中的圓角框，寫「沒有等你核可的動作」與一行灰字說明，沒有全部核可', async ($, on) => {
+  const w = world(withDecisions([]))
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  expect((await ui.find({ key: 'tab:decisions' }))?.props.label).toBe('待決 0')
+  await ui.press({ key: 'tab:decisions' })
+  const box = await ui.find({ key: 'decide-empty' })
+  expect(box?.props.borderStyle).toBe('round')
+  expect(box!.text).toContain('沒有等你核可的動作')
+  expect(box!.text).toContain('刪遠端 branch、@ 同事這類題會排到這裡')
+  expect(await ui.find({ key: 'decide-all' })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('待決：batch 關掉時停在待決分頁的面板回到待回覆，分頁只剩 q/w/e', async ($, on) => {
+  const w = world(withDecisions())
+  const clock = await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  w.focus = pending()
+  await clock.advance(5_000)
+  expect(await tabButtons(ui)).toEqual([['tab:pending', 'q', '待回覆 5'], ['tab:all', 'w', '全部 7'], ['tab:hidden', 'e', '封存 1']])
+  expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
+  await ui.unmount()
+})
+
+const DETAIL = 'worktree-console-decision'
+const detailPane = (bodyColumns = 60) => ({ plugin: PLUGIN, component: 'Pane' as const, requestId: DETAIL, props: { title: '待決', isFocused: true, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } as any })
+const LONG_REPLY = '舊的 feat/proj-7882-old 已經合併進 dev，CI 也綠了。\n\n我想把遠端的 branch 刪掉，免得之後有人誤推。\n\n- **A**：刪掉\n- **B**：先留著\n\n要刪掉遠端的嗎？'
+const detailed = () => withDecisions(DECISIONS.map(d => (d.id === 'p1' ? { ...d, stage: '實作中', context: LONG_REPLY, precedent: { question: '要刪掉 feat/proj-7001 的遠端 branch 嗎？', answer: 'a' } } : d)))
+const decideCalls = (w: World) => w.calls.filter(c => c[0] === 'decide')
+
+test('待決詳情：Enter（選中卡片的題目）或點題目開詳情小視窗，可按 Esc 關；Enter 不再核可，什麼都不送也不進對話', async ($, on) => {
+  const w = world(detailed())
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  const first = await ui.find({ key: 'detail:p1' })
+  expect(first?.props.autoFocus).toBe(true)
+  await ui.press({ key: 'detail:p1' })
+  expect(w.opened.at(-1)).toMatchObject({ id: DETAIL, title: 'PROJ-7882 待決', focus: true, closeOnEscape: true })
+  expect(decideCalls(w)).toEqual([])
+  expect(w.shown).toEqual([])
+  await ui.press({ key: 'detail:p3' })
+  expect(w.opened.at(-1)).toMatchObject({ id: DETAIL, title: 'weekly 待決' })
+  expect((await ui.find({ key: 'decision:p3' }))?.props.borderStyle).toBe('double')
+  expect(decideCalls(w)).toEqual([])
+  await ui.unmount()
+})
+
+test('待決詳情：動作、代號、repo、階段，子 session 那則回覆全文、advisor 建議與理由、參考的前例；長內容換行不截斷', async ($, on) => {
+  const w = world(detailed())
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await ui.press({ key: 'detail:p1' })
+  for (const cols of [40, 60]) {
+    const dialog = await $.ui.mount({ ...detailPane(cols), surface: 'terminal' })
+    expect((await dialog.find({ key: 'detail-head' }))!.text).toContain('刪遠端 branch')
+    expect((await dialog.find({ key: 'detail-head' }))!.text).toContain('PROJ-7882 · proj-v2-frontend · 實作中')
+    const context = await dialog.find({ key: 'detail-context' })
+    expect(context!.text).toContain(LONG_REPLY)
+    expect((await dialog.findAll({ type: 'Text' })).find((t: any) => t.text === LONG_REPLY)?.props.wrap).toBe('wrap')
+    expect((await dialog.find({ key: 'detail-advice' }))!.text).toContain('建議：a 刪掉，已合併進 dev，留著沒用')
+    expect((await dialog.find({ key: 'detail-precedent' }))!.text).toContain('要刪掉 feat/proj-7001 的遠端 branch 嗎？')
+    expect((await dialog.findAll({ type: 'Button' })).map((b: any) => [b.key, b.props.hotkey, b.props.label])).toEqual([['detail-approve', 'y', '✓ 核可'], ['detail-manual', 'm', '自己回']])
+    await dialog.unmount()
+  }
+  await ui.unmount()
+})
+
+test('待決詳情：沒有前例時不畫前例；送出失敗的題寫上次沒送進子 session', async ($, on) => {
+  const w = world(withDecisions(DECISIONS.map(d => (d.id === 'p3' ? { ...d, failed: true } : d))))
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await ui.press({ key: 'detail:p3' })
+  const dialog = await $.ui.mount({ ...detailPane(), surface: 'terminal' })
+  expect(await dialog.find({ key: 'detail-precedent' })).toBeFalsy()
+  expect((await dialog.find({ key: 'detail-head' }))!.text).toContain('上次核可沒送進子 session')
+  expect((await dialog.find({ key: 'detail-context' }))!.text).toContain('草案確認了，要寫進 Linear 嗎？')
+  await dialog.unmount()
+  await ui.unmount()
+})
+
+test('待決自己回：卡片上的「自己回」跑 decide <id> manual 再輪詢，卡片離開待決並跳通知；不核可、不送', async ($, on) => {
+  const w = world(detailed())
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await ui.press({ key: 'manual:p2' })
+  expect(decideCalls(w)).toEqual([['decide', 'p2', 'manual']])
+  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session'])
+  expect(w.toasts).toContain('[PROJ-7882#2] 改成自己回，已放上橫條')
+  expect(await ui.find({ key: 'decision:p2' })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('待決詳情：小視窗的「✓ 核可」「自己回」跟卡片上的一樣，按了先關小視窗', async ($, on) => {
+  const w = world(detailed())
+  w.closes = []
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await ui.press({ key: 'detail:p1' })
+  let dialog = await $.ui.mount({ ...detailPane(), surface: 'terminal' })
+  await dialog.press({ key: 'detail-manual' })
+  await dialog.unmount()
+  expect(w.closes).toEqual([DETAIL])
+  await ui.press({ key: 'detail:p3' })
+  dialog = await $.ui.mount({ ...detailPane(), surface: 'terminal' })
+  await dialog.press({ key: 'detail-approve' })
+  await dialog.unmount()
+  expect(w.closes).toEqual([DETAIL, DETAIL])
+  expect(decideCalls(w)).toEqual([['decide', 'p1', 'manual'], ['decide', 'p3', 'approve']])
+  await ui.unmount()
+})
+
+test('待決按鍵：y 核可、m 自己回作用在選中的卡片（預設第一張，↑↓ 換張）；a 仍是全部核可', async ($, on) => {
+  const w = world(detailed())
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  const hot = (await ui.findAll({ type: 'Button' })).filter((b: any) => b.props.hotkey).map((b: any) => [b.key, b.props.hotkey])
+  expect(hot.filter(([, k]: string[]) => ['y', 'm', 'a'].includes(k))).toEqual([['decide-all', 'a'], ['decide-yes', 'y'], ['decide-manual', 'm']])
+  await ui.press({ key: 'decide-manual' })
+  expect(decideCalls(w).at(-1)).toEqual(['decide', 'p1', 'manual'])
+  await $.ui.focus({ component: 'Pane', requestId: PANE, plugin: PLUGIN, element: 'detail:p3', origin: { kind: 'person' } } as any)
+  expect((await ui.find({ key: 'decision:p3' }))?.props.borderStyle).toBe('double')
+  expect((await ui.find({ key: 'decision-right:p3' }))?.text).toBe('y ✓ 核可 · m 自己回')
+  expect((await ui.find({ key: 'decision-right:p2' }))?.text).toBe('✓ 核可 · 自己回')
+  await ui.press({ key: 'decide-yes' })
+  expect(decideCalls(w).at(-1)).toEqual(['decide', 'p3', 'approve'])
   await ui.unmount()
 })

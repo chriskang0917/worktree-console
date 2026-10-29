@@ -64,6 +64,7 @@ import {
 import { advisorHome, advisorState } from "./advice.mjs";
 import { consoleSessionOk, focusCancel, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
+import { approve, takeOver } from "./automation.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
 import { herdrReport } from "./herdr-report.mjs";
 import { alreadyIn } from "./git-scene.mjs";
@@ -113,6 +114,7 @@ const { values, positionals } = parseArgs({
     title: { type: "string" },
     to: { type: "string" },
     apply: { type: "boolean", default: false },
+    all: { type: "boolean", default: false },
   },
 });
 
@@ -326,6 +328,29 @@ function focusAutoCommand() {
     }
   }
   focusOut(load({}, { repoOptional: true }), { notice });
+}
+
+// The 待決 tab's buttons: `decide <predictionId> approve` or `decide --all approve` send through `reply`; `decide <predictionId> manual` puts it on the band for the user.
+function decide() {
+  const [first, second] = positionals;
+  const choice = values.all ? first : second;
+  if (!["approve", "manual"].includes(choice) || (!values.all && !first) || (values.all && choice === "manual")) fail("用法：console.mjs decide <predictionId> approve|manual | decide --all approve");
+  const { rows } = load({}, { repoOptional: true });
+  const batch = syncFocus(rows).decisions;
+  const before = loadFocus();
+  if (!batch) fail("待決分頁沒有打開：automation.json 的 batch.enabled 不是 true");
+  if (choice === "manual") {
+    const taken = takeOver(batch, first);
+    if (!taken.ok) fail(taken.line);
+    syncFocus(rows, { change: (state) => focusPick(state, taken.key) });
+    return console.log(taken.line);
+  }
+  const reply = (tag, answer) => spawnSync(process.execPath, [fileURLToPath(import.meta.url), "reply", "--", `${tag} ${answer}`], { encoding: "utf8", env: process.env }).status === 0;
+  const result = approve(batch, { ids: values.all ? null : [first], reply });
+  // A reply makes the band wait on that session; an approval from 待決 must not take the band's question away.
+  saveFocus({ ...loadFocus(), current: before.current, currentAt: before.currentAt, wait: before.wait });
+  for (const line of result.lines) console.log(line);
+  if (!result.ok) process.exit(1);
 }
 
 function detail() {
@@ -1339,6 +1364,7 @@ const commands = {
   "focus-shown": focusShown,
   "focus-cancel": focusCancelCommand,
   "focus-auto": focusAutoCommand,
+  decide,
   reply,
   distilled,
   open,

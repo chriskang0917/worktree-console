@@ -30,6 +30,25 @@ type Advice = { state: 'pending' | 'ready'; text: string; answer?: string; reaso
 // The tab's newest plain-language recap, written in the background after each stop.
 type Brief = { text: string | null; pending: boolean }
 
+// A second-tier question waiting in 待決 (automation.json batch on): approving sends the advisor's answer as is.
+type Decision = {
+  id: string
+  key: string
+  tag: string
+  repo: string
+  stage?: string | null
+  group: string
+  verb: string | null
+  action: string
+  question: string
+  context?: string
+  options: string[]
+  answer: string
+  reason: string
+  precedent?: { question: string; answer: string } | null
+  failed: boolean
+}
+
 type Focus = {
   active: boolean
   home?: string
@@ -40,9 +59,10 @@ type Focus = {
   waiting?: { tag: string | null; seconds: number } | null
   queue?: { key: string; isNew: boolean }[]
   sessions?: Session[]
+  decisions?: Decision[]
 }
 
-type Tab = 'pending' | 'all' | 'hidden'
+type Tab = 'pending' | 'all' | 'hidden' | 'decisions'
 
 const POLL_MS = 5_000
 const IDLE_EVERY = 3
@@ -71,6 +91,17 @@ const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean
   { id: 'all', key: 'w', label: '全部', pick: s => !s.archived },
   { id: 'hidden', key: 'e', label: '封存', pick: s => s.archived },
 ]
+// 待決 exists only while `console.mjs focus` sends `decisions`, i.e. automation.json turns batch approval on.
+const DECIDE_TAB = { id: 'decisions' as Tab, key: 'r', label: '待決', pick: (_: Session) => false }
+const DECIDE_EMPTY = '沒有等你核可的動作'
+const DECIDE_EMPTY_HINT = '刪遠端 branch、@ 同事這類題會排到這裡'
+const DECIDE_FOOTER = ['Enter 詳情 · y 核可 · m 自己回', 'a 全部核可 · qwer 切分頁']
+const DECIDE_DETAIL = 'worktree-console-decision'
+const MANUAL = '自己回'
+const DETAIL_GONE = '這題已不在待決'
+const APPROVE = '✓ 核可'
+const APPROVE_FAILED = '送出失敗'
+const DECIDE_TIMEOUT_MS = 300_000
 
 const EMPTY = '目前沒有符合條件的 session'
 // The band header's right side: `9: 顯示問題`, led by `8: 延後處理 · ` while the queue has one; four cells per hotkey decoration.
@@ -172,6 +203,15 @@ function fitParts(parts: AdvicePart[], width: number): AdvicePart[] {
   return cut
 }
 
+const advicePaint = (theme: ConsoleTheme): Record<AdvicePart['role'], { color: string | undefined; bold?: boolean }> => ({
+  label: { color: theme.accent },
+  answer: { color: theme.fg, bold: true },
+  option: { color: theme.fg },
+  reason: { color: theme.muted ?? theme.dim },
+  note: { color: theme.waiting },
+  pending: { color: theme.dim },
+})
+
 // Only a leading count lifts to the foreground; digits inside words (面板 v2 改版) stay dim.
 const leadNumbers = (Text: (props: any) => any, text: string, theme: ConsoleTheme) => {
   const lead = /^\d+(?=\s)/.exec(text)?.[0]
@@ -207,6 +247,9 @@ let countdownTick: { cancel(): void } | null = null
 const counted = new Set<string>()
 let sending = false
 let briefFor: { key: string; tag: string } | null = null
+const deciding = new Set<string>()
+let decideSel: string | null = null
+let detailFor: string | null = null
 async function loadPreferences($: EngineInterface) {
   const home = await $.env.get('WORKTREE_CONSOLE_HOME') || `${await $.env.get('HOME')}/.config/worktree-console`
   const warnings: string[] = []
@@ -253,6 +296,25 @@ function syncAnimation($: EngineInterface) {
 }
 
 const sessions = () => focus.sessions ?? []
+const decisions = () => focus.decisions ?? []
+const batchOn = () => Array.isArray(focus.decisions)
+const tabsNow = () => (batchOn() ? [...TABS, DECIDE_TAB] : TABS)
+// Cards in the order the tab draws them: by ticket, each ticket where its first question stopped.
+const decisionOrder = () => {
+  const groups: { name: string; repo: string; items: Decision[] }[] = []
+  for (const d of decisions()) {
+    const g = groups.find(x => x.name === d.group)
+    if (g) g.items.push(d)
+    else groups.push({ name: d.group, repo: d.repo, items: [d] })
+  }
+  return groups
+}
+const decisionList = () => decisionOrder().flatMap(g => g.items)
+const chosenDecision = () => {
+  const list = decisionList()
+  return list.find(d => d.id === decideSel) ?? list[0] ?? null
+}
+const tabCount = (t: Tab) => (t === 'decisions' ? decisions().length : rowsOf(t).length)
 const byKey = (key: string | null | undefined) => sessions().find(s => s.key === key) ?? null
 const queueOf = () => (focus.queue ?? []).flatMap(q => (byKey(q.key) ? [{ ...byKey(q.key)!, isNew: q.isNew }] : []))
 const primaryKey = () => {
@@ -263,6 +325,7 @@ const primaryKey = () => {
 
 // 待回覆 always follows the band: the question on screen first, then the queue in order.
 function rowsOf(t: Tab): Session[] {
+  if (t === 'decisions') return []
   if (t !== 'pending') return sessions().filter(TABS.find(x => x.id === t)!.pick)
   return [byKey(focus.current), ...queueOf()].filter((s): s is Session => !!s)
 }
@@ -315,8 +378,8 @@ function reveal(rows: Session[], i: number) {
   if (i === rows.length - 1) top = Math.max(top, lastTop(rows))
 }
 
-function run($: EngineInterface, args: string[]) {
-  return $.process.run(['node', `${$.plugin.root}/skills/worktree-console/scripts/console.mjs`, ...args], { timeoutMs: 60_000 })
+function run($: EngineInterface, args: string[], timeoutMs = 60_000) {
+  return $.process.run(['node', `${$.plugin.root}/skills/worktree-console/scripts/console.mjs`, ...args], { timeoutMs })
 }
 
 // Prints one question's full report through the focus-show mod, never through the model. A stop counts as printed only when
@@ -449,6 +512,7 @@ async function act($: EngineInterface, args: string[]) {
 
 function showTab(t: Tab) {
   tab = t
+  decideSel = null
   sel = t === 'pending' ? (focus.current ?? null) : (rowsOf(t)[0]?.key ?? null)
   top = 0
   follow = true
@@ -527,6 +591,56 @@ async function unarchiveCard($: EngineInterface, s: Session) {
     await run($, ['unarchive', s.tag])
   } catch {}
   await poll($)
+}
+
+// 待決's 核可 (one card) and 全部核可: runs `console.mjs decide` straight from the mod like 取消封存, then toasts how it went.
+async function approveCards($: EngineInterface, id: string | null) {
+  const ids = id ? [id] : decisions().map(d => d.id)
+  if (ids.length === 0 || ids.some(x => deciding.has(x))) return
+  for (const x of ids) deciding.add(x)
+  $.ui.invalidate('ui.render')
+  let out = ''
+  try {
+    out = (await run($, id ? ['decide', id, 'approve'] : ['decide', '--all', 'approve'], DECIDE_TIMEOUT_MS)).stdout
+  } catch {}
+  for (const x of ids) deciding.delete(x)
+  const lines = out.split('\n').map(l => l.trim()).filter(Boolean)
+  const sent = lines.filter(l => l.includes('已核可並送出')).length
+  const failed = lines.length - sent
+  if (id && lines[0]) $.ui.toast(lines[0])
+  else if (!id && lines.length) $.ui.toast(`已核可 ${sent} 題${failed ? `，${failed} 題送出失敗` : ''}`)
+  await poll($)
+}
+
+// 自己回: `console.mjs decide <id> manual` takes it out of 待決 and puts it first on the band, where the user answers it as usual.
+async function manualCard($: EngineInterface, id: string) {
+  if (deciding.has(id)) return
+  deciding.add(id)
+  $.ui.invalidate('ui.render')
+  let out = ''
+  try {
+    out = (await run($, ['decide', id, 'manual'])).stdout
+  } catch {}
+  deciding.delete(id)
+  const line = out.trim().split('\n')[0]
+  if (line) $.ui.toast(line)
+  await poll($)
+}
+
+// Enter on a card, or a click on its question: the question's whole context in a dialog Esc closes; nothing reaches the conversation.
+async function openDetail($: EngineInterface, d: Decision) {
+  decideSel = d.id
+  detailFor = d.id
+  const opened = $.ui.open({ id: DECIDE_DETAIL, title: `${d.tag} 待決`, focus: true, closeOnEscape: true })
+  $.ui.invalidate('ui.render')
+  await opened
+}
+
+async function fromDetail($: EngineInterface, act: (id: string) => Promise<void>) {
+  const id = detailFor
+  await $.ui.close({ id: DECIDE_DETAIL }).catch(() => {})
+  detailFor = null
+  if (id) await act(id)
 }
 
 const countsText = () => {
@@ -613,6 +727,96 @@ function recapBand($: EngineInterface, e: any) {
   )
 }
 
+// 待決: a count with 全部核可 on top, then one card per question grouped by ticket, each with its own 核可; a failed send keeps its card, marked.
+function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleTheme) {
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const list = decisions()
+  const inner = Math.max(1, cols - 6)
+  const center = (t: string) => `${' '.repeat(Math.max(0, Math.floor((cols - 2 - columns(t)) / 2)))}${t}`
+  if (list.length === 0) {
+    return (
+      <Box key="decide-empty" flexDirection="column" width={cols} borderStyle="round" borderColor={theme.border} paddingY={1}>
+        <Text color={theme.fg}>{center(truncateColumns(DECIDE_EMPTY, cols - 2))}</Text>
+        <Text color={theme.dim}>{center(truncateColumns(DECIDE_EMPTY_HINT, cols - 2))}</Text>
+      </Box>
+    )
+  }
+  const paint = advicePaint(theme)
+  const allBusy = list.every(d => deciding.has(d.id))
+  // `a: 全部核可`: four cells for the hotkey decoration.
+  const allWidth = 4 + columns('全部核可')
+  const lead = `${list.length}`
+  const tail = ' 題等你核可'
+  const more = ' · 核可後照建議送出'
+  const headRoom = cols - 2 - allWidth - 1
+  const groups = decisionOrder()
+  const chosen = chosenDecision()?.id ?? null
+  const card = (d: Decision) => {
+    const focused = d.id === chosen
+    const busy = deciding.has(d.id)
+    const failed = d.failed && !busy
+    // The chosen card names the keys that act on it.
+    const approveLabel = focused ? `y ${APPROVE}` : APPROVE
+    const manualLabel = focused ? `m ${MANUAL}` : MANUAL
+    const rightWidth = (busy ? columns('送出中…') : columns(`${approveLabel} · ${manualLabel}`)) + (failed ? columns(APPROVE_FAILED) + 3 : 0)
+    const parts = fitParts(adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options), inner)
+    const question = `${d.tag !== d.group ? `${d.tag} · ` : ''}${d.question}`
+    return (
+      <Box key={`decision:${d.id}`} flexDirection="column" flexShrink={0} borderStyle={focused ? 'double' : 'round'} borderColor={focused ? theme.accent : failed ? theme.error : theme.border} paddingX={2}>
+        <Box key={`decision-head:${d.id}`} flexDirection="row" justifyContent="space-between" height={1} flexShrink={0}>
+          <Text color={theme.waiting} bold wrap="truncate-end">{truncateColumns(d.action, Math.max(1, inner - rightWidth - 1))}</Text>
+          <Box key={`decision-right:${d.id}`} flexDirection="row" flexShrink={0}>
+            {failed && <Text color={theme.error}>{APPROVE_FAILED}</Text>}
+            {failed && <Text color={theme.dim}> · </Text>}
+            {busy ? <Text color={theme.dim}>送出中…</Text> : (
+              <Box key={`decision-actions:${d.id}`} flexDirection="row">
+                <Button key={`approve:${d.id}`} label={approveLabel} plain onPress={() => void approveCards($, d.id)}>{focused && <Text color={theme.dim}>y </Text>}<Text color={theme.accent} bold>{APPROVE}</Text></Button>
+                <Text color={theme.dim}> · </Text>
+                <Button key={`manual:${d.id}`} label={manualLabel} plain onPress={() => void manualCard($, d.id)}>{focused && <Text color={theme.dim}>m </Text>}<Text color={theme.fg}>{MANUAL}</Text></Button>
+              </Box>
+            )}
+          </Box>
+        </Box>
+        <Button key={`detail:${d.id}`} label={truncateColumns(question, inner)} plain autoFocus={focused ? true : undefined} onPress={() => void openDetail($, d)}><Text color={theme.dim}>{truncateColumns(question, inner)}</Text></Button>
+        <Box key={`decision-advice:${d.id}`} flexDirection="row" height={1} flexShrink={0} overflow="hidden">
+          {parts.map(p => <Text key={`decision-advice:${d.id}:${p.role}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}
+        </Box>
+      </Box>
+    )
+  }
+  const selected = chosenDecision()
+  return (
+    <Box key="decisions" flexDirection="column">
+      <Box key="decide-head" flexDirection="row" justifyContent="space-between" height={1} flexShrink={0} paddingX={1}>
+        <Box key="decide-count" flexDirection="row" flexShrink={1} overflow="hidden">
+          <Text color={theme.fg} bold>{lead}</Text>
+          <Text color={theme.fg}>{tail}</Text>
+          {columns(lead + tail + more) <= headRoom && <Text color={theme.dim}>{more}</Text>}
+        </Box>
+        {allBusy ? <Text color={theme.dim}>送出中…</Text> : <Button key="decide-all" hotkey="a" label="全部核可" plain onPress={() => void approveCards($, null)}><Text color={theme.accent} bold>全部核可</Text></Button>}
+      </Box>
+      {groups.map(g => {
+        const label = `${g.name} · ${g.repo}`
+        const count = ` ${g.items.length} 題`
+        const name = truncateColumns(label, Math.max(1, cols - columns(count) - 6))
+        return (
+          <Box key={`decide-group:${g.name}`} flexDirection="column" flexShrink={0} marginTop={1}>
+            <Text wrap="truncate-end"><Text color={theme.dim}>{'── '}</Text><Text color={theme.fg} bold>{name}</Text><Text color={theme.dim}>{` ${'─'.repeat(Math.max(2, cols - columns(name) - columns(count) - 4))}${count}`}</Text></Text>
+            {g.items.map(card)}
+          </Box>
+        )
+      })}
+      <Box key="decide-footer" flexDirection="column" flexShrink={0} marginTop={1} paddingLeft={1}>
+        {(columns(DECIDE_FOOTER.join(' · ')) <= cols - 1 ? [DECIDE_FOOTER.join(' · ')] : DECIDE_FOOTER).map((line, i) => <Text key={`decide-footer:${i}`} color={theme.dim} wrap="truncate-end">{truncateColumns(line, cols - 1)}</Text>)}
+      </Box>
+      <Box key="decide-keys" height={0} flexShrink={0} overflow="hidden">
+        <Button key="decide-yes" hotkey="y" label="" plain onPress={() => void (selected && approveCards($, selected.id))} />
+        <Button key="decide-manual" hotkey="m" label="" plain onPress={() => void (selected && manualCard($, selected.id))} />
+      </Box>
+    </Box>
+  )
+}
+
 // The worktree-console focus band: polls `console.mjs focus`, draws the question on screen, the queue, the side pane and the counts.
 export const register: Register = on => {
   registerKeepaliveView(on)
@@ -647,6 +851,28 @@ export const register: Register = on => {
 
   // The engine walks ↑↓ one Button back or forth through the pane, keeping its place by index: a step from where it held is one card up or down.
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    if (tab === 'decisions') {
+      // ↑↓ step a whole card and land on its question, so Enter opens the detail and never approves.
+      const list = decisionList()
+      const hit = /^(detail|approve|manual):(.+)$/.exec(e.element ?? '')
+      const n = ring.length
+      const to = ring.indexOf(e.element ?? '')
+      const from = held !== null && held < n ? held : null
+      const dir = e.origin.kind !== 'person' || to < 0 || from === null ? 0 : to === (from + 1) % n ? 1 : to === (from - 1 + n) % n ? -1 : 0
+      const i = list.findIndex(d => d.id === chosenDecision()?.id)
+      const target = dir !== 0 && i >= 0 ? list[Math.max(0, Math.min(list.length - 1, i + dir))] : list.find(d => d.id === hit?.[2])
+      if (!target) {
+        const res = await next(e)
+        if (!res.deny) held = to < 0 ? null : to
+        return res
+      }
+      decideSel = target.id
+      $.ui.invalidate('ui.render')
+      const want = `detail:${target.id}`
+      const res = await next({ ...e, element: want })
+      if (!res.deny) held = ring.indexOf(want)
+      return res
+    }
     const m = /^(num|name):(.+)$/.exec(e.element ?? '')
     const rows = rowsOf(tab)
     const chosen = chosenOf(rows)
@@ -675,7 +901,7 @@ export const register: Register = on => {
 
   // The pane keeps its own window over the cards, the keys line riding after the last one: the wheel moves a card, a page key a screenful.
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    if (!focus.active || !frame) return next(e)
+    if (!focus.active || !frame || tab === 'decisions') return next(e)
     const rows = rowsOf(tab)
     const page = !e.pointer && Math.abs(e.by) >= e.bodyRows
     top += Math.sign(e.by) * (page ? Math.max(1, endOf(rows, top) - top) : 1)
@@ -690,6 +916,7 @@ export const register: Register = on => {
       syncAnimation($)
     }
     if (e.id === BRIEF) briefFor = null
+    if (e.id === DECIDE_DETAIL) detailFor = null
     return next(e)
   })
 
@@ -699,6 +926,8 @@ export const register: Register = on => {
     const cols = e.props.bodyColumns
     const theme = THEMES[appearance.theme]
     const dock = e.props.placement === 'dock'
+    if (tab === 'decisions' && !batchOn()) showTab('pending')
+    const tabList = tabsNow()
     const rows = rowsOf(tab)
     const chosen = chosenOf(rows)
     frame = dock ? { avail: Math.max(1, e.props.scroll.bodyRows - CHROME) } : null
@@ -709,20 +938,20 @@ export const register: Register = on => {
     const end = endOf(rows, top)
     visibleKeys = rows.slice(top, end).map(r => r.key)
     syncAnimation($)
-    ring = [...TABS.map(x => `tab:${x.id}`), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
+    ring = [...tabList.map(x => `tab:${x.id}`), ...(tab === 'decisions' ? ['decide-all', ...decisionList().flatMap(d => [`approve:${d.id}`, `manual:${d.id}`, `detail:${d.id}`]), 'decide-yes', 'decide-manual'] : []), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
     const at = (drawing += 1)
     if (repin) {
       const gen = repinGen
       $.clock.after(FRAME_MS, () => void focusSel($, at, gen))
     }
     // Keep the selected label intact; only unselected labels shorten below 46 columns.
-    const tabLabels = TABS.map(x => `${cols < 46 && x.id !== tab ? '' : `${x.label} `}${rowsOf(x.id).length}`)
-    const tabIndex = TABS.findIndex(x => x.id === tab)
-    const tabStart = TABS.slice(0, tabIndex).reduce((n, x, i) => n + columns(`${x.key}: ${tabLabels[i]}`) + 2, 0)
-    const tabWidth = Math.min(Math.max(0, cols - tabStart), columns(`${TABS[tabIndex]!.key}: ${tabLabels[tabIndex]}`))
+    const tabLabels = tabList.map(x => `${cols < 46 && x.id !== tab ? '' : `${x.label} `}${tabCount(x.id)}`)
+    const tabIndex = tabList.findIndex(x => x.id === tab)
+    const tabStart = tabList.slice(0, tabIndex).reduce((n, x, i) => n + columns(`${x.key}: ${tabLabels[i]}`) + 2, 0)
+    const tabWidth = Math.min(Math.max(0, cols - tabStart), columns(`${tabList[tabIndex]!.key}: ${tabLabels[tabIndex]}`))
     const tabs = (
       <Box key="tabs" flexDirection="row" columnGap={2} height={1} flexShrink={0} overflow="hidden">
-        {TABS.map((x, i) => (
+        {tabList.map((x, i) => (
           <Button
             key={`tab:${x.id}`}
             hotkey={x.key}
@@ -738,6 +967,9 @@ export const register: Register = on => {
         ))}
       </Box>
     )
+    const underline = <Text color={theme.border}>{'─'.repeat(Math.min(cols, tabStart))}<Text color={theme.accent}>{'━'.repeat(tabWidth)}</Text>{'─'.repeat(Math.max(0, cols - tabStart - tabWidth))}</Text>
+    const shell = (body: any) => <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>{tabs}{underline}{body}</Box>
+    if (tab === 'decisions') return shell(decisionsBody($, e, cols, theme))
     const hidden = tab === 'hidden'
     const press = (r: Session) => (hidden ? unarchiveCard($, r) : openBrief($, r))
     const inner = Math.max(1, cols - 6)
@@ -817,7 +1049,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" height={dock ? e.props.scroll.bodyRows : undefined} {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
         {tabs}
-        <Text color={theme.border}>{'─'.repeat(Math.min(cols, tabStart))}<Text color={theme.accent}>{'━'.repeat(tabWidth)}</Text>{'─'.repeat(Math.max(0, cols - tabStart - tabWidth))}</Text>
+        {underline}
         <Box key="cards" flexDirection="column" flexShrink={1} overflow="hidden">
           {offscreen('above', rows.slice(0, top), 0)}
           {rows.length === 0 ? empty : body}
@@ -825,7 +1057,7 @@ export const register: Register = on => {
         </Box>
         {top >= lastTop(rows) && (
           <Box key="footer" flexShrink={0} marginTop={1} paddingLeft={1}>
-            <Text color={theme.dim}>{FOOTER}</Text>
+            <Text color={theme.dim}>{batchOn() ? FOOTER.replace('qwe', 'qwer') : FOOTER}</Text>
           </Box>
         )}
       </Box>
@@ -852,6 +1084,50 @@ export const register: Register = on => {
               await printCard($, s)
             }}
           />
+          <Text color={theme.dim}>  Esc 關閉</Text>
+        </Box>
+      </Box>
+    )
+  })
+
+  // 待決's detail: what is to be done, the child's whole reply around the question, the advisor's suggestion and the precedent it leaned on.
+  on('ui.render', { component: 'Pane', requestId: DECIDE_DETAIL }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const theme = THEMES[appearance.theme]
+    const d = decisions().find(x => x.id === detailFor) ?? null
+    if (!d) return <Text color={theme.dim}>{DETAIL_GONE}</Text>
+    const paint = advicePaint(theme)
+    const busy = deciding.has(d.id)
+    const section = (key: string, label: string, body: any) => (
+      <Box key={key} flexDirection="column" marginTop={1} flexShrink={0}>
+        <Text color={theme.accent} bold>{label}</Text>
+        {body}
+      </Box>
+    )
+    const where = [d.repo, d.stage].filter(Boolean).join(' · ')
+    return (
+      <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
+        <Box key="detail-head" flexDirection="column" flexShrink={0}>
+          <Text color={theme.waiting} bold wrap="wrap">{d.action}</Text>
+          <Text wrap="wrap"><Text color={theme.fg} bold>{d.tag}</Text>{where ? <Text color={theme.dim}>{` · ${where}`}</Text> : null}</Text>
+          {d.failed && <Text color={theme.error} wrap="wrap">上次核可沒送進子 session，可以再核可一次或自己回</Text>}
+        </Box>
+        {section('detail-context', '子 session 的回覆', <Text color={theme.fg} wrap="wrap">{d.context || d.question}</Text>)}
+        {section('detail-advice', 'advisor 建議', <Text wrap="wrap">{adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options).map(p => <Text key={`detail-advice:${p.role}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}</Text>)}
+        {d.precedent && section('detail-precedent', '參考的前例', (
+          <Box key="detail-precedent-body" flexDirection="column">
+            <Text wrap="wrap"><Text color={theme.dim}>題目：</Text><Text color={theme.fg}>{d.precedent.question.replace(/\s+/g, ' ').trim()}</Text></Text>
+            <Text wrap="wrap"><Text color={theme.dim}>你當時回：</Text><Text color={theme.fg}>{d.precedent.answer.replace(/\s+/g, ' ').trim()}</Text></Text>
+          </Box>
+        ))}
+        <Box key="detail-actions" marginTop={1} flexDirection="row" flexShrink={0}>
+          {busy ? <Text color={theme.dim}>送出中…</Text> : (
+            <Box key="detail-buttons" flexDirection="row">
+              <Button key="detail-approve" hotkey="y" label={APPROVE} plain onPress={() => fromDetail($, id => approveCards($, id))} />
+              <Text color={theme.dim}> · </Text>
+              <Button key="detail-manual" hotkey="m" label={MANUAL} plain onPress={() => fromDetail($, id => manualCard($, id))} />
+            </Box>
+          )}
           <Text color={theme.dim}>  Esc 關閉</Text>
         </Box>
       </Box>
@@ -898,14 +1174,7 @@ export const register: Register = on => {
     const cell = cur && statusCell(cur.status, animationTick, { primary: cur.key === primaryKey(), animated: appearance.motion })
     const others = queue.slice(0, cols < 60 ? 1 : QUEUE_MAX)
     const budget = focusBandRows({ cols, maxRows: e.props.maxRows, question: cur?.question ?? '', queue, hiddenCount: fullQueue.length - queue.length, hasCurrent: !!cur, advice: cur?.advice ?? null, options: cur?.options ?? [] })
-    const paint: Record<AdvicePart['role'], { color: string | undefined; bold?: boolean }> = {
-      label: { color: theme.accent },
-      answer: { color: theme.fg, bold: true },
-      option: { color: theme.fg },
-      reason: { color: theme.muted ?? theme.dim },
-      note: { color: theme.waiting },
-      pending: { color: theme.dim },
-    }
+    const paint = advicePaint(theme)
     const rail = <Text color={cell ? theme[cell.color] : theme.dim}>│ </Text>
     const counting = cur && countdown?.key === cur.key ? countdown : null
     const answerRoom = counting ? Math.max(1, cols - 4 - COUNTDOWN_KEYS - 1 - columns(`代回倒數 ${counting.left} 秒：`)) : 0
