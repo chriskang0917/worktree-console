@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.2
+
+- fix(stage): read dev-flow run folders under ~/.sara-dev-flow and add console.mjs stage
+
 ## 1.8.1
 
 - fix(watch): wake the console on every finalize and catch up missed ones on restart
