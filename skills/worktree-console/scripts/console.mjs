@@ -40,7 +40,12 @@ import {
   reportLines,
   gitWorktrees,
   screenRunning,
+  stageFacts,
   stageOf,
+  stageWithSource,
+  goalPlan,
+  ticketFromBranch,
+  ticketKeys,
   selfInfo,
   sessionTag,
   stripRef,
@@ -59,7 +64,7 @@ import {
 import { advisorHome, advisorState } from "./advice.mjs";
 import { consoleSessionOk, focusCancel, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
-import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome } from "./herdr.mjs";
+import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
 import { herdrReport } from "./herdr-report.mjs";
 import { alreadyIn } from "./git-scene.mjs";
 import { maybeTerminals, runOrca, terminals } from "./terminals.mjs";
@@ -1008,6 +1013,26 @@ function todo() {
   for (const line of todoLines(hits)) console.log(line);
 }
 
+// One worktree's stage and what decided it, as JSON; reads git and files only, never Orca or herdr.
+function stageCommand() {
+  if (!values.path) fail("用法：console.mjs stage --path <worktree>");
+  const top = fs.existsSync(values.path) ? git(values.path, ["rev-parse", "--show-toplevel"]) : { ok: false };
+  if (!top.ok) {
+    console.log(JSON.stringify({ stage: "unknown", source: "not-a-worktree" }));
+    return;
+  }
+  const target = realpath(top.out);
+  const branch = git(target, ["symbolic-ref", "--short", "-q", "HEAD"]).out;
+  const main = mainCheckout(target);
+  const rec = worktreeRecords()[target] ?? {};
+  const recent = git(main, ["for-each-ref", "--sort=-committerdate", "--count=50", "--format=%(refname:short)", "refs/heads"]).out.split("\n");
+  const saved = readNames()[target];
+  const id = rec.ticket ?? ticketFromBranch(branch, ticketKeys([rec.ticket], [branch, ...recent]))?.ticket ?? (saved?.branch === branch ? saved.nickname : null) ?? null;
+  const comment = rec.interview || rec.defineGoal ? "interview" : "";
+  const facts = stageFacts(target, rec.baseRef ?? null, branch, path.basename(main));
+  console.log(JSON.stringify(stageWithSource({ facts, goal: goalPlan(main, id), comment })));
+}
+
 // A claude tab in a worktree that has none (idle row), `--continue` picks its last conversation back up.
 function open() {
   if (!values.path) fail("用法：console.mjs open --path <worktree> [--continue]");
@@ -1328,8 +1353,9 @@ const commands = {
   nickname,
   rename,
   prune,
+  stage: stageCommand,
 };
-const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt", "prune"]);
+const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt", "prune", "stage"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);
 if (!OFFLINE.has(command)) manager();
 await commands[command]();
