@@ -835,6 +835,16 @@ test("階段：看板讀得到 branch 的 run folder（PROJ-6923 dev-flow trial�
   }
 });
 
+test("managed.json 記下 console.mjs 的絕對路徑（script），背景腳本可以用它跑 stage --path", () => {
+  run("console.mjs", ["board", "--repo", app()]);
+  const managed = JSON.parse(fs.readFileSync(path.join(tmp, "log", ".state", "managed.json"), "utf8"));
+  assert.equal(managed.script, path.join(scripts, "console.mjs"));
+  assert.ok(path.isAbsolute(managed.script) && fs.existsSync(managed.script));
+  const res = spawnSync(process.execPath, [managed.script, "stage", "--path", wt("proj-101-login")], { encoding: "utf8", env: { ...process.env, ...runEnv(fake()) } });
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), { stage: "實作中", source: "dirty" });
+});
+
 test("階段：worktree comment 含舊的 define-goal 標記且沒有改動 → 規劃中", () => {
   const dir = fake({
     mutateList: (list) => {

@@ -1006,6 +1006,12 @@ export function runFolder(p, branch) {
   return path.join(p, PLAN_DIR, (branch || "").replace(/\//g, "-"));
 }
 
+// Where the v2/v3 dev-flow keeps a branch's run folder outside the repo.
+export function homeRunFolder(repo, branch) {
+  const home = process.env.SARA_DEV_FLOW_HOME || path.join(os.homedir(), ".sara-dev-flow");
+  return path.join(home, repo, (branch || "").replace(/\//g, "-"));
+}
+
 function frontmatter(file) {
   let text;
   try {
@@ -1018,12 +1024,12 @@ function frontmatter(file) {
 }
 
 // Git facts for the stage column; files under docs/dev-flow/ are planning, not code.
-export function stageFacts(p, baseRef, branch) {
+// `repo` is the main checkout's folder name, the same one dev-flow files its run folders under.
+export function stageFacts(p, baseRef, branch, repo = path.basename(mainCheckout(p))) {
   const lines = (args) => git(p, args).out.split("\n").filter(Boolean).length;
   const base = repoBase(p, baseRef);
-  const folder = branch ? runFolder(p, branch) : null;
-  const hasRun = !!folder && fs.existsSync(folder);
-  const head = hasRun ? frontmatter(path.join(folder, "plan.md")) : null;
+  const folders = branch ? [runFolder(p, branch), homeRunFolder(repo, branch)].filter((f) => fs.existsSync(f)) : [];
+  const approved = folders.some((f) => /^status:\s*["']?approved["']?\s*$/m.test(frontmatter(path.join(f, "plan.md")) ?? ""));
   const unpushed = lines(["rev-list", "HEAD", "--not", "--remotes", "--", ...NOT_PLAN]);
   return {
     dirty: lines(["status", "--porcelain", "--untracked-files=all", "--", ...NOT_PLAN]) > 0,
@@ -1031,8 +1037,8 @@ export function stageFacts(p, baseRef, branch) {
     ahead: base ? lines(["rev-list", `${base}..HEAD`, "--", ...NOT_PLAN]) : unpushed,
     hasBase: !!base,
     upstream: git(p, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).ok,
-    runFolder: hasRun,
-    planApproved: !!head && /^status:\s*["']?approved["']?\s*$/m.test(head),
+    runFolder: folders.length > 0,
+    planApproved: approved,
   };
 }
 
@@ -1049,13 +1055,23 @@ export function goalPlan(main, id) {
   return { handedOff: /直接實作|-spec\.md/.test(line) };
 }
 
-export function deriveStage({ facts, goal = null, comment = "" }) {
-  if (facts.dirty) return STAGE.implementing;
+export function deriveStage(input) {
+  return stageWithSource(input).stage;
+}
+
+// deriveStage plus the fact that decided it, for `console.mjs stage`.
+export function stageWithSource({ facts, goal = null, comment = "" }) {
+  const at = (stage, source) => ({ stage, source });
+  if (facts.dirty) return at(STAGE.implementing, "dirty");
   const pushed = facts.hasBase === false ? facts.upstream && facts.unpushed === 0 : facts.ahead > 0 && facts.unpushed === 0;
-  if (pushed) return STAGE.pushed;
-  if (facts.ahead > 0 || facts.planApproved || goal?.handedOff) return STAGE.implementing;
-  if (facts.runFolder || goal || /define-goal|interview/i.test(comment || "")) return STAGE.planning;
-  return STAGE.idle;
+  if (pushed) return at(STAGE.pushed, "pushed");
+  if (facts.ahead > 0) return at(STAGE.implementing, "ahead");
+  if (facts.planApproved) return at(STAGE.implementing, "dev-flow-plan");
+  if (goal?.handedOff) return at(STAGE.implementing, "goal-file");
+  if (facts.runFolder) return at(STAGE.planning, "dev-flow-plan");
+  if (goal) return at(STAGE.planning, "goal-file");
+  if (/define-goal|interview/i.test(comment || "")) return at(STAGE.planning, "interview-comment");
+  return at(STAGE.idle, "none");
 }
 
 function linearTitle(id) {
@@ -1142,6 +1158,7 @@ export function collect(repoArg = null, { withStage = true, withTitles = false, 
 function managedState(data, consoles) {
   const rows = data.rows.filter((r) => !r.unmanaged);
   return {
+    script: fileURLToPath(new URL("./console.mjs", import.meta.url)),
     consoles,
     repos: data.repos.map((r) => ({ name: r.name, main: r.main })),
     worktrees: rows.map((r) => ({ path: r.path, repo: r.repo, ticket: r.label, main: !!r.isMain })),
@@ -1249,7 +1266,8 @@ export function sessionHint(agent, max = 20) {
 
 export function stageOf(row) {
   const goal = goalPlan(row.main ?? mainCheckout(row.path), row.ticket ?? row.nickname);
-  return deriveStage({ facts: stageFacts(row.path, row.baseRef, row.branch), goal, comment: row.comment });
+  const repo = row.main ? path.basename(row.main) : undefined;
+  return deriveStage({ facts: stageFacts(row.path, row.baseRef, row.branch, repo), goal, comment: row.comment });
 }
 
 export function snapshot(rows) {
