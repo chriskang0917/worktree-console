@@ -2559,3 +2559,113 @@ test('待決按鍵：y 核可、m 自己回作用在選中的卡片（預設第�
   expect(decideCalls(w).at(-1)).toEqual(['decide', 'p3', 'approve'])
   await ui.unmount()
 })
+
+const focusPane = ($: any, element: string, kind: 'person' | 'plugin' = 'person', requestId = PANE) =>
+  $.ui.focus({ component: 'Pane', requestId, plugin: PLUGIN, element, origin: kind === 'person' ? { kind } : { kind, name: PLUGIN } } as any)
+
+// The test kit has no `$.ui.focus` for a mod, so the move the mod asks on the switch is checked by hand; these check where a stale place lands.
+test('待決焦點：待回覆選了第一張卡後按 r 切到待決，引擎留在舊位置（落在全部核可或第一題的 ✓ 核可）時落點改成題目；直接按 Enter 只開詳情，不核可', async ($, on) => {
+  const w = world(detailed())
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  const buttons = async () => (await ui.findAll({ type: 'Button' })).map((b: any) => b.key) as string[]
+  await focusPane($, `name:${keyOf('perm')}`, 'plugin')
+  const at = (await buttons()).indexOf(w.focused.at(-1)!)
+  await ui.press({ key: 'tab:decisions' })
+  const keys = await buttons()
+  expect(keys.slice(at, at + 2)).toEqual(['decide-all', 'approve:p1'])
+  for (const stale of keys.slice(at, at + 2)) {
+    await focusPane($, stale, 'plugin')
+    expect(w.focused.at(-1)).toBe('detail:p1')
+    await ui.press({ key: w.focused.at(-1)! })
+    expect(w.opened.at(-1)).toMatchObject({ id: DETAIL })
+  }
+  expect(decideCalls(w)).toEqual([])
+  await ui.unmount()
+})
+
+test('待決焦點：核可或自己回讓選中的卡片離開後，選中的換成下一題（不是回到第一題），y、m 跟著作用在它', async ($, on) => {
+  const w = world(withDecisions([...detailed().decisions, decision('p4', { tag: 'weekly#2', group: 'weekly', repo: 'agent-skills' })]))
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await focusPane($, 'detail:p2', 'plugin')
+  await ui.press({ key: 'decide-yes' })
+  expect(decideCalls(w).at(-1)).toEqual(['decide', 'p2', 'approve'])
+  expect((await ui.find({ key: 'decision:p3' }))?.props.borderStyle).toBe('double')
+  await ui.press({ key: 'decide-manual' })
+  expect(decideCalls(w).at(-1)).toEqual(['decide', 'p3', 'manual'])
+  expect((await ui.find({ key: 'decision:p4' }))?.props.borderStyle).toBe('double')
+  await ui.press({ key: 'decide-yes' })
+  expect(decideCalls(w).at(-1)).toEqual(['decide', 'p4', 'approve'])
+  expect((await ui.find({ key: 'decision:p1' }))?.props.borderStyle).toBe('double')
+  await ui.unmount()
+})
+
+test('待決焦點：焦點指向全部核可、藏起來的 y／m、卡片的核可或自己回時，落點改成題目', async ($, on) => {
+  const w = world(detailed())
+  const clock = await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await clock.advance(1_000)
+  for (const kind of ['plugin', 'person'] as const) {
+    for (const element of ['decide-all', 'decide-yes', 'decide-manual']) {
+      await focusPane($, 'tab:pending', 'plugin')
+      expect((await focusPane($, element, kind)).deny).toBeUndefined()
+      expect(w.focused.at(-1)).toBe('detail:p1')
+    }
+    for (const id of ['p2', 'p3', 'p1']) {
+      for (const verb of ['approve', 'manual']) {
+        await focusPane($, 'tab:pending', 'plugin')
+        await focusPane($, `${verb}:${id}`, kind)
+        expect(w.focused.at(-1)).toBe(`detail:${id}`)
+      }
+    }
+  }
+  expect(decideCalls(w)).toEqual([])
+  await ui.unmount()
+})
+
+test('待決焦點：從分頁標籤按 ↓ 選中的是第一題，不跳到第二題', async ($, on) => {
+  const w = world(detailed())
+  const clock = await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await clock.advance(1_000)
+  await focusPane($, 'tab:decisions', 'person')
+  expect(w.focused.at(-1)).toBe('tab:decisions')
+  await focusPane($, 'decide-all', 'person')
+  expect(w.focused.at(-1)).toBe('detail:p1')
+  expect((await ui.find({ key: 'decision:p1' }))?.props.borderStyle).toBe('double')
+  await focusPane($, 'approve:p2', 'person')
+  expect(w.focused.at(-1)).toBe('detail:p2')
+  await ui.unmount()
+})
+
+test('待決詳情焦點：方向鍵或 Tab 走不到「✓ 核可」「自己回」（焦點留在原處），y、m 照舊核可、自己回', async ($, on) => {
+  const w = world(detailed())
+  w.closes = []
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await ui.press({ key: 'detail:p1' })
+  let dialog = await $.ui.mount({ ...detailPane(), surface: 'terminal' })
+  const before = w.focused.length
+  for (const element of ['detail-approve', 'detail-manual']) {
+    for (const kind of ['person', 'plugin'] as const) expect((await focusPane($, element, kind, DETAIL)).deny).toBeTruthy()
+  }
+  expect(w.focused.length).toBe(before)
+  await dialog.press({ key: 'detail-manual' })
+  await dialog.unmount()
+  await ui.press({ key: 'detail:p3' })
+  dialog = await $.ui.mount({ ...detailPane(), surface: 'terminal' })
+  await dialog.press({ key: 'detail-approve' })
+  await dialog.unmount()
+  expect(decideCalls(w)).toEqual([['decide', 'p1', 'manual'], ['decide', 'p3', 'approve']])
+  await ui.unmount()
+})
