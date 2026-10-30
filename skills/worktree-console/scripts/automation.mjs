@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { consoleHome, reportLines } from "./lib.mjs";
-import { advisorHome, advisorState, latestFor, loadAdvice } from "./advice.mjs";
+import { advisorHome, advisorState, isSheet, latestFor, loadAdvice } from "./advice.mjs";
 
 const AUTOMATION = "automation.json";
 const DECISIONS = "decisions.jsonl";
@@ -121,7 +121,7 @@ function batchOf(entries, now) {
   for (const e of entries) {
     const status = e.item.session.status;
     const p = status?.kind === "waiting" ? latestFor(merged(byPath, free, e.item.row.path), e.item.row.path, e.since) : null;
-    if (p?.status === "ready" && p.tier === "batch" && !manual.has(p.id)) batch.push({ entry: e, prediction: p });
+    if (p?.status === "ready" && p.tier === "batch" && !isSheet(p) && !manual.has(p.id)) batch.push({ entry: e, prediction: p });
     else open.push(e);
   }
   return { open, batch };

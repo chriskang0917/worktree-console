@@ -489,7 +489,7 @@ export function lastActivity(status) {
   if (status.kind === "busy") return clipChars(status.text) || "—";
   if (status.kind === "permission") return clipChars(`${status.tool} ${status.input}`);
   if (status.kind === "waiting" && status.menu) return clipChars(status.menu[0].question);
-  if (status.kind === "waiting") return clipChars(askLines(status.text).at(-1) ?? (proseParagraphs(status.text).at(-1) ?? []).at(-1)) || "—";
+  if (status.kind === "waiting") return clipChars(askedLine(status.text) ?? (proseParagraphs(status.text).at(-1) ?? []).at(-1)) || "—";
   if (status.kind === "done") return clipChars(sentences((proseParagraphs(status.text).at(-1) ?? []).join(" ")).at(-1)) || "—";
   return "—";
 }
@@ -1422,6 +1422,22 @@ const REC_CODE = /^([A-Za-z]|\d{1,2})(?:\s*[＋+、和]\s*(?:[A-Za-z]|\d{1,2}))*
 const TOPIC = /^\s*\**\s*第\s*[一二三四五六七八九十\d]+\s*題/;
 const PICK = /選哪|哪一(?:個|種|項)|哪個|哪幾(?:個|項)|你要哪|選\s*\**\s*[A-Za-z\d]{1,2}\s*\**\s*還是|要選\s*\**\s*[A-Za-z\d]{1,2}(?![A-Za-z\d])/;
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
+const SHEET_ITEM = /^(?:\*\*)?\d{1,2}(?:\*\*)?[.)、]\s/;
+
+// 需求訪談's batch sheet: the last「第 N 題」names 批改單 and lists its questions as 1. 2. 3. before the a, b, c options.
+export function batchSheet(text) {
+  const prose = proseLines(text);
+  const at = prose.findLastIndex((l) => TOPIC.test(l));
+  if (at < 0 || !prose[at].includes("批改單")) return null;
+  const items = prose.slice(at + 1).filter((l) => SHEET_ITEM.test(l));
+  const red = items.filter((l) => l.includes("🔴")).length;
+  return { title: prose[at].trim(), count: items.length, red, summary: `批改單 ${items.length} 題（🔴 ${red} 題要你看）` };
+}
+
+// The line a board cell, the band and a stop record show for a text question: a batch sheet's count, else the last line asking.
+function askedLine(text) {
+  return batchSheet(text)?.summary ?? askLines(text).at(-1);
+}
 
 // Options are shown as a, b, c everywhere; the digits are kept for switching questions on the focus band.
 const letter = (i) => LETTERS[i] ?? String(i + 1);
@@ -1533,7 +1549,7 @@ function textEntry(tag, text) {
     entries: [
       {
         code: tag,
-        question: askLines(text).at(-1) ?? "—",
+        question: askedLine(text) ?? "—",
         options: list.length > 0 ? list.map((o, i) => (o.label ? `${letter(i)} ${clipOption(o.label)}` : letter(i))).join("／") : "—",
         suggest: suggest || "—",
       },
@@ -1592,7 +1608,7 @@ export function stopFields(row, session) {
   }
   if (status.kind === "done") return { ...base, question: clip(lastSentence(status.text)), suggestion: null };
   const said = proseLines(status.text).filter((l) => !/[?？]/.test(l)).map((l) => l.match(SUGGEST)?.[1].trim()).filter(Boolean).at(-1);
-  return { ...base, question: clip(askLines(status.text).at(-1) ?? lastSentence(status.text)), suggestion: said ? clip(said) : null };
+  return { ...base, question: clip(askedLine(status.text) ?? lastSentence(status.text)), suggestion: said ? clip(said) : null };
 }
 
 function lastSentence(text) {

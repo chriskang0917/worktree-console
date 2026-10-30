@@ -118,7 +118,7 @@ The file has up to two sections, by heading:
 - `## 中控台`: extra rules for the console itself, in plain language.
 - `## 需求訪談` (the interview): if this section exists, every ticket starts with an interview before any coding; without it, sessions start coding right away. You can still say "interview this one" or "skip the interview" for a single ticket while aligning.
 
-During an interview the new session reads your `## 需求訪談` section, asks you questions until the goal is settled, writes a goal file, and stops. The console relays each question to you, then hands the goal to a fresh session to build it. Whatever you write in the section, keep these, or the console loses track:
+During an interview the new session reads your `## 需求訪談` section, asks you questions until the goal is settled, writes a goal file, and stops (the template answers every question itself first, with sources, and shows them to you as one batch sheet). The console relays each question to you, then hands the goal to a fresh session to build it. Whatever you write in the section, keep these, or the console loses track:
 
 - **Question format.** Ask one question at a time, in plain text (no menus), in this shape. The focus band reads the options from it, and an answer like `b` is sent back by letter.
 
@@ -136,6 +136,7 @@ During an interview the new session reads your `## 需求訪談` section, asks y
   Options use lowercase `a`, `b`, `c`. Put nothing after the options except the `建議：` (recommendation) line.
 - **Goal file.** Write it to `.goals/<slug>.md` in the main checkout, using the slug the first message gives. The handoff turns its `**驗收準則**` (acceptance criteria) list into the checks the building session must show, skipping items marked 🔧 (no test yet) or ⚠️ (needs a human), and fills in the `**實作方案**` (approach) line.
 - **Finish line.** When the goal is settled, reply with only `定稿完成：<absolute path of the goal file>` and wait. The console takes it from there.
+- **Batch sheet.** When the question title has 批改單 (`**第 N 題：批改單這樣定稿嗎？**`), list its questions one per line as `1.`, `2.`, `3.` and mark the red ones 🔴: the band shows `批改單 N 題（🔴 M 題要你看）` and `9` prints the whole sheet into the chat; the advisor only suggests an answer for it, never counts down, auto-replies or moves it to 待決.
 
 `templates/prompt.md` is a complete working example: what to ask about, how to write testable acceptance criteria, and the goal file layout.
 

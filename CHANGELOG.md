@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.10.0
+
+- feat(console): batch interview questions into one self-answered sheet
+
 ## 1.9.1
 
 - fix(focus): keep Enter on the 待決 tab from approving and print only the report on finalize wakes
