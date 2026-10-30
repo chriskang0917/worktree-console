@@ -2676,6 +2676,23 @@ test("專注：同一個分頁裡沒載入過中控台 skill 的 session（daemo
   assert.equal(focusRun(dir, env, ["focus", "--session", real]).active, true, "記住後不再讀對話紀錄");
 });
 
+test("專注：只有最新的橫條拿得到橫條；重載 plugin 或另開中控台留下的舊橫條拿到 active:false，負責人 30 秒沒查詢才換人", () => {
+  const home = consoleHome({ mods: true });
+  const env = { WORKTREE_CONSOLE_HOME: home };
+  const dir = fake({ mutatePs: stagger });
+  const poll = (...args) => JSON.parse(run("console.mjs", ["focus", ...args], { dir, env }).out).active;
+  assert.equal(poll("--owner", "old", "--claim"), true);
+  assert.equal(poll("--owner", "new", "--claim"), true, "新的橫條一啟動就接手");
+  assert.equal(poll("--owner", "old"), false, "舊的橫條之後拿不到");
+  assert.equal(poll(), false, "沒帶編號的也拿不到");
+  assert.equal(poll("--owner", "new"), true);
+  const state = readJson(home, "focus.json");
+  fs.writeFileSync(path.join(home, "focus.json"), JSON.stringify({ ...state, owner: { ...state.owner, at: Date.now() - 31_000 } }));
+  assert.equal(poll("--owner", "old"), true, "負責人 30 秒沒查詢，下一個來查的接手");
+  assert.equal(readJson(home, "focus.json").owner.id, "old");
+  assert.equal(poll("--owner", "new"), false);
+});
+
 test("專注：切題把排隊題放上橫條、沒回的原題排到最後；延後把目前這題移到排隊最後、換排隊第一題；兩者都 announce", () => {
   const home = consoleHome({ mods: true });
   const env = { WORKTREE_CONSOLE_HOME: home };
@@ -3253,6 +3270,24 @@ test("代回倒數（專注）：使用者已先回答（advisor 拒絕代回）
   assert.equal(JSON.parse(run("console.mjs", ["focus-auto", "not-on-band"], { dir, env }).out).notice, null);
   assert.deepEqual(adv.calls(), [`auto --tag PROJ-102(question) --path ${adv.target}`]);
   assert.equal(fs.existsSync(path.join(dir, "calls.log")) ? sentTo(dir).length : 0, 0);
+});
+
+test("代回倒數（專注）：不是負責人的橫條跑 focus-auto 什麼都不送、回 active:false；每次 focus-auto 都記一行暫時紀錄", () => {
+  const dir = replyWorld("- **A**：先改 API\n- **B**：先改畫面\n\n先做哪個？", "B");
+  const adv = advisorFor(dir);
+  const home = consoleHome({ mods: true });
+  const env = { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: adv.home, SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" };
+  const view = focusRun(dir, env, ["focus", "--owner", "new", "--claim"]);
+  const stale = JSON.parse(run("console.mjs", ["focus-auto", view.current, "--owner", "old", "--reason", "tick", "--clock", "5"], { dir, env }).out);
+  assert.deepEqual(stale, { active: false });
+  assert.deepEqual(adv.calls(), []);
+  const sent = JSON.parse(run("console.mjs", ["focus-auto", view.current, "--owner", "new", "--reason", "key", "--clock", "6"], { dir, env }).out);
+  assert.equal(sent.notice, "[PROJ-102(question)] 已自動回覆：b");
+  const log = fs.readFileSync(path.join(home, "focus-auto-debug.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(log.map(({ key, current, owner, owned, reason, clock }) => ({ key, current, owner, owned, reason, clock })), [
+    { key: view.current, current: view.current, owner: "old", owned: false, reason: "tick", clock: 5 },
+    { key: view.current, current: view.current, owner: "new", owned: true, reason: "key", clock: 6 },
+  ]);
 });
 
 test("代回倒數（專注）：按 7 focus-cancel 後題目照一般題留在橫條、不再帶 auto，之後 focus-auto 也不送", () => {

@@ -10,6 +10,7 @@ export const FOCUS_WAIT_MS = 60_000;
 const MODS_TTL_MS = 30_000;
 const FILE = "focus.json";
 const CONSOLE_SESSIONS_MAX = 10;
+const OWNER_TTL_MS = 30_000;
 const REPLIED_MAX = 20;
 // The focus.json format version mods/focus-show checks; when to bump it is in references/focus-contract.md.
 export const FOCUS_VERSION = 1;
@@ -55,6 +56,18 @@ export function consoleSessionOk(sessionId, check = isConsoleSession) {
   if ((state.consoleSessions ?? []).includes(sessionId)) return true;
   if (!check(sessionId)) return false;
   saveFocus({ ...state, consoleSessions: [...(state.consoleSessions ?? []), sessionId].slice(-CONSOLE_SESSIONS_MAX) });
+  return true;
+}
+
+// One band at a time draws and counts down: the newest one claims it, since a reloaded mod or a new console can leave the old band running.
+// Another band takes over only once the owner has not polled for OWNER_TTL_MS, e.g. its window was closed.
+export function focusOwnerOk(owner, { claim = false, now = Date.now() } = {}) {
+  const state = loadFocus();
+  const held = state.owner;
+  const live = !!held && now - held.at < OWNER_TTL_MS;
+  if (!owner) return !live;
+  if (!claim && live && held.id !== owner) return false;
+  saveFocus({ ...state, owner: { id: owner, at: now } });
   return true;
 }
 

@@ -230,6 +230,8 @@ let held: number | null = null
 let known: Set<string> | null = null
 let tick = 0
 let sessionId = ''
+// Names this band instance; the newest one claims the band, so a band left over from a reload or an older console stops.
+let owner = ''
 // The console's own model turn: a /focus-show sent during it would wait in the input queue, so announces hold until it ends.
 let turning = false
 const sent: string[] = []
@@ -450,17 +452,17 @@ async function tickCountdown($: EngineInterface) {
   if (!countdown) return
   countdown.left = Math.max(0, Math.ceil((countdown.until - (await $.clock.now())) / 1000))
   $.ui.invalidate('ui.render')
-  if (countdown.left === 0 && !turning) await sendAuto($)
+  if (countdown.left === 0 && !turning) await sendAuto($, 'tick')
 }
 
 // 6, or the countdown at 0: `console.mjs focus-auto` records the auto-reply through the advisor and sends it with `reply`.
-async function sendAuto($: EngineInterface) {
+async function sendAuto($: EngineInterface, reason: 'tick' | 'key') {
   if (!countdown || sending) return
   const key = countdown.key
   sending = true
   stopCountdown()
   try {
-    await act($, ['focus-auto', key])
+    await act($, ['focus-auto', key, '--owner', owner, '--reason', reason, '--clock', String(await $.clock.now())])
   } finally {
     sending = false
   }
@@ -496,10 +498,10 @@ async function apply($: EngineInterface, next: Focus, pressed = false) {
   $.ui.invalidate('ui.render')
 }
 
-async function poll($: EngineInterface) {
+async function poll($: EngineInterface, claim = false) {
   let next: Focus = { active: false }
   try {
-    next = JSON.parse((await run($, ['focus', ...(sessionId ? ['--session', sessionId] : [])])).stdout)
+    next = JSON.parse((await run($, ['focus', ...(sessionId ? ['--session', sessionId] : []), '--owner', owner, ...(claim ? ['--claim'] : [])])).stdout)
   } catch {}
   await apply($, next)
 }
@@ -846,7 +848,8 @@ export const register: Register = on => {
     await startRecap($)
     if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || inHerdr) {
       sessionId = await $.session.id().catch(() => '')
-      void poll($)
+      owner = `${sessionId}@${await $.clock.now()}`
+      void poll($, true)
       $.clock.every(POLL_MS, () => {
         tick += 1
         if (focus.active || tick % IDLE_EVERY === 0) void poll($)
@@ -1245,7 +1248,7 @@ export const register: Register = on => {
             {countdownMeaning ? <Text color={theme.fg}>{` ${countdownMeaning}`}</Text> : null}
           </Box>
           <Box key="countdown-keys" flexDirection="row" width={COUNTDOWN_KEYS} flexShrink={0} justifyContent="flex-end">
-            <Button key="auto-now" hotkey="6" label="立即送出" plain onPress={() => void sendAuto($)}><Text color={theme.fg}>立即送出</Text></Button>
+            <Button key="auto-now" hotkey="6" label="立即送出" plain onPress={() => void sendAuto($, 'key')}><Text color={theme.fg}>立即送出</Text></Button>
             <Text color={theme.dim}> · </Text>
             <Button key="auto-cancel" hotkey="7" label="取消" plain onPress={() => void cancelAuto($)}><Text color={theme.fg}>取消</Text></Button>
           </Box>

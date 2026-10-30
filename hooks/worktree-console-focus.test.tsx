@@ -452,8 +452,9 @@ test('an announce is printed once though polls repeat it, then reported with foc
   await clock.advance(5_000)
   expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-  const poll = w.calls.find(c => c[0] === 'focus')!
-  expect(poll.slice(1)).toEqual(['--session', 'console-session'])
+  const [first, ...rest] = w.calls.filter(c => c[0] === 'focus')
+  expect(first!.slice(1)).toEqual(['--session', 'console-session', '--owner', 'console-session@1000', '--claim'])
+  expect(rest[0]!.slice(1)).toEqual(['--session', 'console-session', '--owner', 'console-session@1000'])
 })
 
 test('a stop that left the band and came back is announced again, so a print skipped while it was away is not lost', async ($, on) => {
@@ -846,7 +847,7 @@ test('封存 tab cards carry 取消封存 instead of the nickname button: it run
   expect((await ui.find({ key: `card:${keyOf('PROJ-6650')}` }))?.text).toContain('PROJ-6650')
   await ui.press({ key: `name:${keyOf('PROJ-6650')}` })
   expect(w.calls.at(-2)).toEqual(['unarchive', 'PROJ-6650'])
-  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session'])
+  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session', '--owner', 'console-session@1000'])
   expect(w.shown).toEqual([])
   expect(await cardTags(ui)).toEqual([])
   expect((await ui.find({ key: 'tab:hidden' }))?.props.label).toBe('封存 0')
@@ -2120,7 +2121,8 @@ const countdownText = async (ui: any) => {
   const row = findKey(await ui.drawn(), 'countdown')
   return row ? `${drawnText(findKey(row, 'countdown-left'))} | ${drawnText(findKey(row, 'countdown-keys'))}` : null
 }
-const autoCalls = (w: World) => w.calls.filter(c => c[0] === 'focus-auto' || c[0] === 'focus-cancel')
+const autoCalls = (w: World) => w.calls.filter(c => c[0] === 'focus-auto' || c[0] === 'focus-cancel').map(c => c.slice(0, 2))
+const sendArgs = (w: World) => w.calls.filter(c => c[0] === 'focus-auto').map(c => c.slice(2))
 
 test('band countdown: an open question on the band gets a herdr notification (request sound, 代號 and answer in the title) and the row 代回倒數 N 秒：b 橫條也改清單 with 6: 立即送出 · 7: 取消 on the right, one second down per second; at 0 the band sends it with focus-auto', async ($, on) => {
   const w = world(withAdvice(AUTO))
@@ -2141,6 +2143,7 @@ test('band countdown: an open question on the band gets a herdr notification (re
   expect(autoCalls(w)).toEqual([])
   await clock.advance(1_000)
   expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
+  expect(sendArgs(w)).toEqual([['--owner', 'console-session@1000', '--reason', 'tick', '--clock', '16000']])
   expect(w.toasts).toContain('[focusui] 已自動回覆：b')
   const after = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
   expect(await countdownText(after)).toBeNull()
@@ -2179,6 +2182,7 @@ test('band countdown: 6 sends at once, and the countdown does not send it a seco
   await ui.press({ key: 'auto-now' })
   await ui.unmount()
   expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
+  expect(sendArgs(w)).toEqual([['--owner', 'console-session@1000', '--reason', 'key', '--clock', '1000']])
   await clock.advance(20_000)
   expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
 })
@@ -2389,7 +2393,7 @@ test('待決：卡片的 ✓ 核可直接跑 console.mjs decide <id> approve 再
   await ui.press({ key: 'tab:decisions' })
   await ui.press({ key: 'approve:p2' })
   expect(w.calls.at(-2)).toEqual(['decide', 'p2', 'approve'])
-  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session'])
+  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session', '--owner', 'console-session@1000'])
   expect(w.toasts).toContain('[PROJ-7882#2] 已核可並送出：a')
   expect(w.shown).toEqual([])
   expect(await ui.find({ key: 'decision:p2' })).toBeFalsy()
@@ -2514,7 +2518,7 @@ test('待決自己回：卡片上的「自己回」跑 decide <id> manual 再輪
   await ui.press({ key: 'tab:decisions' })
   await ui.press({ key: 'manual:p2' })
   expect(decideCalls(w)).toEqual([['decide', 'p2', 'manual']])
-  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session'])
+  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session', '--owner', 'console-session@1000'])
   expect(w.toasts).toContain('[PROJ-7882#2] 改成自己回，已放上橫條')
   expect(await ui.find({ key: 'decision:p2' })).toBeFalsy()
   await ui.unmount()
