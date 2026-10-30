@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.10.1
+
+- fix(focus): let only the newest focus band count down and send auto-replies, so a band left over from a plugin reload or an older console cannot send early
+
 ## 1.10.0
 
 - feat(console): batch interview questions into one self-answered sheet

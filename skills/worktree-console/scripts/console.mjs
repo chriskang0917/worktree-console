@@ -62,7 +62,7 @@ import {
   STOPPED,
 } from "./lib.mjs";
 import { advisorHome, advisorState } from "./advice.mjs";
-import { consoleSessionOk, focusCancel, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
+import { consoleSessionOk, focusCancel, focusOwnerOk, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
 import { approve, takeOver } from "./automation.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
@@ -102,6 +102,10 @@ const { values, positionals } = parseArgs({
     file: { type: "string" },
     since: { type: "string" },
     session: { type: "string" },
+    owner: { type: "string" },
+    claim: { type: "boolean", default: false },
+    reason: { type: "string" },
+    clock: { type: "string" },
     branch: { type: "string" },
     dir: { type: "string" },
     ticket: { type: "string" },
@@ -277,7 +281,7 @@ function focusOut({ rows, keys }, { change = null, show = false, notice = null }
 }
 
 function focus() {
-  if (!isConsole(maybeTerminals()?.selfHandle()) || !consoleSessionOk(values.session ?? process.env.CLAUDE_CODE_SESSION_ID)) return console.log(JSON.stringify({ active: false }));
+  if (!isConsole(maybeTerminals()?.selfHandle()) || !consoleSessionOk(values.session ?? process.env.CLAUDE_CODE_SESSION_ID) || !focusOwnerOk(values.owner, { claim: values.claim })) return console.log(JSON.stringify({ active: false }));
   focusOut(load({}, { repoOptional: true }));
 }
 
@@ -311,6 +315,12 @@ function focusAutoCommand() {
   const key = positionals[0];
   if (!key) fail("缺少題目代號");
   const current = syncFocus(load({}, { repoOptional: true }).rows).current;
+  const owned = focusOwnerOk(values.owner);
+  // TEMP: tells which band sent an early auto-reply; remove once the cause is confirmed.
+  try {
+    fs.appendFileSync(path.join(consoleHome(), "focus-auto-debug.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), key, current: current?.key ?? null, owner: values.owner ?? null, owned, reason: values.reason ?? null, clock: values.clock ? Number(values.clock) : null, now: Date.now() })}\n`);
+  } catch {}
+  if (!owned) return console.log(JSON.stringify({ active: false }));
   const advisor = advisorState(advisorHome());
   let notice = null;
   if (current?.key === key && advisor && !loadFocus().cancelled?.[key]) {
