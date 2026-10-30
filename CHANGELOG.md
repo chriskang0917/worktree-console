@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.10.0
+
+- feat(console): batch interview questions into one self-answered sheet
+
 ## 1.9.0
 
 - feat(trial): remind the console when the trial ends and batch second-tier questions in a 待決 tab
