@@ -1572,9 +1572,11 @@ test("同一時間只有一支 watcher：已有一支（含舊版帶 --repo 的�
   const exited = new Promise((resolve) => child.on("exit", (_, signal) => resolve(signal)));
   try {
     await new Promise((r) => setTimeout(r, 200));
-    const busy = run("watch.mjs", [], { env: { WATCH_TIMEOUT_MS: "0" } });
+    // Only this test's stand-in matches, so --takeover never stops a real watcher on the machine.
+    const env = { WATCH_TIMEOUT_MS: "0", WATCH_PGREP_PATTERN: path.join(old, "watch.mjs").replace(/[.*+?^${}()|[\]\\]/g, "\\$&") };
+    const busy = run("watch.mjs", [], { env });
     assert.equal(busy.out, "[watch] already-running");
-    const taken = run("watch.mjs", ["--takeover"], { env: { WATCH_TIMEOUT_MS: "0" } });
+    const taken = run("watch.mjs", ["--takeover"], { env });
     assert.equal(taken.lines[0], "[watch] timeout");
     assert.equal(await exited, "SIGTERM");
   } finally {
