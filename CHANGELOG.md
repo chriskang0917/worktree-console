@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.1
+
+- fix(focus): keep Enter on the 待決 tab from approving and print only the report on finalize wakes
+
 ## 1.9.0
 
 - feat(trial): remind the console when the trial ends and batch second-tier questions in a 待決 tab
