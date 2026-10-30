@@ -2776,6 +2776,69 @@ test("回答路由：沒寫代號的回答送給橫條目前這題，第一行�
   assert.deepEqual(sentTo(sentence), ["terminal send --terminal term_b --text 先改畫面，順便補測試 --enter"]);
 });
 
+// 需求訪談's batch sheet as the console prompt asks for it: red first, then no source, then the rest, the goal file fenced, then a, b, c.
+const SHEET = [
+  "**第 7 題：批改單這樣定稿嗎？**",
+  "",
+  "1. 🔴 舊資料要不要搬：自答要搬，跑一次 migration 把 status 欄位補成 active（出處：src/db/schema.ts:42）",
+  "2. 🔴 ⚠️ 無出處（推測） 要不要請後端加 API：自答要，新增 GET /orders/summary，@ 後端同事（推測）",
+  "3. ⚠️ 無出處（推測） 預設排序用什麼：自答照建立時間由新到舊",
+  "4. 空狀態文案：自答沿用「目前沒有資料」（出處：src/locales/zh-TW.json:118）",
+  "5. 要不要補單元測試：自答要，補在 test/orders.test.ts（出處：AGENTS.md:12）",
+  "",
+  "```markdown",
+  "## 目標：proj-102",
+  "",
+  "**驗收準則**",
+  "- [ ] 1. 清單照建立時間排序",
+  "- [ ] 2. 空狀態顯示文案",
+  "```",
+  "",
+  "- **a.** 全照建議並動工：照單上自答定稿，中控台直接交棒開始實作",
+  "- **b.** 全照建議先不動工：照單上自答定稿，之後再決定要不要動工",
+  "- **c.** 要改：回「c 3 改成…；5 改成…」，寫要改的題號與改法",
+  "",
+  "建議：a，五題都有自答，紅題的做法照現有 schema",
+].join("\n");
+const SHEET_ITEMS = SHEET.split("\n").filter((l) => /^\d\. /.test(l));
+
+test("批改單：選項只截 a、b、c 三項、建議是單上的 a，題號 1. 2. 3. 不當選項；橫條與待回覆題目是「批改單 N 題（🔴 M 題要你看）」", () => {
+  const [item] = pendingItems([listRow("PROJ-102", session(asking(SHEET)))]);
+  assert.deepEqual(item.choices, ["a", "b", "c"]);
+  assert.equal(item.entries[0].options, "a 全照建議並動工／b 全照建議先不動工／c 要改");
+  assert.equal(item.entries[0].suggest, "a");
+  assert.equal(item.entries[0].question, "批改單 5 題（🔴 2 題要你看）");
+  assert.equal(lastActivity(asking(SHEET)), "批改單 5 題（🔴 2 題要你看）");
+  const report = reportLines(listRow("PROJ-102"), asking(SHEET));
+  assert.deepEqual(report.slice(-3), ["- a. 全照建議並動工（建議）", "- b. 全照建議先不動工", "- c. 要改"]);
+  const plain = SHEET.replace("🔴 ⚠️", "⚠️").replace("1. 🔴 ", "1. ");
+  assert.equal(pendingItems([listRow("PROJ-102", session(asking(plain)))])[0].entries[0].question, "批改單 5 題（🔴 0 題要你看）");
+  const ordinary = SHEET.replace("批改單這樣定稿嗎", "目標檔這樣定稿嗎");
+  assert.notEqual(pendingItems([listRow("PROJ-102", session(asking(ordinary)))])[0].entries[0].question, "批改單 5 題（🔴 2 題要你看）");
+});
+
+test("批改單：console.mjs focus 給橫條的題目是「批改單 5 題（🔴 2 題要你看）」，給 /focus-show 印的回報含整張單，每題與出處一字不漏、沒有被「…」截斷", () => {
+  const dir = replyWorld(SHEET, "a");
+  const view = focusRun(dir, { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) });
+  const card = view.sessions.find((s) => s.tag === "PROJ-102(question)");
+  assert.equal(card.question, "批改單 5 題（🔴 2 題要你看）");
+  assert.equal(view.currentTag, "PROJ-102(question)");
+  for (const line of SHEET_ITEMS) assert.ok(card.report.includes(`> ${line}`), line);
+  assert.deepEqual(card.report.split("\n").filter((l) => l.endsWith("…")), []);
+  assert.match(card.report, /出處：src\/db\/schema\.ts:42/);
+});
+
+test("批改單：中控台打「c 3 改成…；5 改成…」，有沒有寫代號都原文送到子 session，不拆成多題、不轉成選項代號", () => {
+  const env = () => ({ WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" });
+  const said = "c 3 改成照名稱排序；5 改成不用補測試";
+  const bare = replyWorld(SHEET, said);
+  assert.equal(run("console.mjs", ["reply", "--repo", app(), "--", said], { dir: bare, env: env() }).lines[0], "[PROJ-102(question)] 已送出");
+  assert.deepEqual(sentTo(bare), [`terminal send --terminal term_b --text ${said} --enter`]);
+  const named = replyWorld(SHEET, said);
+  assert.equal(run("console.mjs", ["reply", "--repo", app(), "--", "PROJ-102(question)", said], { dir: named, env: env() }).lines[0], "[PROJ-102(question)] 已送出");
+  assert.deepEqual(sentTo(named), [`terminal send --terminal term_b --text ${said} --enter`]);
+});
+
 test("回答路由：選單題的 a、b 轉成選單實際編號再代按", () => {
   const dir = withMenuSession([MENU[0]], { mutatePs: (ps) => { Object.assign(agentIn(ps, "proj-103-idle")[0], menuAgent()); for (const s of ["chris-proj-102-question", "proj-102-perm"]) Object.assign(agentIn(ps, s)[0], { state: "working", toolName: null }); releaseBusy(ps); } });
   const res = run("console.mjs", ["reply", "--repo", app(), "--", "b"], { dir, env: { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) } });
@@ -3284,7 +3347,7 @@ test("試營運期中：開始第 7 天起只寫一次期中報告，不印、�
 const BATCH_Q = "- **A**：現在刪\n- **B**：先留著\n\n已合併的遠端 branch，選哪個做法？";
 
 // An advisor home whose open prediction for PROJ-102(question) has the given tier; `free` puts it in free-predictions.jsonl instead.
-function batchAdvisor({ tier = "batch", verb = "delete-remote-branch", free = false, answer = "a" } = {}) {
+function batchAdvisor({ tier = "batch", verb = "delete-remote-branch", free = false, answer = "a", question = BATCH_Q, principle = "不可逆" } = {}) {
   const home = fs.mkdtempSync(path.join(tmp, "batch-advisor-"));
   const log = path.join(home, "calls.log");
   const script = path.join(home, "fake-advisor.mjs");
@@ -3293,8 +3356,8 @@ function batchAdvisor({ tier = "batch", verb = "delete-remote-branch", free = fa
   const at = new Date(1790787800001).toISOString();
   const target = fs.realpathSync(wt("chris-proj-102-question"));
   const lines = [
-    { event: "start", id: "p1", at, path: target, tag: "PROJ-102(question)", kind: free ? "free" : "text", question: BATCH_Q },
-    { event: "done", ref: "p1", at, answer, reason: "已合併進 main", type: "流程關卡", principle: "不可逆", precedent: "h1", stage: "實作中", format: "訪談題", keywords: [], change: 10, verb, tier },
+    { event: "start", id: "p1", at, path: target, tag: "PROJ-102(question)", kind: free ? "free" : "text", question },
+    { event: "done", ref: "p1", at, answer, reason: "已合併進 main", type: "流程關卡", principle, precedent: "h1", stage: "實作中", format: "訪談題", keywords: [], change: 10, verb, tier },
   ];
   fs.writeFileSync(path.join(home, free ? "free-predictions.jsonl" : "predictions.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
   fs.writeFileSync(path.join(home, "answers.jsonl"), "");
@@ -3320,6 +3383,20 @@ test("待決關閉：沒有 automation.json 與 batch.enabled false 時 console.
   const payload = JSON.parse(none);
   assert.ok(!("decisions" in payload));
   assert.ok([payload.current, ...payload.queue.map((q) => q.key)].map((k) => payload.sessions.find((s) => s.key === k)?.tag).includes("PROJ-102(question)"));
+});
+
+test("批改單：預測標第二級也不進待決、照舊上橫條；題型已開放代回也不倒數（舊版 advisor 沒標批改單時看題目認）", () => {
+  const dir = replyWorld(SHEET, "a");
+  for (const principle of ["批改單", null]) {
+    const adv = batchAdvisor({ question: SHEET, principle });
+    const view = focusRun(dir, { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: adv.home });
+    assert.ok(onBand(view, "PROJ-102(question)"), `${principle}: 上橫條`);
+    assert.deepEqual(view.decisions, []);
+    const advice = view.sessions.find((s) => s.tag === "PROJ-102(question)").advice;
+    assert.equal(advice.state, "ready");
+    assert.equal(advice.auto, undefined, `${principle}: 不倒數`);
+    assert.equal(advice.principle, "批改單，你看過再回");
+  }
 });
 
 test("待決關閉：splitBatch 原封不動交回同一份排隊題目，batch 是 null", () => {
