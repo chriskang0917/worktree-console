@@ -2577,6 +2577,24 @@ test("有 mods 時子 session 回「定稿完成（動工）：」或「定稿�
   }
 });
 
+test("定稿叫醒中控台：有 mods 時輸出只有那一則回報與 baseline 行，不附看板、待回覆清單與待取暱稱；沒有 mods 照舊附看板", () => {
+  const line = "定稿完成：/repo/.goals/proj-102.md";
+  for (const mods of [true, false]) {
+    const env = { WORKTREE_CONSOLE_HOME: consoleHome({ mods }), WATCH_TIMEOUT_MS: "300" };
+    const out = run("watch.mjs", ["--baseline", allPanes("busy")], { dir: fake({ mutatePs: finalize(line) }), env });
+    assert.ok(out.out.includes(line), out.out);
+    const board = /^\*\*.+\*\*$/m.test(out.out);
+    if (!mods) {
+      assert.ok(board, out.out);
+      continue;
+    }
+    const body = out.lines.filter((l) => !l.startsWith("baseline: "));
+    assert.ok(!board && !body.includes("---") && !out.out.includes("待取暱稱"), out.out);
+    assert.equal(body.filter((l) => l.startsWith("### ")).length, 1, out.out);
+    assert.match(out.lines.at(-1), /^baseline: /);
+  }
+});
+
 test("watcher 不帶 baseline 啟動：停下紀錄裡沒有的定稿補叫醒一次、只印那一則；同一次停下再重掛不再叫醒；不是定稿的停下不補叫醒；專注與一般模式都一樣", () => {
   for (const mods of [true, false]) {
     for (const line of ["定稿完成（動工）：/repo/.goals/proj-102.md", "定稿完成：/repo/.goals/proj-102.md"]) {
