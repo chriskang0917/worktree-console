@@ -535,8 +535,9 @@ async function focusSel($: EngineInterface, at: number, gen: number) {
   if (at !== drawing) return
   const endRepin = () => void (gen === repinGen && (repin = false))
   const pane = (await $.ui.panes().catch(() => [])).find(p => p.id === PANE)
-  if (!sel || !pane?.isFocused) return endRepin()
-  const want = `name:${sel}`
+  const decision = tab === 'decisions' ? chosenDecision() : null
+  const want = decision ? `detail:${decision.id}` : tab !== 'decisions' && sel ? `name:${sel}` : null
+  if (!want || !pane?.isFocused) return endRepin()
   const res = await $.ui.focus({ requestId: PANE, key: want }).catch(() => ({ deny: 'failed' }))
   if (!res.deny && at === drawing) return void ((held = ring.indexOf(want)), endRepin())
   if (res.deny && ++repinTries >= REPIN_TRIES) return endRepin()
@@ -593,10 +594,27 @@ async function unarchiveCard($: EngineInterface, s: Session) {
   await poll($)
 }
 
+// The chosen card leaving 待決 hands the choice to the card after it (before it, at the end); the focus then goes to the chosen question.
+function choiceAfter(ids: string[]) {
+  const list = decisionList()
+  const was = chosenDecision()?.id ?? null
+  const i = list.findIndex(d => d.id === was)
+  const next = was && ids.includes(was) ? [...list.slice(i + 1), ...list.slice(0, i).reverse()].find(d => !ids.includes(d.id))?.id ?? null : null
+  return { was, next }
+}
+
+function moveOn($: EngineInterface, after: { was: string | null; next: string | null }) {
+  if (after.next && !decisions().some(d => d.id === after.was)) decideSel = after.next
+  if (tab !== 'decisions') return
+  startRepin()
+  $.ui.invalidate('ui.render')
+}
+
 // 待決's 核可 (one card) and 全部核可: runs `console.mjs decide` straight from the mod like 取消封存, then toasts how it went.
 async function approveCards($: EngineInterface, id: string | null) {
   const ids = id ? [id] : decisions().map(d => d.id)
   if (ids.length === 0 || ids.some(x => deciding.has(x))) return
+  const after = choiceAfter(ids)
   for (const x of ids) deciding.add(x)
   $.ui.invalidate('ui.render')
   let out = ''
@@ -610,11 +628,13 @@ async function approveCards($: EngineInterface, id: string | null) {
   if (id && lines[0]) $.ui.toast(lines[0])
   else if (!id && lines.length) $.ui.toast(`已核可 ${sent} 題${failed ? `，${failed} 題送出失敗` : ''}`)
   await poll($)
+  moveOn($, after)
 }
 
 // 自己回: `console.mjs decide <id> manual` takes it out of 待決 and puts it first on the band, where the user answers it as usual.
 async function manualCard($: EngineInterface, id: string) {
   if (deciding.has(id)) return
+  const after = choiceAfter([id])
   deciding.add(id)
   $.ui.invalidate('ui.render')
   let out = ''
@@ -625,6 +645,7 @@ async function manualCard($: EngineInterface, id: string) {
   const line = out.trim().split('\n')[0]
   if (line) $.ui.toast(line)
   await poll($)
+  moveOn($, after)
 }
 
 // Enter on a card, or a click on its question: the question's whole context in a dialog Esc closes; nothing reaches the conversation.
@@ -852,15 +873,16 @@ export const register: Register = on => {
   // The engine walks ↑↓ one Button back or forth through the pane, keeping its place by index: a step from where it held is one card up or down.
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (tab === 'decisions') {
-      // ↑↓ step a whole card and land on its question, so Enter opens the detail and never approves.
+      // ↑↓ step a whole card and land on its question, and every button that sends hands the focus to a question, so Enter opens the detail and never approves.
       const list = decisionList()
       const hit = /^(detail|approve|manual):(.+)$/.exec(e.element ?? '')
+      const sends = /^decide-(all|yes|manual)$/.test(e.element ?? '')
       const n = ring.length
       const to = ring.indexOf(e.element ?? '')
-      const from = held !== null && held < n ? held : null
+      const from = held !== null && held < n && /^(detail|approve|manual):/.test(ring[held]!) ? held : null
       const dir = e.origin.kind !== 'person' || to < 0 || from === null ? 0 : to === (from + 1) % n ? 1 : to === (from - 1 + n) % n ? -1 : 0
       const i = list.findIndex(d => d.id === chosenDecision()?.id)
-      const target = dir !== 0 && i >= 0 ? list[Math.max(0, Math.min(list.length - 1, i + dir))] : list.find(d => d.id === hit?.[2])
+      const target = dir !== 0 && i >= 0 ? list[Math.max(0, Math.min(list.length - 1, i + dir))] : hit ? list.find(d => d.id === hit[2]) : sends ? chosenDecision() : undefined
       if (!target) {
         const res = await next(e)
         if (!res.deny) held = to < 0 ? null : to
@@ -898,6 +920,9 @@ export const register: Register = on => {
     if (!res.deny) held = ring.indexOf(want)
     return res
   })
+
+  // The detail's 核可 and 自己回 take no focus, so arrows and Tab never stop on them; y, m or a click sends.
+  on('ui.focus', { component: 'Pane', requestId: DECIDE_DETAIL }, async ($, e, next) => (/^detail-(approve|manual)$/.test(e.element ?? '') ? { deny: 'detail-sends' } : next(e)))
 
   // The pane keeps its own window over the cards, the keys line riding after the last one: the wheel moves a card, a page key a screenful.
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {

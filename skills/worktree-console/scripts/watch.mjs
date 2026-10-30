@@ -236,8 +236,11 @@ for (;;) {
         ...wake.map(({ row, x }) => reportLines(row, x.status, x)),
         ...unanswered.map(({ row, x }) => reportLines(row, x.status, x, { again: true })),
       ];
-      const names = nameLines(data.rows);
-      console.log([...reportBlock(reports, data.rows), ...(names.length > 0 ? ["", ...names] : [])].join("\n"));
+      if (focused) console.log(reports.map((r) => r.join("\n")).join("\n\n---\n\n"));
+      else {
+        const names = nameLines(data.rows);
+        console.log([...reportBlock(reports, data.rows), ...(names.length > 0 ? ["", ...names] : [])].join("\n"));
+      }
       console.log(`baseline: ${formatBaseline(current)}`);
       process.exit(0);
     }
