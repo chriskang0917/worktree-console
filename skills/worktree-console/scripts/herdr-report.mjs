@@ -18,6 +18,30 @@ const kindName = (k) => (k === "unknown" ? "推不出來" : LABELS[k] ?? k ?? "�
 // A misjudgement that hides a question: the session waited on the user while the board said running or finished.
 export const missedCall = (m) => ASKING.has(m.actualKind) && SILENT.has(m.shown);
 
+// Old herdr's lines carry no terminal; the Herdr app's say "herdr-app".
+export const SOURCES = [
+  ["herdr", "舊 herdr"],
+  ["herdr-app", "Herdr app"],
+];
+const sourceOf = (e) => e.terminal ?? "herdr";
+
+export function bySource(reads, misjudges) {
+  return SOURCES.map(([key, name]) => {
+    const mine = reads.filter((e) => sourceOf(e) === key);
+    const caught = misjudges.filter((e) => sourceOf(e) === key);
+    return {
+      key,
+      name,
+      reads: mine.length,
+      unknown: mine.filter((e) => e.herdr === "unknown").length,
+      anomaly: mine.filter((e) => e.shown === "anomaly").length,
+      mismatches: mine.filter((e) => e.mismatch).length,
+      misjudges: caught.length,
+      missed: caught.filter(missedCall).length,
+    };
+  });
+}
+
 export function evaluate({ since = 0, audit = readAudit(since), events = readEvents(since) } = {}) {
   const reads = audit.filter((e) => e.event === "read");
   const misjudges = audit.filter((e) => e.event === "misjudge");
@@ -50,6 +74,7 @@ export function evaluate({ since = 0, audit = readAudit(since), events = readEve
     menus: new Set(reads.filter((e) => e.shown === "waiting" && e.herdr === "blocked").map((e) => e.ticket)).size,
     starts: events.filter((e) => e.event === "start" && e.ok).length,
     closes: events.filter((e) => e.event === "close" && e.ok).length,
+    sources: bySource(reads, misjudges),
     safe: reasons.length === 0,
     reasons,
   };
@@ -60,6 +85,7 @@ export function conclusionLines(r) {
     `herdr 原始 unknown：${r.unknown}／${r.reads} 次讀取（${pct(r.unknown, r.reads)}）`,
     `補判斷後「session 異常」：${r.anomaly}／${r.reads}（${pct(r.anomaly, r.reads)}，門檻 <5%）`,
     `三方不一致：${r.mismatches} 次；人工誤判：${r.misjudges.length} 筆，其中該叫沒叫 ${r.missed.length} 筆`,
+    ...(r.sources ?? []).map((x) => `${x.name}：讀取 ${x.reads} 次、session 異常 ${x.anomaly} 次（${pct(x.anomaly, x.reads)}）、人工誤判 ${x.misjudges} 筆（該叫沒叫 ${x.missed} 筆）`),
     r.safe ? "結論：herdr 版可以放心用" : `結論：還不行——${r.reasons.join("；")}`,
   ];
 }
@@ -116,6 +142,12 @@ th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: lef
 <div class="stat">三方不一致<b>${r.mismatches}</b>次</div>
 </div>
 
+<h2>舊 herdr 與 Herdr app 分開看</h2>
+${table(
+  ["工具", "狀態讀取", "原始 unknown", "補判斷後 session 異常", "三方不一致", "人工誤判", "該叫沒叫"],
+  (r.sources ?? []).map((x) => [x.name, x.reads, `${x.unknown}（${pct(x.unknown, x.reads)}）`, `${x.anomaly}（${pct(x.anomaly, x.reads)}）`, x.mismatches, x.misjudges, x.missed]),
+)}
+
 <h2>試跑覆蓋</h2>
 <p>開工 ${r.starts} 次、關閉 ${r.closes} 次；碰到授權請求的 session ${r.permissions} 個、提問選單 ${r.menus} 個、交棒 ${r.handoffs.length} 次。</p>
 
@@ -125,8 +157,8 @@ ${table(["次數", "herdr 回報", "中控台顯示", "對話紀錄與畫面推�
 
 <h2>人工誤判（逐筆）</h2>
 ${table(
-  ["時間", "代號", "看板顯示", "herdr 回報", "使用者說實際是", "該叫沒叫"],
-  r.misjudges.map((m) => [new Date(m.ts).toLocaleString("zh-TW"), m.ticket, kindName(m.shown), m.herdr ?? "—", m.actual, missedCall(m) ? "是" : "否"]),
+  ["時間", "工具", "代號", "看板顯示", "herdr 回報", "使用者說實際是", "該叫沒叫"],
+  r.misjudges.map((m) => [new Date(m.ts).toLocaleString("zh-TW"), SOURCES.find(([k]) => k === sourceOf(m))?.[1] ?? m.terminal, m.ticket, kindName(m.shown), m.herdr ?? "—", m.actual, missedCall(m) ? "是" : "否"]),
 )}
 
 <h2>交棒：長 /goal 有沒有被收成貼上內容</h2>

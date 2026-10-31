@@ -14,7 +14,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const PENDING_SLACK_MS = 60_000;
 const INPUT_MAX = 40_000;
 const TAIL_BYTES = 2 * 1024 * 1024;
-const TERMINAL_ENV = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "ORCA_TERMINAL_HANDLE", "ORCA_PANE_KEY"];
+const TERMINAL_ENV = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HC_TERMINAL_ID", "HC_SCOPE", "ORCA_TERMINAL_HANDLE", "ORCA_PANE_KEY"];
 
 export const SYSTEM_PROMPT = [
   "你把一個 coding agent 剛結束的這一輪回覆，摘要成給開發者本人看的繁體中文白話摘要。",
@@ -188,6 +188,7 @@ function realpath(p) {
 
 function terminalHandle() {
   if (process.env.HERDR_ENV === "1") return process.env.HERDR_PANE_ID || null;
+  if (process.env.HC_TERMINAL_ID) return process.env.HC_TERMINAL_ID;
   return process.env.ORCA_TERMINAL_HANDLE || null;
 }
 

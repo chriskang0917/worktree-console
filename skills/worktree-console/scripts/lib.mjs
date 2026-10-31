@@ -1150,6 +1150,7 @@ export function collect(repoArg = null, { withStage = true, withTitles = false, 
   const data = { repo: launch, main: launch, launchRepo: launchRepo?.name ?? (launch ? path.basename(launch) : null), repos, rows, self, keys, terminals: terminalRows };
   decorate(data, { withStage, withTitles });
   manager.audit(rows);
+  manager.publish?.(data);
   if (register) writeManaged(managedState(data, [...hidden]));
   return data;
 }

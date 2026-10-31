@@ -1,6 +1,6 @@
 # herdr 模式
 
-`<base>` 是 worktree-console 的 base directory。中控台在 herdr 分頁裡開（`HERDR_ENV=1`）就是 herdr 模式，在 Orca 分頁裡開（有 `ORCA_TERMINAL_HANDLE`）就是 Orca 模式；沒有設定檔、沒有預設值，也不混搭（在 Orca 開的中控台不管 herdr 的 session，反之亦然）。兩者都不是時腳本直接報錯「只支援 Orca 與 herdr」。herdr 連不上時腳本報 `herdr-unreachable`，不會改用 Orca。
+`<base>` 是 worktree-console 的 base directory。中控台在 herdr 分頁裡開（`HERDR_ENV=1`）就是 herdr 模式，在 Orca 分頁裡開（有 `ORCA_TERMINAL_HANDLE`）就是 Orca 模式；沒有設定檔、沒有預設值，也不混搭（在 Orca 開的中控台不管 herdr 的 session，反之亦然）。在 Herdr app 分頁裡開（有 `HC_TERMINAL_ID`、沒有 `HERDR_ENV=1`）是 Herdr app 模式，狀態規則照本檔，不同處見 `herdr-app.md`。三者都不是時腳本直接報錯「只支援 Orca、herdr 與 Herdr app」。herdr 連不上時腳本報 `herdr-unreachable`，不會改用 Orca。
 
 ## 跟 Orca 模式不同的地方
 

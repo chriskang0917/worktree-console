@@ -18,8 +18,8 @@ const LONG = '登入頁的表單驗證改好了，單元測試全部通過。註
 
 const run = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
-async function start($: any, on: On, world: World) {
-  mock.env(on, { ORCA_TERMINAL_HANDLE: HANDLE, WORKTREE_CONSOLE_HOME: HOME })
+async function start($: any, on: On, world: World, env: Record<string, string> = { ORCA_TERMINAL_HANDLE: HANDLE }) {
+  mock.env(on, { ...env, WORKTREE_CONSOLE_HOME: HOME })
   const clock = mock.clock(on, { now: 1_000_000 })
   on('fs.read', async (_$, e) => {
     if (!(e.path in world.files)) throw new Error('ENOENT')
@@ -80,6 +80,21 @@ test('子 session 分頁：停下後輸入框上方是「摘要」前綴（強�
     expect(textOf(root).replace(/\s|…|摘要|0: 完整摘要|完整摘要/g, '')).not.toBe(LONG.replace(/\s/g, ''))
     await ui.unmount()
   }
+})
+
+test('Herdr app 分頁：依 HC_TERMINAL_ID 找這個分頁的摘要，停下後一樣畫在輸入框上方', async ($, on) => {
+  const text = '登入頁改好了，測試都過。'
+  await start($, on, world({ [SUMMARY]: saved(text) }), { HC_TERMINAL_ID: HANDLE })
+  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
+  expect(rows(await ui.drawn()).map((r: any) => textOf(r).replace(/^摘要\s*/, ''))).toEqual([text])
+  await ui.unmount()
+})
+
+test('舊 herdr 跑在 Herdr app 終端機裡（HERDR_ENV=1 也有 HC_TERMINAL_ID）：照舊用 HERDR_PANE_ID 找摘要', async ($, on) => {
+  await start($, on, world({ [SUMMARY]: saved('Herdr app 位址的摘要。') }), { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p2', HC_TERMINAL_ID: HANDLE })
+  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
+  expect(textOf(await ui.drawn())).toBe('engine')
+  await ui.unmount()
 })
 
 test('子 session 分頁：短摘要整段照畫、不加 …，下面一行是 0: 完整摘要', async ($, on) => {

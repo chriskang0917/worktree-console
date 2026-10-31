@@ -143,15 +143,15 @@ test("環境決定終端管理工具：HERDR_ENV=1 先於 ORCA_TERMINAL_HANDLE�
   assert.equal(terminalKind({}), null);
 });
 
-test("Orca 與 herdr 皆無：console、watch 直接報錯說只支援 Orca 與 herdr", () => {
+test("Orca、herdr、Herdr app 皆無：console、watch 直接報錯說只支援 Orca、herdr 與 Herdr app", () => {
   const w = world([]);
   const env = { HERDR_ENV: "", HERDR_PANE_ID: "", ORCA_TERMINAL_HANDLE: "" };
   const board = w.run(["board", "--repo", app()], env);
   assert.equal(board.code, 1);
-  assert.match(board.out, /只支援 Orca 與 herdr/);
+  assert.match(board.out, /只支援 Orca、herdr 與 Herdr app/);
   const watch = spawnSync(process.execPath, [path.join(scripts, "watch.mjs")], { encoding: "utf8", env: { ...w.base, ...env, WATCH_PGREP_PATTERN: "no-such-watcher-xyz" } });
   assert.equal(watch.status, 1);
-  assert.match(watch.stdout, /只支援 Orca 與 herdr/);
+  assert.match(watch.stdout, /只支援 Orca、herdr 與 Herdr app/);
   assert.equal(w.orcaCalls(), false);
 });
 
@@ -518,7 +518,7 @@ test("auto-handoff hook 在 herdr：同工作區開新分頁接手、送 /goal�
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).panes.some((p) => p.pane_id === "w3:p1"), false, "舊分頁關掉");
 });
 
-test("auto-handoff hook 在 Orca 與 herdr 以外：說明只支援 Orca 與 herdr，並附交棒說明路徑", () => {
+test("auto-handoff hook 在 Orca、herdr、Herdr app 以外：說明只支援這三種，並附交棒說明路徑", () => {
   const dir = fs.mkdtempSync(path.join(tmp, "ah-none-"));
   const home = path.join(dir, "handoff");
   fs.mkdirSync(path.join(home, "notes"), { recursive: true });
@@ -530,7 +530,7 @@ test("auto-handoff hook 在 Orca 與 herdr 以外：說明只支援 Orca 與 her
   stop();
   fs.writeFileSync(path.join(home, "notes", "sess-n.md"), "# 說明\n");
   const msg = JSON.parse(stop().stdout).systemMessage;
-  assert.match(msg, /只支援 Orca 與 herdr/);
+  assert.match(msg, /只支援 Orca、herdr 與 Herdr app/);
   assert.ok(msg.includes(path.join(home, "notes", "sess-n.md")));
 });
 
