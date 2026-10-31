@@ -1,4 +1,5 @@
-// worktree-console's board beside the terminals: one row per session, the ones waiting on you on top.
+// worktree-console's board beside the terminals: sessions grouped by repo with stage and last activity, the ones
+// waiting on you on top.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, appHome, readTextFile, run, theme, watchFolder } from "herdr";
@@ -44,9 +45,9 @@ export default class WorktreeBoard extends View {
       .bg(t.chrome)
       .p(8)
       .gap(2)
-      .text_size(12.5)
-      .child(div().px(6).pb(4).text_size(11).text_color(t.dim).child("worktree 看板"))
-      .when(!!view.note, (el) => el.child(div().px(6).py(4).mb(2).rounded(6).bg(t.raised).text_size(11.5).text_color(t.muted).child(view.note)))
+      .text_size(14.5)
+      .child(div().px(6).pb(4).text_size(12.5).text_color(t.dim).child("worktree 看板"))
+      .when(!!view.note, (el) => el.child(div().px(6).py(4).mb(2).rounded(6).bg(t.raised).text_size(13).text_color(t.muted).child(view.note)))
       .when(view.rows.length === 0 && !view.note, (el) => el.child(div().px(6).text_color(t.dim).child("沒有 session")))
       .child(
         v_flex()
@@ -55,21 +56,30 @@ export default class WorktreeBoard extends View {
           .overflow_y_scrollbar()
           .gap(1)
           .children(
-            view.rows.map((r) =>
-              h_flex()
-                .id(`row-${r.terminal ?? r.tag}`)
-                .h(26)
-                .px(6)
-                .gap(8)
-                .rounded(6)
-                .items_center()
-                .when(view.stale, (el) => el.opacity(0.55))
-                .hover((s) => s.bg(t.hover))
-                .on_click(() => this.open(r.terminal))
-                .child(div().w(18).flex_none().child(r.icon))
-                .child(div().flex_1().truncate().text_color(fg).child(r.tag))
-                .child(div().flex_none().text_color(t.dim).child(r.wait)),
-            ),
+            view.groups.flatMap((g) => [
+              div().px(6).pt(6).pb(2).text_size(12.5).font_semibold().text_color(t.muted).child(g.repo || "—"),
+              ...g.rows.map((r) =>
+                v_flex()
+                  .id(`row-${r.terminal ?? r.tag}`)
+                  .px(6)
+                  .py(4)
+                  .gap(2)
+                  .rounded(6)
+                  .when(view.stale, (el) => el.opacity(0.55))
+                  .hover((s) => s.bg(t.hover))
+                  .on_click(() => this.open(r.terminal))
+                  .child(
+                    h_flex()
+                      .gap(8)
+                      .items_center()
+                      .child(div().w(18).flex_none().child(r.icon))
+                      .child(div().flex_1().truncate().text_color(fg).child(r.tag))
+                      .when(!!r.stage, (el) => el.child(div().flex_none().text_size(13).text_color(t.muted).child(r.stage)))
+                      .child(div().flex_none().text_color(t.dim).child(r.wait)),
+                  )
+                  .when(!!r.activity, (el) => el.child(div().pl(26).truncate().text_size(13).text_color(t.muted).child(r.activity))),
+              ),
+            ]),
           ),
       );
   }

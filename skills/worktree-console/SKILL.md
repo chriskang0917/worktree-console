@@ -11,7 +11,7 @@ description: 在單一 Claude Code session 透過 orca CLI、herdr 或 Herdr app
 
 ## 硬需求與啟動
 
-本 skill 只能在 Orca、herdr 或 Herdr app 的分頁裡運作，依中控台所在的工具自動選用：`HERDR_ENV=1` → herdr 模式，否則有 `HC_TERMINAL_ID` → Herdr app 模式，否則有 `ORCA_TERMINAL_HANDLE` → Orca 模式，三者皆無就停下並說明「worktree-console 只支援 Orca、herdr 與 Herdr app」。**herdr 模式先讀 `<base>/references/herdr.md`**，其中寫明與 Orca 不同的步驟（第 1 步改查 `herdr status`、開工、Linear、⚠️ 狀態）；**Herdr app 模式先讀 `herdr.md` 再讀 `<base>/references/herdr-app.md`**（偵測方式、與舊 herdr 不同的地方、側欄看板 mod 的位置與過期提示）；以下以 Orca 模式為主。
+本 skill 只能在 Orca、herdr 或 Herdr app 的分頁裡運作，依中控台所在的工具自動選用：`HERDR_ENV=1` → herdr 模式，否則有 `HC_TERMINAL_ID` → Herdr app 模式，否則有 `ORCA_TERMINAL_HANDLE` → Orca 模式，三者皆無就停下並說明「worktree-console 只支援 Orca、herdr 與 Herdr app」。**herdr 模式先讀 `<base>/references/herdr.md`**，其中寫明與 Orca 不同的步驟（第 1 步改查 `herdr status`、開工、Linear、⚠️ 狀態）；**Herdr app 模式先讀 `herdr.md` 再讀 `<base>/references/herdr-app.md`**（偵測方式、與舊 herdr 不同的地方、看板 pane 的位置與過期提示）；以下以 Orca 模式為主。
 
 1. `command -v orca` 與 `orca status --json | jq -c 'if .ok then {ok, reachable: .result.runtime.reachable} else {ok, error: .error.code} end'`（成功只印 `ok` 與 `reachable`，`ok:false` 時另帶 `error.code`）：找不到指令、`ok:false` 或 `reachable` 不是 true → 停，回報原因。
 2. 取啟動 repo：`REPO=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")`（主 checkout 絕對路徑）。`console.mjs` 一律帶 `--repo "$REPO"`；它只決定開票的預設 repo，看板、指揮、關閉涵蓋 Orca 所有 repo（`orca repo list --json` 有每個 repo 的 `path` 與 `displayName`）。
@@ -120,7 +120,7 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 | 使用者問為什麼是這個狀態或階段，或寫詳情建議需要判斷階段時 | `status-stage.md` |
 | 「封存 <代號>」（〈封存〉） | `archive.md` |
 | 中控台在 herdr 分頁裡（`HERDR_ENV=1`）：啟動前；使用者說「<票號> 狀態錯了，其實是 X」；「把 <票號> 搬到 <工作區>」；要看 herdr 試跑評估 | `herdr.md` |
-| 中控台在 Herdr app 分頁裡（有 `HC_TERMINAL_ID`、沒有 `HERDR_ENV=1`）：啟動前（先讀 `herdr.md`）；側欄看板沒出現或顯示過期 | `herdr-app.md` |
+| 中控台在 Herdr app 分頁裡（有 `HC_TERMINAL_ID`、沒有 `HERDR_ENV=1`）：啟動前（先讀 `herdr.md`）；看板 pane 沒出現或顯示過期 | `herdr-app.md` |
 | 「問：<問題>」、「問 <repo>：<問題>」、「<代號> 問：<問題>」，或開頭那個字像 repo 名稱（3 個字元以上）且不是中控台指令（〈問問題〉） | `ask.md` |
 | 對話出現 `/focus-show` 的輸出，或 `after-send` 印出 `等 <代號> 回應中…`（〈專注模式〉） | `focus.md` |
 

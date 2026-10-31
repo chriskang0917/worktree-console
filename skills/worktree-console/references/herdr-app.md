@@ -43,12 +43,12 @@
 
 與 `herdr.md`〈指令〉相同（`start`、`open`、`move`、`misjudge`、`herdr-report` 都能用），差別只有 `start` 的 `--dir` 可省略。
 
-## 側欄看板
+## 看板 pane
 
-Herdr app 右側的常駐看板，只顯示中控台算好的狀態，自己不判斷：
+中控台分頁右側的看板 pane，只顯示中控台算好的狀態，自己不判斷：
 
-- **位置**：原始碼在 plugin 的 `herdr-app/mods/worktree-board/`。中控台每次讀狀態（看板、watcher 每 10 秒一次）都會確認 `~/.config/herdr-app/mods/worktree-board/` 與原始碼一致，不一致才寫。Herdr app 第一次看到它時依 `mod.json`（`"place": "right"`、寬 240）放在版面右側，之後的位置與寬度由使用者在 Herdr app 裡調。
+- **位置**：原始碼在 plugin 的 `herdr-app/mods/worktree-board/`。中控台每次讀狀態（看板、watcher 每 10 秒一次）都會確認 `~/.config/herdr-app/mods/worktree-board/` 與原始碼一致，不一致才寫。Herdr app 不會把新 mod 放進它內建的版面，所以中控台自己讀狀態（`board`、watcher）時，用 `pane.split` 在中控台所在的分頁右側切出看板 pane，焦點留在中控台。每個分頁只切一次（記在 `~/.config/worktree-console/herdr-app-board-panes.json`）；使用者關掉後不會再切，中控台交棒到新分頁時新分頁會再切一次。寬度由使用者拖拉調整，Herdr app 會記住。`mod.json` 是 `"place": "none"`，避免 Herdr app 另外再放一份。
 - **資料**：`~/.config/worktree-console/herdr-app-board.json`，中控台每次讀狀態就整份重寫；mod 從同資料夾的 `.board-path` 得知這份檔案在哪。
-- **每列**：狀態圖示、代號、等待時間（這個狀態維持多久）。⚠️／🔐／💬 排在 🔄／⏸／💤 前面，同狀態等最久的在上。點一列切到該子 session 的分頁。
+- **每列**：依 repo 分組，每列第一行是狀態圖示、代號、階段、等待時間（這個狀態維持多久），第二行是最後動態（和中控台看板的「最後動態」欄同一套：💬 放問題、🔐 放要執行的內容、🔄 放最後送的指令、⏸ 放最後一句）。⚠️／🔐／💬 排在 🔄／⏸／💤 前面，同狀態等最久的在上；組的順序跟著組裡最需要處理的那一列。點一列切到該子 session 的分頁。
 - **過期提示**：狀態檔超過 2 分鐘沒更新（中控台關了或 watcher 沒在跑），頂部顯示「中控台未在執行，資料停在 HH:MM」，列表變灰但保留最後的資料。
 - **修改後**：在 Herdr app 裡驗證前先跑 `herdr-app check ~/.config/herdr-app/mods/worktree-board`。

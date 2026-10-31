@@ -88,7 +88,7 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 - **worktree 的位置**固定在 `~/.herdr/worktrees/<repo>/<branch>`，和 Herdr app 內建的 New worktree 同一處；branch 裡的 `/` 換成 `-`。
 - **分頁**開在名稱等於 repo 的 space（沒有就開一個）。Herdr app 開分頁會把畫面切過去，中控台開完會切回你原本看的分頁。
 - **送字**走 herdr-core 的 `hc send`；倒數代回不發系統通知，只在專注橫條上倒數。
-- **側欄看板**：中控台在 Herdr app 裡第一次讀狀態時，把看板 mod 複製到 `~/.config/herdr-app/mods/worktree-board/`，Herdr app 把它放在版面右側（寬 240）。每列只有狀態圖示、代號與等待時間，等你處理的（💬、🔐、⚠️）排在最上面，點一列就切到那個 session 的分頁。看板只讀中控台寫的狀態檔；這份檔案超過 2 分鐘沒更新時，頂部會寫「中控台未在執行，資料停在 HH:MM」，列表變灰。
+- **看板 pane**：中控台在 Herdr app 裡第一次讀狀態時，把看板 mod 複製到 `~/.config/herdr-app/mods/worktree-board/`，並在中控台的分頁右側切出看板 pane（每個分頁一次，關掉後不再切）。依 repo 分組，每列有狀態圖示、代號、階段、等待時間，下一行是最後動態（例如它問的問題），等你處理的（💬、🔐、⚠️）排在最上面，點一列就切到那個 session 的分頁。看板只讀中控台寫的狀態檔；這份檔案超過 2 分鐘沒更新時，頂部會寫「中控台未在執行，資料停在 HH:MM」，列表變灰。
 
 ## 安裝 task-list（選用）
 

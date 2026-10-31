@@ -54,7 +54,7 @@ const result = (id, n = 2) => ({ type: "user", timestamp: ts(n), message: { role
 
 // A Herdr app with the console as t1 in the "console" space and one claude tab per agent in the "app" space;
 // `session` is the id the console started that tab with.
-function world(agents, { transcripts = {}, screens = {}, spaces = null, focus = { space: "sp0", tab: "tb0" } } = {}) {
+function world(agents, { transcripts = {}, screens = {}, spaces = null, focus = { space: "sp0", tab: "tb0", pane: "pa1" } } = {}) {
   const dir = fs.mkdtempSync(path.join(tmp, "fake-"));
   const home = path.join(dir, "home");
   const projects = path.join(dir, "projects");
@@ -224,25 +224,46 @@ test("看板五種狀態：blocked 依對話紀錄分成 💬 選單與 🔐 授
   assert.equal(w.calls().some((c) => c[0] === "hc" && c[1] === "send"), false, "讀看板不送任何字");
 });
 
-test("讀看板時寫出看板 mod 的狀態檔並把 mod 放進 Herdr app：mod.json 在右側、寬 240，.board-path 指向狀態檔", () => {
+test("讀看板時寫出看板 mod 的狀態檔並把 mod 放進 Herdr app 的 mods 資料夾，.board-path 指向狀態檔", () => {
   const w = five();
   w.run(["board", "--repo", app()]);
   const state = JSON.parse(fs.readFileSync(path.join(w.home, "herdr-app-board.json"), "utf8"));
   assert.ok(Date.now() - state.at < 60_000);
-  assert.deepEqual(Object.fromEntries(state.rows.map((r) => [r.tag, [r.kind, r.terminal]])), {
-    "PROJ-201": ["waiting", "t2"],
-    "PROJ-202": ["permission", "t3"],
-    "PROJ-203": ["busy", "t4"],
-    "PROJ-204": ["done", "t5"],
-    "PROJ-205": ["idle", "t6"],
-  });
+  assert.deepEqual(Object.fromEntries(state.rows.map((r) => [r.tag, [r.repo, r.kind, r.terminal, r.stage, r.activity]])), {
+    "PROJ-201": ["app", "waiting", "t2", "未開工", "要用哪個色？"],
+    "PROJ-202": ["app", "permission", "t3", "未開工", "Bash mkdir -p /tmp/x"],
+    "PROJ-203": ["app", "busy", "t4", "未開工", "跑測試"],
+    "PROJ-204": ["app", "done", "t5", "未開工", "測試也全過。"],
+    "PROJ-205": ["app", "idle", "t6", "未開工", "—"],
+  }, "階段與最後動態和中控台看板同一套算法");
   const mod = path.join(w.base.HERDR_APP_HOME, "mods", "worktree-board");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(mod, "mod.json"), "utf8")), { place: "right", size: 240, title: "worktree 看板" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(mod, "mod.json"), "utf8")), { place: "none", title: "worktree 看板" });
   assert.equal(fs.readFileSync(path.join(mod, ".board-path"), "utf8"), path.join(w.home, "herdr-app-board.json"));
   for (const f of ["main.js", "board.js"]) assert.equal(fs.readFileSync(path.join(mod, f), "utf8"), fs.readFileSync(path.join(root, "herdr-app", "mods", "worktree-board", f), "utf8"));
 });
 
-test("看板 mod：每列只有圖示、代號、等待時間；💬／🔐／⚠️ 排在 🔄／⏸／💤 前面，同狀態等最久的在上", () => {
+test("中控台的分頁右側切出看板 pane：中控台自己讀狀態（board）時切一次、同一個分頁不再切、焦點留在中控台；其他指令讀狀態不切", () => {
+  const w = five();
+  const splits = () => appDo(w, "pane.split");
+  w.run(["detail", "--repo", app(), "PROJ-204"]);
+  assert.deepEqual(splits(), [], "不是中控台自己的讀取就不切");
+  w.run(["board", "--repo", app()]);
+  assert.deepEqual(splits(), [{ direction: "right", pane: "pa1", mod: "worktree-board" }]);
+  const tab = w.state().spaces[0].tabs[0];
+  assert.deepEqual(tab.mods.map((m) => m.mod), ["worktree-board"]);
+  assert.equal(w.state().focus.pane, "pa1", "切完焦點回到中控台的 pane");
+  assert.ok(fs.existsSync(path.join(w.base.HERDR_APP_HOME, "mods", "worktree-board", "main.js")), "先放好 mod 再切");
+  w.run(["board", "--repo", app()]);
+  assert.equal(splits().length, 1, "同一個分頁只切一次");
+  const s = w.state();
+  s.spaces[0].tabs.push({ id: "tb9", name: "console", terminals: [{ terminal: "t1", pane: "pa9" }] });
+  s.spaces[0].tabs.shift();
+  w.save(s);
+  w.run(["board", "--repo", app()]);
+  assert.deepEqual(splits().at(-1), { direction: "right", pane: "pa9", mod: "worktree-board" }, "中控台換到新分頁（交棒）就在新分頁再切一次");
+});
+
+test("看板 mod：每列是圖示、代號、階段、等待時間加一行最後動態；💬／🔐／⚠️ 排在 🔄／⏸／💤 前面，同狀態等最久的在上", () => {
   const now = Date.UTC(2026, 9, 31, 12, 0, 0);
   const min = 60_000;
   const view = boardView(
@@ -277,6 +298,33 @@ test("看板 mod：每列只有圖示、代號、等待時間；💬／🔐／�
   assert.ok(view.rows.slice(firstCalm).every((r) => !asking.has(r.icon)), "要處理的全部在前面");
   assert.deepEqual([view.stale, view.note], [false, null]);
   assert.equal(waited(now - 59_000, now), "<1m");
+  const one = boardView({ at: now, rows: [{ repo: "app", tag: "PROJ-1", kind: "waiting", stage: "實作中", activity: "要不要 push？", since: now, terminal: "t2" }, { repo: "app", tag: "PROJ-2", kind: "done", stage: "未開工", activity: "—", since: now, terminal: "t3" }] }, now);
+  assert.deepEqual(one.rows.map((r) => [r.tag, r.stage, r.activity]), [["PROJ-1", "實作中", "要不要 push？"], ["PROJ-2", "未開工", ""]], "最後動態是 — 時不畫第二行");
+  const main = fs.readFileSync(path.join(root, "herdr-app", "mods", "worktree-board", "main.js"), "utf8");
+  assert.match(main, /child\(r\.stage\)/);
+  assert.match(main, /child\(r\.activity\)/);
+});
+
+test("看板 mod：依 repo 分組，組的順序跟著組裡最需要處理的那一列，所以等你處理的仍排最上面", () => {
+  const now = Date.UTC(2026, 9, 31, 12, 0, 0);
+  const view = boardView(
+    {
+      at: now,
+      rows: [
+        { repo: "web", tag: "w-busy", kind: "busy", since: now - 60_000, terminal: "t2" },
+        { repo: "api", tag: "a-done", kind: "done", since: now - 60_000, terminal: "t3" },
+        { repo: "api", tag: "a-perm", kind: "permission", since: now - 60_000, terminal: "t4" },
+        { repo: "web", tag: "w-ask", kind: "waiting", since: now - 60_000, terminal: "t5" },
+        { repo: "web", tag: "w-idle", kind: "idle", since: null, terminal: "t6" },
+      ],
+    },
+    now,
+  );
+  assert.deepEqual(view.groups.map((g) => [g.repo, g.rows.map((r) => r.tag)]), [
+    ["api", ["a-perm", "a-done"]],
+    ["web", ["w-ask", "w-busy", "w-idle"]],
+  ]);
+  assert.deepEqual(view.rows.map((r) => r.tag), ["a-perm", "a-done", "w-ask", "w-busy", "w-idle"]);
 });
 
 test("看板 mod：狀態檔超過 2 分鐘沒更新就標「中控台未在執行，資料停在 HH:MM」並把列表變灰；沒有狀態檔也說明", () => {

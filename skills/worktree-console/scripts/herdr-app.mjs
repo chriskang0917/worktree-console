@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeProjectDir, consoleHome, realpath, sessionTag } from "./lib.mjs";
+import { claudeProjectDir, consoleHome, lastActivity, realpath, recycledMark, sessionTag, stageOf } from "./lib.mjs";
 import { readEvents, transcriptFor } from "./log.mjs";
 import { auditRows, draftOf, herdrAgent, isPrompt, linear, promptText, readTranscript, repoName, snapshotFrom, tabRenames, workspaceNamed } from "./herdr.mjs";
 import { terminalError } from "./terminals.mjs";
@@ -15,6 +15,7 @@ export const NAME = "herdr-app";
 const SESSIONS = "herdr-app-sessions.json";
 export const BOARD = "herdr-app-board.json";
 export const BOARD_MOD = "worktree-board";
+const BOARD_PANES = "herdr-app-board-panes.json";
 const MOD_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "herdr-app", "mods", BOARD_MOD);
 // hc's statuses; `error` and none at all leave the state to the transcript, like herdr's unknown.
 const STATUS = { idle: "idle", working: "working", blocked: "blocked", done: "done" };
@@ -207,12 +208,23 @@ function closePanes(snap, panes) {
 const typed = new Map();
 const titles = new Map();
 
-// What the board mod shows: one line per session on the board, rewritten on every read so its age tells whether
-// a console still runs.
-export function boardState(rows, now = Date.now()) {
-  const list = rows.flatMap((r) =>
-    r.sessions.filter((s) => s.handle && !s.archived).map((s) => ({ tag: sessionTag(r, s), kind: s.status.kind, since: s.agent?.stateStartedAt ?? null, terminal: s.handle })),
-  );
+// What the board mod shows: one entry per session on the board, with the board's own stage and last-activity cells,
+// rewritten on every read so its age tells whether a console still runs. The watcher reads without stages, so they
+// are worked out here when missing.
+export function boardState(rows, now = Date.now(), stage = stageOf) {
+  const list = rows.flatMap((r) => {
+    const shown = r.sessions.filter((s) => s.handle && !s.archived);
+    const label = shown.length > 0 ? r.stage ?? stage(r) : null;
+    return shown.map((s) => ({
+      repo: r.repo,
+      tag: sessionTag(r, s),
+      kind: s.status.kind,
+      stage: label ?? null,
+      activity: recycledMark(s, lastActivity(s.status)) || null,
+      since: s.agent?.stateStartedAt ?? null,
+      terminal: s.handle,
+    }));
+  });
   return { at: now, rows: list };
 }
 
@@ -235,6 +247,29 @@ export function installBoardMod(home = appHome()) {
     changed.push(f);
   }
   return { dest, changed };
+}
+
+function focusedPane() {
+  const res = runApp(["status"]);
+  return res.ok ? res.result.focused_pane ?? null : null;
+}
+
+// The board as a pane on the right of the console's own tab, once per tab. The Herdr app never docks a mod into its
+// shipped layout, and its CLI lists no mod panes, so the tabs it went into are remembered; one closed by hand stays
+// closed. Focus goes back to the pane the person was on.
+export function ensureBoardPane(self) {
+  if (!self) return null;
+  const ls = runApp(["ls"]);
+  if (!ls.ok) return null;
+  const hit = (ls.result.spaces ?? []).flatMap((s) => (s.tabs ?? []).flatMap((t) => (t.terminals ?? []).map((x) => ({ tab: t.id, pane: x.pane, terminal: x.terminal })))).find((x) => x.terminal === self);
+  const done = readJson(BOARD_PANES, {});
+  if (!hit || done[hit.tab]) return null;
+  const before = focusedPane();
+  const made = run("pane.split", { direction: "right", pane: hit.pane, mod: BOARD_MOD });
+  if (!made.ok) return null;
+  if (before && focusedPane() !== before) run("pane.focus", { pane: before });
+  writeJson(BOARD_PANES, { ...done, [hit.tab]: { pane: made.result?.pane ?? null, at: new Date().toISOString() } });
+  return made.result?.pane ?? null;
 }
 
 export const herdrAppTerminals = {
@@ -407,11 +442,13 @@ export const herdrAppTerminals = {
   audit(rows) {
     auditRows(rows, { terminal: NAME });
   },
-  // Every read refreshes the board mod's state file; the mod itself is put in place once per read too.
-  publish(data) {
+  // Every read refreshes the board mod's state file and keeps the mod in place; the console's own reads (board,
+  // watcher) also give its tab the board pane.
+  publish(data, { register = false } = {}) {
     try {
       writeJson(BOARD, boardState(data.rows));
       installBoardMod();
+      if (register) ensureBoardPane(this.selfHandle());
     } catch {}
   },
 };

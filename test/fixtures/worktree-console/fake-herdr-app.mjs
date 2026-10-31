@@ -57,7 +57,7 @@ function closeTerminals(list) {
 }
 
 if (args[0] === "ls") out(view());
-if (args[0] === "status") out({ space: state.focus?.space ?? null, tab: state.focus?.tab ?? null, layout: "main", errors: [] });
+if (args[0] === "status") out({ space: state.focus?.space ?? null, tab: state.focus?.tab ?? null, focused_pane: state.focus?.pane ?? null, layout: "main", errors: [] });
 if (args[0] !== "do") error(`unknown: ${args[0]}`);
 
 const command = args[1];
@@ -102,6 +102,21 @@ if (command === "tab.close") {
   closeTerminals(hit.tab.terminals);
   hit.space.tabs = hit.space.tabs.filter((t) => t.id !== a.id);
   if (hit.space.tabs.length === 0) state.spaces = state.spaces.filter((s) => s !== hit.space);
+  save();
+  out({ ok: true });
+}
+// A mod pane beside a terminal's pane; like the real one it may take the focus.
+if (command === "pane.split") {
+  const hit = state.spaces.flatMap((s) => s.tabs).find((t) => t.terminals.some((x) => x.pane === a.pane));
+  if (!hit) error(`no pane "${a.pane}"`);
+  const pane = next("pm");
+  (hit.mods ??= []).push({ pane, mod: a.mod, direction: a.direction });
+  state.focus = { ...state.focus, pane };
+  save();
+  out({ pane });
+}
+if (command === "pane.focus") {
+  state.focus = { ...state.focus, pane: a.pane };
   save();
   out({ ok: true });
 }

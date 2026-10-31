@@ -2,7 +2,7 @@
 
 ## 1.11.0
 
-- feat(console): run the console in the Herdr app (detected by `HC_TERMINAL_ID`) with kickoff, board, details, commands, answering, manual and automatic handoff, move, misjudge and a herdr-report that counts old herdr and the Herdr app apart, plus a right-side board mod that shows each session's status, tag and wait and says when the console stopped writing
+- feat(console): run the console in the Herdr app (detected by `HC_TERMINAL_ID`) with kickoff, board, details, commands, answering, manual and automatic handoff, move, misjudge and a herdr-report that counts old herdr and the Herdr app apart, plus a board pane beside the console that shows each session's status, tag, stage, wait and last activity by repo and says when the console stopped writing
 
 ## 1.10.1
 

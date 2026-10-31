@@ -25,14 +25,32 @@ export function waited(since, now) {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
-// Rows by urgency, the longest wait first within one state; `stale` once the console stopped writing.
+// Rows by urgency, the longest wait first within one state, then grouped by repo: a repo's group sits where its most
+// urgent row would, so whoever needs the person stays on top. `stale` once the console stopped writing.
 export function boardView(state, now) {
   const rows = (Array.isArray(state?.rows) ? state.rows : [])
-    .map((r) => ({ tag: r.tag, terminal: r.terminal, kind: r.kind, icon: ICONS[r.kind] ?? "·", wait: waited(r.since, now), since: r.since }))
+    .map((r) => ({
+      repo: r.repo ?? "",
+      tag: r.tag,
+      terminal: r.terminal,
+      kind: r.kind,
+      icon: ICONS[r.kind] ?? "·",
+      wait: waited(r.since, now),
+      since: r.since,
+      stage: r.stage ?? "",
+      activity: r.activity && r.activity !== "—" ? r.activity : "",
+    }))
     .sort((a, b) => rank(a.kind) - rank(b.kind) || (a.since ?? now) - (b.since ?? now));
-  if (typeof state?.at !== "number") return { rows, stale: true, note: "中控台還沒寫入資料" };
+  const groups = [];
+  for (const r of rows) {
+    const g = groups.find((x) => x.repo === r.repo);
+    if (g) g.rows.push(r);
+    else groups.push({ repo: r.repo, rows: [r] });
+  }
+  const flat = groups.flatMap((g) => g.rows);
+  if (typeof state?.at !== "number") return { rows: flat, groups, stale: true, note: "中控台還沒寫入資料" };
   const stale = now - state.at > STALE_MS;
-  return { rows, stale, note: stale ? `中控台未在執行，資料停在 ${clock(state.at)}` : null };
+  return { rows: flat, groups, stale, note: stale ? `中控台未在執行，資料停在 ${clock(state.at)}` : null };
 }
 
 export function parseState(text) {
