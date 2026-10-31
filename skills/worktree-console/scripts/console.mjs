@@ -66,6 +66,7 @@ import { consoleSessionOk, focusCancel, focusOwnerOk, focusPayload, focusPick, f
 import { usageLines } from "./console-usage.mjs";
 import { approve, takeOver } from "./automation.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
+import { appWorktreeHome, branchFolder } from "./herdr-app.mjs";
 import { herdrReport } from "./herdr-report.mjs";
 import { alreadyIn } from "./git-scene.mjs";
 import { maybeTerminals, runOrca, terminals } from "./terminals.mjs";
@@ -135,9 +136,17 @@ function manager() {
   }
 }
 
+// herdr and the Herdr app open worktrees and tabs the console's own way; Orca does it itself.
+const herdrLike = (m) => m.name === "herdr" || m.name === "herdr-app";
+
+// Where the console puts a new worktree: the Herdr app's own folder for it, or herdr's configured one.
+function newWorktree(m, main, folder) {
+  return m.name === "herdr-app" ? path.join(appWorktreeHome(), path.basename(main), folder) : path.join(worktreeHome(), path.basename(main), folder);
+}
+
 // herdr mode remembers every repo it meets, so after one full path the repo's name is enough.
 function repoArg() {
-  if (!values.repo || manager().name !== "herdr") return values.repo ?? null;
+  if (!values.repo || !herdrLike(manager())) return values.repo ?? null;
   if (fs.existsSync(values.repo)) {
     const main = mainCheckout(realpath(values.repo));
     rememberRepo(main);
@@ -158,7 +167,9 @@ function load(opts, { repoOptional = false } = {}) {
 }
 
 function screenHint(handle) {
-  return manager().name === "herdr" ? `herdr pane read ${handle} --source visible` : `orca terminal read --terminal ${handle} --screen`;
+  const name = manager().name;
+  if (name === "herdr-app") return `hc read ${handle}`;
+  return name === "herdr" ? `herdr pane read ${handle} --source visible` : `orca terminal read --terminal ${handle} --screen`;
 }
 
 // `[<repo>/]<票號>=<票名>`; without a repo the row goes to the launch repo's table.
@@ -663,7 +674,7 @@ function askHerdr(repo, nick) {
   const branch = `ask-${nick}`;
   if (git(repo.main, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok) fail(`[${nick}] 暱稱已被使用，請換一個`);
   rememberRepo(repo.main);
-  const want = path.join(worktreeHome(), path.basename(repo.main), branch);
+  const want = newWorktree(manager(), repo.main, branch);
   fs.mkdirSync(path.dirname(want), { recursive: true });
   const add = git(repo.main, ["worktree", "add", "-b", branch, want]);
   if (!add.ok) fail(`[${nick}] 未開工：建 worktree 失敗：${add.err}`);
@@ -1085,14 +1096,15 @@ function open() {
   console.log(`terminal: ${created.handle}`);
 }
 
-// herdr mode's 開工: git worktree, the console's own ticket record, a tab running claude, then the first instruction.
+// herdr and Herdr app modes' 開工: git worktree, the console's own ticket record, a tab running claude, then the first
+// instruction. The Herdr app names the folder after the branch, as its own worktree menu does.
 function start() {
   const text = positionals.join(" ").trim();
-  if (!values.repo || !values.branch || !values.dir || !text) {
+  const m = manager();
+  if (!values.repo || !values.branch || (!values.dir && m.name !== "herdr-app") || !text) {
     fail("用法：console.mjs start --repo R --branch B --dir <資料夾名稱> [--ticket KEY-n] [--name <名稱>] [--interview] [--path P] -- <首則指令>");
   }
-  const m = manager();
-  if (m.name !== "herdr") fail("Orca 模式照 kickoff.md 用 orca worktree create 開工");
+  if (!herdrLike(m)) fail("Orca 模式照 kickoff.md 用 orca worktree create 開工");
   const main = mainCheckout(realpath(repoArg()));
   rememberRepo(main);
   const given = values.name ?? null;
@@ -1104,7 +1116,7 @@ function start() {
     if (problem) fail(`[${given}] 不能用：${problem}`);
   }
   if (!target) {
-    const want = values.path ? path.resolve(values.path) : path.join(worktreeHome(), path.basename(main), values.dir);
+    const want = values.path ? path.resolve(values.path) : newWorktree(m, main, m.name === "herdr-app" ? branchFolder(values.branch) : values.dir);
     const has = git(main, ["rev-parse", "--verify", "--quiet", `refs/heads/${values.branch}`]).ok;
     fs.mkdirSync(path.dirname(want), { recursive: true });
     const add = git(main, ["worktree", "add", ...(has ? [want, values.branch] : ["-b", values.branch, want])]);
@@ -1129,7 +1141,7 @@ async function move() {
   const query = positionals[0];
   if (!query) fail("用法：console.mjs move --repo R <代號>[#n] [--to <工作區名稱>]");
   const m = manager();
-  if (m.name !== "herdr") fail("只有 herdr 模式能搬 session");
+  if (!herdrLike(m)) fail("只有 herdr 與 Herdr app 模式能搬 session");
   const { rows } = load({ withStage: false }, { repoOptional: true });
   const hits = matchSessions(rows, query).filter((h) => h.session?.handle);
   if (hits.length !== 1) fail(`[${query}] ${hits.length === 0 ? "找不到對應的 session" : `對應到 ${hits.length} 個 session，請加 #n`}`);
@@ -1163,7 +1175,7 @@ async function move() {
     await sleep(Number(process.env.MOVE_CHECK_MS ?? 1000));
   }
   if (!attached) abort("新分頁沒接上原對話");
-  logEvent("session", { repo: row.repo, ticket: tag, handle, paneKey: handle, sessionId, role: "child", source: "move", transcript, path: row.path, cwd: row.path });
+  logEvent("session", { repo: row.repo, ticket: tag, handle, paneKey: paneOf(handle) ?? handle, sessionId, role: "child", source: "move", transcript, path: row.path, cwd: row.path });
   const task = readTasks()[session.paneKey];
   if (task) saveTask(paneOf(handle), task.title, handle);
   const closed = m.closeTab(old);

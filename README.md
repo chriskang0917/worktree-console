@@ -15,7 +15,7 @@
 
 <p align="center"><b>用一個 Claude Code session 管十幾個：中控台幫你開 session、盯著它們，把每個問題送到你面前。</b></p>
 
-worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/stablyai/orca) 或 [herdr](https://github.com/herdrdev/herdr) 的一個分頁裡打開它，那個 session 就成了你所有 repo 裡每個 worktree 與 Claude Code session 的中控台。
+worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/stablyai/orca)、[herdr](https://github.com/herdrdev/herdr) 或 Herdr app（herdr 的桌面版）的一個分頁裡打開它，那個 session 就成了你所有 repo 裡每個 worktree 與 Claude Code session 的中控台。
 
 - **丟一張票，就有一個跑起來的 session。** 給它一張 Linear 票（或直接講任務）。它會讀票、找出母票、提議 repo 與 branch 名稱，你確認後就建好 worktree，並在那裡開一個 Claude Code session。
 - **session 自己回報。** watcher 盯著每個 session。哪個停下來問問題、做完了、或要授權，中控台就告訴你是哪張票、它要什麼。
@@ -34,7 +34,7 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 
 需求：
 
-- [Orca](https://github.com/stablyai/orca) 或 [herdr](https://github.com/herdrdev/herdr)。中控台只在它們的分頁裡運作。
+- [Orca](https://github.com/stablyai/orca)、[herdr](https://github.com/herdrdev/herdr) 或 Herdr app。中控台只在它們的分頁裡運作。
 - [Node.js](https://nodejs.org/) 20 以上。
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)。專注模式另需支援 mods 的版本。
 - 選用：透過 Orca 存取 Linear（`orca linear …`），丟票開工時用。
@@ -51,7 +51,7 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 
 ## 使用方式
 
-在 Orca 或 herdr 分頁裡、你的某個 repo 下打開 Claude Code，然後：
+在 Orca、herdr 或 Herdr app 分頁裡、你的某個 repo 下打開 Claude Code，然後：
 
 | 輸入 | 會發生什麼 |
 | --- | --- |
@@ -80,6 +80,15 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 - **之後改名。** `<代號> 改名 <名稱>`（例如 `PROJ-123 改名 login-fix`）會一起換掉看板、專注橫條、待回覆清單、herdr 分頁與 Claude Code session 名稱。session 還在跑時，等它停下，watcher 才送 `/rename`。
 - **格式。** 只收英文小寫、數字和 `-`，2～20 個字元。名稱不能和別的 session 的名稱或代號（包含票號）重複，也不能和 repo 名稱相同，因為你也用它打字指揮 session。其他寫法（大寫、中文、空白、21 個字元）都會被拒絕，並印出原因。
 - **顯示在哪裡。** 有名稱的 session，在看板、專注橫條、待回覆清單和回報裡都顯示名稱，不顯示票號；`<名稱> 詳情` 仍列出票號。打名稱或原本的票號都指揮得到它。
+
+## Herdr app 模式
+
+中控台看環境變數決定用哪個工具：有 `HERDR_ENV=1` 是 herdr，否則有 `HC_TERMINAL_ID` 是 Herdr app，否則有 `ORCA_TERMINAL_HANDLE` 是 Orca。在 Herdr app 的終端機裡再開 herdr，仍算 herdr。開工、看板、詳情、指揮、代答、交棒、搬移、關閉都和 herdr 一樣能用，不同的地方：
+
+- **worktree 的位置**固定在 `~/.herdr/worktrees/<repo>/<branch>`，和 Herdr app 內建的 New worktree 同一處；branch 裡的 `/` 換成 `-`。
+- **分頁**開在名稱等於 repo 的 space（沒有就開一個）。Herdr app 開分頁會把畫面切過去，中控台開完會切回你原本看的分頁。
+- **送字**走 herdr-core 的 `hc send`；倒數代回不發系統通知，只在專注橫條上倒數。
+- **看板 pane**：中控台在 Herdr app 裡第一次讀狀態時，把看板 mod 複製到 `~/.config/herdr-app/mods/worktree-board/`，並在中控台的分頁右側切出看板 pane（每個分頁一次，關掉後不再切）。依 repo 分組，每列有狀態圖示、代號、階段、等待時間，下一行是最後動態（例如它問的問題），等你處理的（💬、🔐、⚠️）排在最上面，點一列就切到那個 session 的分頁。看板只讀中控台寫的狀態檔；這份檔案超過 2 分鐘沒更新時，頂部會寫「中控台未在執行，資料停在 HH:MM」，列表變灰。
 
 ## 安裝 task-list（選用）
 
@@ -191,7 +200,7 @@ cd worktree-console
 npm test
 ```
 
-在 herdr 分頁裡跑測試要用 `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`。專注橫條、`focus-show` 與 `tool-dots` 的測試用 `claude plugin test .`、`claude plugin test mods/focus-show` 與 `claude plugin test mods/tool-dots` 跑。
+在 herdr 分頁裡跑測試要用 `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`；在 Herdr app 分頁裡直接跑也不會碰到真的 Herdr app，測試一開始就清掉 `HC_` 開頭的環境變數。看板 mod 改完要跑 `herdr-app check herdr-app/mods/worktree-board`。專注橫條、`focus-show` 與 `tool-dots` 的測試用 `claude plugin test .`、`claude plugin test mods/focus-show` 與 `claude plugin test mods/tool-dots` 跑。
 
 真實終端畫面回歸測試另需 `tmux` 與支援 mods 的 `claude`。單獨執行：`node --test test/worktree-console-focus-terminal.test.mjs`；使用臨時 HOME、假資料及獨立 tmux socket，不讀取現有中控台狀態。本機沒有 `tmux` 時這些測試會略過並寫明原因；CI（設了 `CI` 環境變數）上沒有 `tmux` 則直接失敗。CI 由 `.github/workflows/ci.yml` 執行：安裝固定版本的 `@anthropic-ai/claude-code` 與 `tmux`，跑 `npm test`、`claude plugin test .`、`claude plugin test mods/focus-show` 與 `claude plugin test mods/tool-dots`。
 

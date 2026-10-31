@@ -1,15 +1,21 @@
-// The terminal manager the console runs in: Orca or herdr, picked from the environment, never from a setting.
+// The terminal manager the console runs in: Orca, herdr or the Herdr app, picked from the environment, never from a setting.
 import { spawnSync } from "node:child_process";
+import { herdrAppTerminals } from "./herdr-app.mjs";
 import { herdrTerminals } from "./herdr.mjs";
 import { NOTIFICATION, SKIP_PROMPT, promptText, readEntries, transcriptFor } from "./log.mjs";
 
-export const UNSUPPORTED = "worktree-console 只支援 Orca 與 herdr：請在 Orca 或 herdr 的分頁裡執行（環境裡沒有 HERDR_ENV=1，也沒有 ORCA_TERMINAL_HANDLE）";
+export const UNSUPPORTED =
+  "worktree-console 只支援 Orca、herdr 與 Herdr app：請在 Orca、herdr 或 Herdr app 的分頁裡執行（環境裡沒有 HERDR_ENV=1、HC_TERMINAL_ID，也沒有 ORCA_TERMINAL_HANDLE）";
 
+// The innermost manager wins: herdr run inside a Herdr app terminal is herdr.
 export function terminalKind(env = process.env) {
   if (env.HERDR_ENV === "1") return "herdr";
+  if (env.HC_TERMINAL_ID) return "herdr-app";
   if (env.ORCA_TERMINAL_HANDLE) return "orca";
   return null;
 }
+
+const MANAGERS = () => ({ herdr: herdrTerminals, "herdr-app": herdrAppTerminals, orca: orcaTerminals });
 
 export function terminals(env = process.env) {
   const kind = terminalKind(env);
@@ -18,7 +24,7 @@ export function terminals(env = process.env) {
     e.unsupported = true;
     throw e;
   }
-  return kind === "herdr" ? herdrTerminals : orcaTerminals;
+  return MANAGERS()[kind];
 }
 
 // The manager when there is one; helpers that only read a screen treat no manager as unreadable.

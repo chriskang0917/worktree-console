@@ -15,7 +15,7 @@
 
 <p align="center"><b>Run a dozen Claude Code sessions from one: a console that starts them, watches them, and brings every question to you.</b></p>
 
-worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https://github.com/stablyai/orca) or [herdr](https://github.com/herdrdev/herdr), and that session becomes the console for every worktree and Claude Code session across all your repos.
+worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https://github.com/stablyai/orca), [herdr](https://github.com/herdrdev/herdr) or the Herdr app (herdr's desktop app), and that session becomes the console for every worktree and Claude Code session across all your repos.
 
 - **Hand it a ticket, get a running session.** Give it a Linear ticket (or just a task). It reads the ticket, finds the parent ticket, proposes a repo and branch name, and after you confirm it creates the worktree and starts a Claude Code session there.
 - **Sessions report back by themselves.** A watcher follows every session. When one stops to ask something, finishes, or needs a permission, the console tells you which ticket it is and what it wants.
@@ -34,7 +34,7 @@ worktree-console is a Claude Code plugin. You open it in one tab of [Orca](https
 
 Requirements:
 
-- [Orca](https://github.com/stablyai/orca) or [herdr](https://github.com/herdrdev/herdr). The console only runs inside one of their tabs.
+- [Orca](https://github.com/stablyai/orca), [herdr](https://github.com/herdrdev/herdr) or the Herdr app. The console only runs inside one of their tabs.
 - [Node.js](https://nodejs.org/) 20 or later.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Focus mode also needs a build with mods.
 - Optional: Linear access through Orca (`orca linear …`) for ticket kickoff.
@@ -51,7 +51,7 @@ In Claude Code:
 
 ## Usage
 
-Open Claude Code in an Orca or herdr tab inside one of your repos, then:
+Open Claude Code in an Orca, herdr or Herdr app tab inside one of your repos, then:
 
 | Say | What happens |
 | --- | --- |
@@ -80,6 +80,15 @@ Every session the console opens is started with `claude --name <name>`: kickoff,
 - **Rename later.** `<tag> 改名 <name>` (e.g. `PROJ-123 改名 login-fix`) changes the board, the focus band, the reply list, the herdr tab and the Claude Code session name. A session that is still running gets `/rename` as soon as it stops; the watcher sends it.
 - **Format.** Lowercase letters, digits and `-`, 2 to 20 characters. A name must not repeat another session's name or tag (tickets included) or a repo name, because you also type it to direct the session. Anything else (capitals, Chinese, spaces, 21 characters) is refused with the reason.
 - **Where it shows.** A named session shows its name instead of the ticket on the board, the focus band, the reply list and reports; `<name> 詳情` still lists the ticket. Typing the name or the old ticket both reach it.
+
+## Herdr app mode
+
+The console picks its tool from the environment: `HERDR_ENV=1` means herdr, otherwise `HC_TERMINAL_ID` means the Herdr app, otherwise `ORCA_TERMINAL_HANDLE` means Orca. herdr started inside a Herdr app terminal still counts as herdr. Kickoff, the board, details, commands, answering, handoff, moving and closing all work as in herdr. What differs:
+
+- **Worktrees** always go to `~/.herdr/worktrees/<repo>/<branch>`, where the Herdr app's own New worktree puts them; a `/` in the branch becomes `-`.
+- **Tabs** open in the space named after the repo (one is made if there is none). The Herdr app switches to a tab it opens, so the console switches you back to the tab you were on.
+- **Text** goes through herdr-core's `hc send`; an auto-reply countdown posts no system notification and only counts down on the focus band.
+- **Board pane**: the first time the console reads statuses in the Herdr app, it copies the board mod to `~/.config/herdr-app/mods/worktree-board/` and splits a board pane off the right of the console's own tab (once per tab; a pane you close stays closed). Rows are grouped by repo; each shows the status icon, the tag, the stage and how long it has waited, with the last activity (such as the question it asked) below; sessions waiting on you (💬, 🔐, ⚠️) are on top, and clicking a row switches to that session's tab. The board only reads the state file the console writes; once that file is more than 2 minutes old, the top says 「中控台未在執行，資料停在 HH:MM」 (the console isn't running, data as of HH:MM) and the rows turn grey.
 
 ## Install task-list (optional)
 
@@ -191,7 +200,7 @@ cd worktree-console
 npm test
 ```
 
-Run tests inside a herdr tab as `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`. The focus band, `focus-show` and `tool-dots` tests run with `claude plugin test .`, `claude plugin test mods/focus-show` and `claude plugin test mods/tool-dots`.
+Run tests inside a herdr tab as `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID npm test`; inside a Herdr app tab plain `npm test` never reaches the real Herdr app, because the tests drop every `HC_` variable first. After changing the board mod, run `herdr-app check herdr-app/mods/worktree-board`. The focus band, `focus-show` and `tool-dots` tests run with `claude plugin test .`, `claude plugin test mods/focus-show` and `claude plugin test mods/tool-dots`.
 
 The real-terminal regression tests also need `tmux` and a `claude` build with mods. Run them alone with `node --test test/worktree-console-focus-terminal.test.mjs`; they use a temporary HOME, fake data and their own tmux socket, and never read your console state. Without `tmux` they are skipped locally with the reason; on CI (with the `CI` environment variable set) a missing `tmux` fails them. CI runs from `.github/workflows/ci.yml`: it installs a pinned `@anthropic-ai/claude-code` and `tmux`, then runs `npm test`, `claude plugin test .`, `claude plugin test mods/focus-show` and `claude plugin test mods/tool-dots`.
 

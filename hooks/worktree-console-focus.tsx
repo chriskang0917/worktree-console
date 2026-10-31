@@ -713,10 +713,15 @@ async function pollRecap($: EngineInterface) {
   $.ui.invalidate('ui.render')
 }
 
-// In an Orca or herdr tab, watch this tab's recap files.
+// The tab this session runs in: herdr first, then the Herdr app, then Orca; '' anywhere else.
+async function terminalHandle($: EngineInterface) {
+  if ((await $.env.get('HERDR_ENV')) === '1') return (await $.env.get('HERDR_PANE_ID')) ?? ''
+  return (await $.env.get('HC_TERMINAL_ID')) || ((await $.env.get('ORCA_TERMINAL_HANDLE')) ?? '')
+}
+
+// In an Orca, herdr or Herdr app tab, watch this tab's recap files.
 async function startRecap($: EngineInterface) {
-  const herdr = (await $.env.get('HERDR_ENV')) === '1'
-  recapHandle = (herdr ? await $.env.get('HERDR_PANE_ID') : await $.env.get('ORCA_TERMINAL_HANDLE')) ?? ''
+  recapHandle = await terminalHandle($)
   if (!recapHandle) return
   recapHome = (await $.env.get('WORKTREE_CONSOLE_HOME')) || `${await $.env.get('HOME')}/.config/worktree-console`
   let config = '{}'
@@ -846,7 +851,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     inHerdr = (await $.env.get('HERDR_ENV')) === '1'
     await startRecap($)
-    if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || inHerdr) {
+    if ((await $.env.get('ORCA_TERMINAL_HANDLE')) || inHerdr || (await $.env.get('HC_TERMINAL_ID'))) {
       sessionId = await $.session.id().catch(() => '')
       owner = `${sessionId}@${await $.clock.now()}`
       void poll($, true)

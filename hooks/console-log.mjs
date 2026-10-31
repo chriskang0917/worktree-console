@@ -41,9 +41,10 @@ function consoleTakeover(handle) {
   }
 }
 
-// Consoles only run in Orca or herdr, so a session anywhere else has nothing to log.
+// Consoles only run in Orca, herdr or the Herdr app, so a session anywhere else has nothing to log.
 function terminalOf() {
   if (process.env.HERDR_ENV === "1") return { handle: process.env.HERDR_PANE_ID, paneKey: process.env.HERDR_PANE_ID ?? null };
+  if (process.env.HC_TERMINAL_ID) return { handle: process.env.HC_TERMINAL_ID, paneKey: `hc:${process.env.HC_TERMINAL_ID}` };
   if (process.env.ORCA_TERMINAL_HANDLE) return { handle: process.env.ORCA_TERMINAL_HANDLE, paneKey: process.env.ORCA_PANE_KEY ?? null };
   return null;
 }

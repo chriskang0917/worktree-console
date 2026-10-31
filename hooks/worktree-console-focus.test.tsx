@@ -2124,6 +2124,22 @@ const countdownText = async (ui: any) => {
 const autoCalls = (w: World) => w.calls.filter(c => c[0] === 'focus-auto' || c[0] === 'focus-cancel').map(c => c.slice(0, 2))
 const sendArgs = (w: World) => w.calls.filter(c => c[0] === 'focus-auto').map(c => c.slice(2))
 
+test('Herdr app tab (HC_TERMINAL_ID only): the band polls console.mjs focus like in Orca and herdr, and a countdown posts no herdr notification', async ($, on) => {
+  const w = world(withAdvice(AUTO))
+  await start($, on, w, { HC_TERMINAL_ID: 't1' })
+  expect(w.calls.some(c => c[0] === 'focus')).toBe(true)
+  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await countdownText(ui)).toBe('代回倒數 15 秒：b 橫條也改清單 | 6: 立即送出 · 7: 取消')
+  await ui.unmount()
+  expect(w.notes ?? []).toEqual([])
+})
+
+test('no Orca, herdr or Herdr app: the band never polls console.mjs focus', async ($, on) => {
+  const w = world(withAdvice(AUTO))
+  await start($, on, w, {})
+  expect(w.calls.filter(c => c[0] === 'focus')).toEqual([])
+})
+
 test('band countdown: an open question on the band gets a herdr notification (request sound, 代號 and answer in the title) and the row 代回倒數 N 秒：b 橫條也改清單 with 6: 立即送出 · 7: 取消 on the right, one second down per second; at 0 the band sends it with focus-auto', async ($, on) => {
   const w = world(withAdvice(AUTO))
   w.afterAuto = { ...focusOf('logging', []), notice: '[focusui] 已自動回覆：b' }

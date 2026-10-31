@@ -1,7 +1,7 @@
 {
   "name": "worktree-console",
-  "version": "1.10.1",
-  "description": "One Claude Code session as a console for every worktree session in Orca or herdr: kick off tickets, get reports when sessions stop, answer from a focus band. Skills: worktree-console, handoff.",
+  "version": "1.11.0",
+  "description": "One Claude Code session as a console for every worktree session in Orca, herdr or the Herdr app: kick off tickets, get reports when sessions stop, answer from a focus band. Skills: worktree-console, handoff.",
   "author": {
     "name": "chriskang",
     "email": "chriskang028@gmail.com"

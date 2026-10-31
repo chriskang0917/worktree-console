@@ -191,13 +191,13 @@ export function readTranscript(file) {
   return entries.length > 0 ? { entries, truncated } : null;
 }
 
-function promptText(entry) {
+export function promptText(entry) {
   const content = entry.message?.content;
   const text = typeof content === "string" ? content : Array.isArray(content) ? content.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n") : "";
   return text.trim();
 }
 
-function isPrompt(entry) {
+export function isPrompt(entry) {
   const text = promptText(entry);
   return !entry.isMeta && !!text && !INTERRUPTED.test(text) && !/^<(task-notification|local-command-)/.test(text);
 }
@@ -334,18 +334,18 @@ export function screenLines(handle) {
 }
 
 // What sits in Claude Code's input box, between the last two rules.
-function draftOf(lines) {
+export function draftOf(lines) {
   const rules = lines.flatMap((l, i) => (/^─{20,}/.test(l) ? [i] : []));
   if (rules.length < 2) return "";
   const [a, b] = rules.slice(-2);
   return lines.slice(a + 1, b).map((l, i) => (i === 0 ? l.replace(/^❯\s?/, "") : l.trim())).join("\n").trim();
 }
 
-function panesIn(snap, worktreePath) {
+export function panesIn(snap, worktreePath) {
   return (snap.panes ?? []).filter((p) => inside(paneCwd(p), worktreePath));
 }
 
-const repoName = (worktreePath) => path.basename(repoMain(worktreePath) ?? worktreePath);
+export const repoName = (worktreePath) => path.basename(repoMain(worktreePath) ?? worktreePath);
 const workspaceOrder = (id) => {
   const n = parseInt(String(id).replace(/^w/, ""), 36);
   return Number.isNaN(n) ? Number.POSITIVE_INFINITY : n;
@@ -360,58 +360,68 @@ export function workspaceNamed(snap, name) {
 const agentName = (pane) => `c-${pane.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 32);
 const ok = (res) => (res.ok ? { ok: true } : { ok: false, code: res.error?.code ?? "unknown" });
 
-function linear(args) {
+export function linear(args) {
   const res = spawnSync(process.execPath, [LINEAR, ...args, "--json"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
   return parse(res.stdout) ?? { ok: false, error: { code: "linear-error" } };
 }
 
 const titles = new Map();
 
+// A herdr-shaped snapshot (panes, agents, tabs, workspaces) read back into the shapes collect() reads.
+// `split` gives a pane's tab id and leaf id, `order` its opening order, `agentOf` turns one claude agent into Orca's agent shape.
+export function snapshotFrom(snap, { agents = true, split = herdrSplit, order = paneOrder, agentOf = (a) => herdrAgent(a) } = {}) {
+  const panes = snap.panes ?? [];
+  for (const main of new Set(panes.map((p) => repoMain(paneCwd(p))).filter(Boolean))) rememberRepo(main);
+  const repos = knownRepos().filter((r) => fs.existsSync(r.main));
+  const records = worktreeRecords();
+  const worktrees = repos.flatMap((r) =>
+    gitWorktrees(r.main).map((w) => {
+      const rec = records[w.path] ?? {};
+      return {
+        path: w.path,
+        branch: w.branch,
+        isMainWorktree: w.isMain,
+        repoId: r.main,
+        linkedLinearIssue: rec.ticket ?? null,
+        displayName: rec.displayName ?? w.branch,
+        comment: rec.interview || rec.defineGoal ? "interview" : "",
+        baseRef: rec.baseRef ?? null,
+      };
+    }),
+  );
+  const paths = worktrees.map((w) => w.path);
+  const kinds = new Map((snap.agents ?? []).map((a) => [a.pane_id, a.agent]));
+  const tabLabels = new Map((snap.tabs ?? []).map((t) => [t.tab_id, t.label ?? null]));
+  const terminals = panes.map((p) => {
+    const { tabId, leafId } = split(p.pane_id);
+    return {
+      handle: p.pane_id,
+      tabId,
+      leafId,
+      worktreePath: worktreeOf(paneCwd(p), paths),
+      agentIdentity: kinds.get(p.pane_id) ?? p.agent ?? null,
+      createdAt: order(p.pane_id),
+      tab: p.tab_id,
+      tabLabel: tabLabels.get(p.tab_id) ?? null,
+      workspace: p.workspace_id,
+    };
+  });
+  const claude = agents ? (snap.agents ?? []).filter((a) => a.agent === "claude") : [];
+  const where = new Map(claude.map((a) => [a.pane_id, worktreeOf(paneCwd(a), paths)]));
+  const ps = worktrees.map((w) => ({ ...w, agents: claude.filter((a) => where.get(a.pane_id) === w.path).map((a) => agentOf(a)) }));
+  return { repos: repos.map((r) => ({ id: r.main, displayName: r.name, path: r.main })), worktrees, ps, terminals };
+}
+
+const herdrSplit = (id) => {
+  const ws = String(id).split(":")[0];
+  return { tabId: ws, leafId: String(id).slice(ws.length + 1) };
+};
+
 export const herdrTerminals = {
   name: "herdr",
   selfHandle: () => process.env.HERDR_PANE_ID || null,
   snapshot({ agents = true } = {}) {
-    const snap = herdrSnapshot();
-    const panes = snap.panes ?? [];
-    for (const main of new Set(panes.map((p) => repoMain(paneCwd(p))).filter(Boolean))) rememberRepo(main);
-    const repos = knownRepos().filter((r) => fs.existsSync(r.main));
-    const records = worktreeRecords();
-    const worktrees = repos.flatMap((r) =>
-      gitWorktrees(r.main).map((w) => {
-        const rec = records[w.path] ?? {};
-        return {
-          path: w.path,
-          branch: w.branch,
-          isMainWorktree: w.isMain,
-          repoId: r.main,
-          linkedLinearIssue: rec.ticket ?? null,
-          displayName: rec.displayName ?? w.branch,
-          comment: rec.interview || rec.defineGoal ? "interview" : "",
-          baseRef: rec.baseRef ?? null,
-        };
-      }),
-    );
-    const paths = worktrees.map((w) => w.path);
-    const kinds = new Map((snap.agents ?? []).map((a) => [a.pane_id, a.agent]));
-    const tabLabels = new Map((snap.tabs ?? []).map((t) => [t.tab_id, t.label ?? null]));
-    const terminals = panes.map((p) => {
-      const ws = String(p.pane_id).split(":")[0];
-      return {
-        handle: p.pane_id,
-        tabId: ws,
-        leafId: String(p.pane_id).slice(ws.length + 1),
-        worktreePath: worktreeOf(paneCwd(p), paths),
-        agentIdentity: kinds.get(p.pane_id) ?? p.agent ?? null,
-        createdAt: paneOrder(p.pane_id),
-        tab: p.tab_id,
-        tabLabel: tabLabels.get(p.tab_id) ?? null,
-        workspace: p.workspace_id,
-      };
-    });
-    const claude = agents ? (snap.agents ?? []).filter((a) => a.agent === "claude") : [];
-    const where = new Map(claude.map((a) => [a.pane_id, worktreeOf(paneCwd(a), paths)]));
-    const ps = worktrees.map((w) => ({ ...w, agents: claude.filter((a) => where.get(a.pane_id) === w.path).map((a) => herdrAgent(a)) }));
-    return { repos: repos.map((r) => ({ id: r.main, displayName: r.name, path: r.main })), worktrees, ps, terminals };
+    return snapshotFrom(herdrSnapshot(), { agents });
   },
   terminalList() {
     try {
@@ -556,27 +566,32 @@ export const herdrTerminals = {
     const res = linear(["todo"]);
     return res.ok ? { ok: true, issues: res.issues ?? [] } : { ok: false, code: res.error?.code ?? "linear-error" };
   },
-  // One line per session read: herdr's state, what the console shows, and what the transcript and screen say.
   audit(rows) {
-    const ts = new Date().toISOString();
-    const lines = [];
-    for (const row of rows) {
-      for (const s of row.sessions) {
-        const h = s.agent?.herdr;
-        if (!h) continue;
-        const shown = s.status.kind;
-        lines.push(
-          JSON.stringify({ ts, event: "read", repo: row.repo, ticket: sessionTag(row, s), handle: s.handle ?? s.paneKey, herdr: h.raw, shown, inferred: h.inferred, transcript: h.transcript, mismatch: mismatch(h.raw, shown, h.inferred) }),
-        );
-      }
-    }
-    if (lines.length === 0) return;
-    try {
-      fs.mkdirSync(consoleHome(), { recursive: true });
-      fs.appendFileSync(path.join(consoleHome(), AUDIT), `${lines.join("\n")}\n`);
-    } catch {}
+    auditRows(rows);
   },
 };
+
+// One line per session read: herdr's state, what the console shows, and what the transcript and screen say.
+// `extra` marks whose reads they are; lines without it are old herdr's.
+export function auditRows(rows, extra = {}) {
+  const ts = new Date().toISOString();
+  const lines = [];
+  for (const row of rows) {
+    for (const s of row.sessions) {
+      const h = s.agent?.herdr;
+      if (!h) continue;
+      const shown = s.status.kind;
+      lines.push(
+        JSON.stringify({ ts, event: "read", ...extra, repo: row.repo, ticket: sessionTag(row, s), handle: s.handle ?? s.paneKey, herdr: h.raw, shown, inferred: h.inferred, transcript: h.transcript, mismatch: mismatch(h.raw, shown, h.inferred) }),
+      );
+    }
+  }
+  if (lines.length === 0) return;
+  try {
+    fs.mkdirSync(consoleHome(), { recursive: true });
+    fs.appendFileSync(path.join(consoleHome(), AUDIT), `${lines.join("\n")}\n`);
+  } catch {}
+}
 
 export const CONSOLE_TAB = "console";
 

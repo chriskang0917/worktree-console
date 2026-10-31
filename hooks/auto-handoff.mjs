@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Past a share of the real context window: the model writes a handoff note, then a fresh session takes over.
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +18,7 @@ const NATIVE_1M = /claude-(opus-4-[78]|opus-5|sonnet-5|fable-5|mythos)/i;
 const MANUAL_COMMAND = /<command-name>\/(?:worktree-console:)?handoff<\/command-name>/;
 const GOAL_SET = /Goal set/;
 const GOAL_EVIDENCE = "收工前須在本 session 重新執行並貼出 `/goal` 全部證據";
-const UNSUPPORTED = "自動交棒只支援 Orca 與 herdr：這個終端機兩者都不是（沒有 HERDR_ENV=1，也沒有 ORCA_TERMINAL_HANDLE），沒辦法自動開新 session。";
+const UNSUPPORTED = "自動交棒只支援 Orca、herdr 與 Herdr app：這個終端機三者都不是（沒有 HERDR_ENV=1、HC_TERMINAL_ID，也沒有 ORCA_TERMINAL_HANDLE），沒辦法自動開新 session。";
 const ENDED = new Set(["end_turn", "stop_sequence", "max_tokens", "refusal"]);
 const SELF = fileURLToPath(import.meta.url);
 export const CACHE_HANDOFF_TEXT = "（中控台自動交棒，不是使用者的新指令）你的 prompt 快取快到期了，接下來會換新 session 接手：先不要做任何事，直接結束這一輪。";
@@ -340,9 +341,10 @@ function tellUser(message) {
   process.stdout.write(JSON.stringify({ systemMessage: message }));
 }
 
-// The tab this session runs in: herdr first, then Orca; null in any other terminal.
+// The tab this session runs in: herdr first, then the Herdr app, then Orca; null in any other terminal.
 export function terminalOf(env = process.env) {
   if (env.HERDR_ENV === "1") return { kind: "herdr", handle: env.HERDR_PANE_ID ?? null, paneKey: env.HERDR_PANE_ID ?? null };
+  if (env.HC_TERMINAL_ID) return { kind: "herdr-app", handle: env.HC_TERMINAL_ID, paneKey: `hc:${env.HC_TERMINAL_ID}` };
   if (env.ORCA_TERMINAL_HANDLE) return { kind: "orca", handle: env.ORCA_TERMINAL_HANDLE, paneKey: env.ORCA_PANE_KEY ?? null };
   return null;
 }
@@ -586,6 +588,106 @@ async function herdrHandoff(ctx) {
   closer.unref();
 }
 
+function parseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+// herdr-core runs the Herdr app's terminals; a send without the caller's address isn't wrapped in <hc from=…>,
+// which would keep /goal from running.
+function hc(args, { raw = false } = {}) {
+  const env = { ...process.env };
+  delete env.HC_TERMINAL_ID;
+  delete env.HC_SCOPE;
+  const res = spawnSync(process.env.HC_BIN || "hc", raw ? args : [args[0], "--json", ...args.slice(1)], { encoding: "utf8", env, maxBuffer: 64 * 1024 * 1024 });
+  if (res.error) return { ok: false, error: { code: "unreachable" } };
+  if (res.status === 0) return raw ? { ok: true, text: res.stdout } : { ok: true, result: parseJson(res.stdout) ?? {} };
+  return { ok: false, error: { code: parseJson(res.stderr)?.error?.kind ?? "unreachable" } };
+}
+
+function herdrAppBin() {
+  return process.env.HERDR_APP_BIN || "herdr-app";
+}
+
+function app(args) {
+  const res = spawnSync(herdrAppBin(), args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const out = parseJson(res.stdout);
+  if (!res.error && res.status === 0 && out && !out.error) return { ok: true, result: out };
+  return { ok: false, error: { code: typeof out?.error === "string" ? out.error : "unreachable" } };
+}
+
+const appDo = (command, args) => app(["do", command, JSON.stringify(args)]);
+
+function appTranscript(sessionId) {
+  try {
+    for (const d of fs.readdirSync(projectsDir())) {
+      const f = path.join(projectsDir(), d, `${sessionId}.jsonl`);
+      if (fs.existsSync(f)) return readEntries(f).filter((e) => !e.isSidechain && (e.type === "user" || e.type === "assistant"));
+    }
+  } catch {}
+  return [];
+}
+
+const appStatus = (terminal) => hc(["get", terminal]).result?.status?.state ?? null;
+// A long paste reaches the transcript wrapped in <pasted_content>, so the instruction only has to be inside it.
+const receivedIn = (entries, instruction) => entries.some((e) => e.type === "user" && !e.isMeta && textOf(e.message?.content).includes(instruction.trim()));
+
+// The Herdr app's version of the same steps: a tab in this space running claude with a session id chosen here
+// (hc never reports one), prompts through `hc send`, the old tab closed last.
+async function herdrAppHandoff(ctx) {
+  const { session, oldHandle, cwd, mode, note, goal, question, isConsole, cache } = ctx;
+  const fail = failer(ctx);
+  const spaces = app(["ls"]).result?.spaces ?? [];
+  const where = spaces.flatMap((s) => (s.tabs ?? []).map((t) => ({ space: s.id, tab: t }))).find((x) => (x.tab.terminals ?? []).some((t) => t.terminal === oldHandle));
+  if (!where) return fail("開新分頁", "找不到舊分頁所在的 space");
+  const name = sessionName(oldHandle, isConsole, where.tab.name ?? null);
+  const sessionId = crypto.randomUUID();
+  const argv = ["claude", ...(name ? ["--name", name] : []), "--session-id", sessionId, ...(mode ? ["--permission-mode", mode] : [])];
+  const focused = app(["status"]).result?.tab ?? null;
+  const made = appDo("tab.new", { ...(name ? { name } : {}), space: where.space, folder: cwd, argv });
+  const terminal = made.ok ? made.result?.terminal : null;
+  if (!terminal) return fail("開新分頁", made.error?.code);
+  if (focused && made.result.tab !== focused) appDo("tab.select", { id: focused });
+  ctx.newHandle = terminal;
+  updateEvent(session, { status: "switching", newHandle: terminal, newPaneKey: `hc:${terminal}` });
+
+  const ready = await until(() => ["idle", "done"].includes(appStatus(terminal)), Number(process.env.AUTO_HANDOFF_READY_MS || 60000));
+  if (!ready) return fail("等新分頁就緒", "not-ready");
+
+  const instruction = takeoverInstruction({ note, question, goal, isConsole, cache });
+  const sent = hc(["send", terminal, "--", instruction]);
+  if (!sent.ok) return fail("送出接手指令", sent.error?.code ?? "not-accepted");
+
+  const arrived = await until(() => receivedIn(appTranscript(sessionId), instruction), Number(process.env.AUTO_HANDOFF_DELIVER_MS || 60000));
+  if (!arrived) return fail("確認接手指令送達", "新 session 沒收到接手指令");
+
+  const screen = () => hc(["read", terminal], { raw: true }).text ?? "";
+  if (goal) {
+    const read = await until(() => {
+      const last = appTranscript(sessionId).at(-1);
+      return ["done", "idle"].includes(appStatus(terminal)) && last?.type === "assistant" && ENDED.has(last.message?.stop_reason);
+    }, Number(process.env.AUTO_HANDOFF_FIRST_TURN_MS || 600000));
+    if (!read) return fail("等新 session 讀完交棒說明", "逾時");
+    const goalSent = hc(["send", terminal, "--", `/goal ${goal}`]);
+    if (!goalSent.ok) return fail("送出 /goal", goalSent.error?.code ?? "not-accepted");
+    const set = await until(() => GOAL_SET.test(screen()), Number(process.env.AUTO_HANDOFF_GOAL_MS || 30000));
+    if (!set) {
+      const pasted = /Pasted text|paste again to expand/i.test(screen()) || /<pasted_content/.test(textOf(appTranscript(sessionId).filter((e) => e.type === "user" && !e.isMeta).at(-1)?.message?.content));
+      return fail("確認 Goal set", pasted ? "/goal 被當成貼上內容收起，請先清空新分頁的輸入框再貼" : "新分頁畫面沒出現 Goal set");
+    }
+  }
+
+  if (isConsole) swapConsole(oldHandle, terminal);
+  updateEvent(session, { status: "done" });
+  const alone = (where.tab.terminals ?? []).length <= 1;
+  const close = alone ? ["do", "tab.close", JSON.stringify({ id: where.tab.id, confirmed: true })] : ["do", "pane.close", JSON.stringify({ pane: where.tab.terminals.find((t) => t.terminal === oldHandle).pane })];
+  const closer = spawn(herdrAppBin(), close, { detached: true, stdio: "ignore" });
+  closer.unref();
+}
+
 async function stop(input) {
   const session = input.session_id;
   if (!session || !input.transcript_path) return;
@@ -670,7 +772,7 @@ async function stop(input) {
       ].join("\n"),
     );
   }
-  await (term.kind === "herdr" ? herdrHandoff : orcaHandoff)({
+  await ({ herdr: herdrHandoff, "herdr-app": herdrAppHandoff }[term.kind] ?? orcaHandoff)({
     session,
     oldHandle,
     cwd: input.cwd,
@@ -702,7 +804,7 @@ function sessionStart() {
         hookEventName: "SessionStart",
         additionalContext: [
           "auto-handoff（自動交棒）還沒設定過。先照常處理使用者的要求，在你這個 session 第一則回覆的最後用一句話問使用者一次：",
-          "「要不要開啟自動交棒？開啟後 context 用到模型上限的 40% 時，會先寫交棒說明，再自動開新 session 接手並關掉舊的（Orca 與 herdr 以外只寫說明並提示你）。」",
+          "「要不要開啟自動交棒？開啟後 context 用到模型上限的 40% 時，會先寫交棒說明，再自動開新 session 接手並關掉舊的（Orca、herdr 與 Herdr app 以外只寫說明並提示你）。」",
           `使用者回答要就執行 \`${cmd} enable\`，不要就執行 \`${cmd} disable\`；答案會永久記住，之後的 session 不再問。比例可用 \`${cmd} ratio 0.3\` 調整。`,
         ].join("\n"),
       },
