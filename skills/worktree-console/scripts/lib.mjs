@@ -1445,15 +1445,21 @@ const TOPIC = /^\s*\**\s*第\s*[一二三四五六七八九十\d]+\s*題/;
 const PICK = /選哪|哪一(?:個|種|項)|哪個|哪幾(?:個|項)|你要哪|選\s*\**\s*[A-Za-z\d]{1,2}\s*\**\s*還是|要選\s*\**\s*[A-Za-z\d]{1,2}(?![A-Za-z\d])/;
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 const SHEET_ITEM = /^(?:\*\*)?\d{1,2}(?:\*\*)?[.)、]\s/;
+const SHEET_OPEN = /^\s*(?:\*\*)?\s*待決定\s*\d{1,2}\s*[：:]/;
+const SHEET_SETTLED = /^\s*(?:\*\*)?\s*已決定\s*(?:\*\*)?\s*$/;
 
-// 需求訪談's batch sheet: the last「第 N 題」names 批改單 and lists its questions as 1. 2. 3. before the a, b, c options.
+// 需求訪談's batch sheet: the last「第 N 題」names 批改單. When it is split into 已決定 and 待決定 only the「待決定 N：」lines need an answer; an older sheet lists every question as 1. 2. 3.
 export function batchSheet(text) {
   const prose = proseLines(text);
   const at = prose.findLastIndex((l) => TOPIC.test(l));
   if (at < 0 || !prose[at].includes("批改單")) return null;
-  const items = prose.slice(at + 1).filter((l) => SHEET_ITEM.test(l));
+  const rest = prose.slice(at + 1);
+  const open = rest.filter((l) => SHEET_OPEN.test(l));
+  const split = open.length > 0 || rest.some((l) => SHEET_SETTLED.test(l));
+  const items = split ? open : rest.filter((l) => SHEET_ITEM.test(l));
   const red = items.filter((l) => l.includes("🔴")).length;
-  return { title: prose[at].trim(), count: items.length, red, summary: `批改單 ${items.length} 題（🔴 ${red} 題要你看）` };
+  const label = split ? "批改單 待決定" : "批改單";
+  return { title: prose[at].trim(), count: items.length, red, summary: `${label} ${items.length} 題（🔴 ${red} 題要你看）` };
 }
 
 // The line a board cell, the band and a stop record show for a text question: a batch sheet's count, else the last line asking.

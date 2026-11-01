@@ -2889,6 +2889,96 @@ test("批改單：中控台打「c 3 改成…；5 改成…」，有沒有寫�
   assert.deepEqual(sentTo(named), [`terminal send --terminal term_b --text ${said} --enter`]);
 });
 
+// The sheet split into 已決定 and 待決定, each 待決定 with its own options and 建議, ruled off with 20 ─, then 整張單的建議 and the last a, b, c.
+const RULE_LINE = "─".repeat(20);
+const SPLIT_SHEET = [
+  "**第 4 題：批改單這樣定稿嗎？**",
+  "",
+  "目標檔：/repo/.goals/proj-102.md",
+  "",
+  "**已決定**",
+  "1. 空狀態文案沿用「目前沒有資料」（出處：src/locales/zh-TW.json:118）",
+  "2. 補單元測試在 test/orders.test.ts（出處：AGENTS.md:12）",
+  "3. 🔴 只改前端顯示，不碰後端（出處：PROJ-102 票面）",
+  "",
+  RULE_LINE,
+  "",
+  "**待決定 1：🔴 舊資料要不要搬？**",
+  "",
+  "現在 status 欄位有空值（出處：src/db/schema.ts:42）。",
+  "",
+  "- **a.** 同意：跑一次 migration 把 status 補成 active",
+  "- **b.** 不同意：請說要改哪裡",
+  "",
+  "建議：a，空值會讓清單漏資料",
+  "",
+  RULE_LINE,
+  "",
+  "**待決定 2：🔴 ⚠️ 無出處（推測） 要不要請後端加 API？**",
+  "",
+  "- **a.** 要：新增 GET /orders/summary，@ 後端同事",
+  "- **b.** 不要：前端自己加總",
+  "- **c.** 先不決定：等後端回覆",
+  "",
+  "建議：b，資料量小，前端加總就夠",
+  "",
+  RULE_LINE,
+  "",
+  "**待決定 3：⚠️ 無出處（推測） 預設排序用什麼？**",
+  "",
+  "- **a.** 建立時間由新到舊：跟其他清單一致",
+  "- **b.** 名稱：方便找",
+  "",
+  "建議：a，跟其他清單一致",
+  "",
+  RULE_LINE,
+  "",
+  "**整張單的建議**：1 選 a、2 選 b、3 選 a，照這樣就能動工",
+  "",
+  "- **a.** 全照建議並動工：已決定照單、待決定照建議定稿，中控台直接交棒開始實作",
+  "- **b.** 全照建議先不動工：同 a 定稿，之後再決定要不要動工",
+  "- **c.** 要改：回「1 b；2 a」選待決定的選項，或「已決定 3 改成…」改已決定，可以一起寫",
+  "",
+  "建議：a，三題都有建議，紅題的做法照現有 schema",
+].join("\n");
+
+test("批改單分已決定與待決定：橫條與待回覆題目是「批改單 待決定 N 題（🔴 M 題要你看）」，只數待決定題目行、已決定的編號行（含標 🔴 的）不算", () => {
+  const [item] = pendingItems([listRow("PROJ-102", session(asking(SPLIT_SHEET)))]);
+  assert.equal(item.entries[0].question, "批改單 待決定 3 題（🔴 2 題要你看）");
+  assert.equal(lastActivity(asking(SPLIT_SHEET)), "批改單 待決定 3 題（🔴 2 題要你看）");
+  const settled = SPLIT_SHEET.split("\n").filter((l) => !/^\*\*待決定 [23]/.test(l)).join("\n");
+  assert.equal(pendingItems([listRow("PROJ-102", session(asking(settled)))])[0].entries[0].question, "批改單 待決定 1 題（🔴 1 題要你看）");
+});
+
+test("批改單分已決定與待決定：選項只截最後的 a、b、c 三項、建議是最後一行「建議：」的 a，不會截到某一題待決定的選項", () => {
+  const [item] = pendingItems([listRow("PROJ-102", session(asking(SPLIT_SHEET)))]);
+  assert.deepEqual(item.choices, ["a", "b", "c"]);
+  assert.equal(item.entries[0].options, "a 全照建議並動工／b 全照建議先不動工／c 要改");
+  assert.equal(item.entries[0].suggest, "a");
+  const report = reportLines(listRow("PROJ-102"), asking(SPLIT_SHEET));
+  assert.deepEqual(report.slice(-3), ["- a. 全照建議並動工（建議）", "- b. 全照建議先不動工", "- c. 要改"]);
+});
+
+test("批改單分已決定與待決定：中控台打「1 b；2 a」原文送到子 session、不轉成選項代號；只打「a」送最後那組的 a", () => {
+  const env = () => ({ WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" });
+  const said = "1 b；2 a";
+  const picks = replyWorld(SPLIT_SHEET, said);
+  assert.equal(run("console.mjs", ["reply", "--repo", app(), "--", said], { dir: picks, env: env() }).lines[0], "[PROJ-102(question)] 已送出");
+  assert.deepEqual(sentTo(picks), [`terminal send --terminal term_b --text ${said} --enter`]);
+  const all = replyWorld(SPLIT_SHEET, "a");
+  assert.equal(run("console.mjs", ["reply", "--repo", app(), "--", "a"], { dir: all, env: env() }).lines[0], "[PROJ-102(question)] 已送出");
+  assert.deepEqual(sentTo(all), ["terminal send --terminal term_b --text a --enter"]);
+});
+
+test("批改單分已決定與待決定：按 9 印出的回報含已決定、每題待決定與整張單的建議，每行一字不漏、沒有「…」截斷", () => {
+  const dir = replyWorld(SPLIT_SHEET, "a");
+  const view = focusRun(dir, { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) });
+  const card = view.sessions.find((s) => s.tag === "PROJ-102(question)");
+  assert.equal(card.question, "批改單 待決定 3 題（🔴 2 題要你看）");
+  for (const line of SPLIT_SHEET.split("\n").slice(1).filter((l) => l.trim())) assert.ok(card.report.includes(`> ${line}`), line);
+  assert.deepEqual(card.report.split("\n").filter((l) => l.endsWith("…")), []);
+});
+
 test("回答路由：選單題的 a、b 轉成選單實際編號再代按", () => {
   const dir = withMenuSession([MENU[0]], { mutatePs: (ps) => { Object.assign(agentIn(ps, "proj-103-idle")[0], menuAgent()); for (const s of ["chris-proj-102-question", "proj-102-perm"]) Object.assign(agentIn(ps, s)[0], { state: "working", toolName: null }); releaseBusy(ps); } });
   const res = run("console.mjs", ["reply", "--repo", app(), "--", "b"], { dir, env: { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) } });
