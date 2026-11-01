@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.12.0
+
+- feat(console): split the interview sheet into settled and open questions
+
 ## 1.11.1
 
 - fix(console): count a Bash read of prompt.md in the transcript as an interview start
