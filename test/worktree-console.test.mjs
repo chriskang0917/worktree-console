@@ -3614,6 +3614,53 @@ test("待決打開：第二級的題列在 decisions、不進橫條排隊；第�
   }
 });
 
+test("待決只收有動作名稱的題：預測 tier 是 batch 但 verb 是空的、或不在 automation.json actions.batch 裡，照舊上橫條", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  for (const verb of [null, "", "push-feature-branch"]) {
+    const adv = batchAdvisor({ verb });
+    const view = focusRun(dir, { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: adv.home });
+    assert.ok(onBand(view, "PROJ-102(question)"), `verb ${verb}: 上橫條`);
+    assert.deepEqual(view.decisions, []);
+  }
+  const env = (verb) => {
+    const home = batchHome(true);
+    const conf = JSON.parse(fs.readFileSync(path.join(home, "automation.json"), "utf8"));
+    fs.writeFileSync(path.join(home, "automation.json"), JSON.stringify({ ...conf, actions: { batch: ["merge"] } }));
+    return { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: batchAdvisor({ verb }).home };
+  };
+  assert.ok(onBand(focusRun(dir, env("delete-remote-branch")), "PROJ-102(question)"), "actions.batch 沒列 delete-remote-branch 就上橫條");
+  assert.deepEqual(focusRun(dir, env("merge")).decisions.map((d) => d.verb), ["merge"]);
+});
+
+test("上過橫條的題不搬去待決：當過橫條目前這題後預測才判成第二級，照舊留在橫條，待決也不列", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const home = batchHome(true);
+  const early = { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: batchAdvisor({ tier: "ask" }).home };
+  const first = focusRun(dir, early);
+  const key = first.sessions.find((s) => s.tag === "PROJ-102(question)").key;
+  run("console.mjs", ["focus-pick", key], { dir, env: early });
+  assert.equal(focusRun(dir, early).currentTag, "PROJ-102(question)");
+  const late = { WORKTREE_CONSOLE_HOME: home, ADVISOR_HOME: batchAdvisor().home };
+  for (let i = 0; i < 2; i++) {
+    const view = focusRun(dir, late);
+    assert.equal(view.currentTag, "PROJ-102(question)");
+    assert.deepEqual(view.decisions, []);
+    assert.ok(!view.sessions.find((s) => s.tag === "PROJ-102(question)").decide);
+  }
+  const fresh = focusRun(dir, { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: batchAdvisor().home });
+  assert.deepEqual(fresh.decisions.map((d) => d.tag), ["PROJ-102(question)"], "沒上過橫條的同一題照樣進待決");
+});
+
+test("待決的題在 sessions 裡標 decide（全部分頁寫「待決」）、不在橫條排隊；卡片的選項是完整文字", () => {
+  const dir = replyWorld(BATCH_Q, "A");
+  const view = focusRun(dir, { WORKTREE_CONSOLE_HOME: batchHome(true), ADVISOR_HOME: batchAdvisor().home });
+  const s = view.sessions.find((x) => x.tag === "PROJ-102(question)");
+  assert.equal(s.decide, true);
+  assert.ok(!onBand(view, "PROJ-102(question)"));
+  assert.deepEqual(view.sessions.filter((x) => x.decide).map((x) => x.tag), ["PROJ-102(question)"]);
+  assert.deepEqual(view.decisions[0].options, ["現在刪", "先留著"]);
+});
+
 test("待決核可：decide <id> approve 先照〈使用者在中控台回答〉記下回答，再用 reply 送出，最後寫 decisions.jsonl；橫條原本的題目不被拿走", () => {
   const dir = replyWorld(BATCH_Q, "A");
   const adv = batchAdvisor();

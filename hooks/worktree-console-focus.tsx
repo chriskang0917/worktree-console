@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { loadAppearance, THEMES, type Appearance, type ConsoleTheme } from './console-theme.ts'
-import { statusCell, columns, truncateColumns } from './status-view.ts'
+import { statusCell, columns, truncateColumns, wrapColumns, wrapRanges } from './status-view.ts'
 import { registerKeepaliveView } from './keepalive-view.tsx'
 import { SUMMARY_MAX_LINES, summaryLines } from './session-summary-view.tsx'
 
@@ -21,6 +21,8 @@ type Session = {
   archived: boolean
   pending: boolean
   report: string
+  // Waiting in 待決 rather than on the band.
+  decide?: boolean
 }
 
 // The advisor's prediction for the question, read by `console.mjs focus`: still running, or ready with an answer and a reason.
@@ -203,6 +205,26 @@ function fitParts(parts: AdvicePart[], width: number): AdvicePart[] {
   return cut
 }
 
+// The parts laid out over lines of `width` columns as wrapColumns breaks them, each line keeping its parts' roles.
+function wrapParts(parts: AdvicePart[], width: number): AdvicePart[][] {
+  const chars = parts.flatMap(p => [...p.text].map(c => ({ c, role: p.role })))
+  return wrapRanges(chars.map(x => x.c).join(''), width).map(r => {
+    const line: AdvicePart[] = []
+    for (const { c, role } of chars.slice(r.from, r.to)) {
+      const last = line[line.length - 1]
+      if (last?.role === role) line[line.length - 1] = { ...last, text: last.text + c }
+      else line.push({ role, text: c })
+    }
+    return line
+  })
+}
+
+// The options a bare a／b／c answer picks, by index.
+function pickedOptions(answer: string): Set<number> {
+  if (!/^[a-z](?:\s*[、,，]\s*[a-z])*$/i.test(answer.trim())) return new Set()
+  return new Set([...answer.toLowerCase().matchAll(/[a-z]/g)].map(m => m[0].charCodeAt(0) - 97))
+}
+
 const advicePaint = (theme: ConsoleTheme): Record<AdvicePart['role'], { color: string | undefined; bold?: boolean }> => ({
   label: { color: theme.accent },
   answer: { color: theme.fg, bold: true },
@@ -300,7 +322,8 @@ function syncAnimation($: EngineInterface) {
 const sessions = () => focus.sessions ?? []
 const decisions = () => focus.decisions ?? []
 const batchOn = () => Array.isArray(focus.decisions)
-const tabsNow = () => (batchOn() ? [...TABS, DECIDE_TAB] : TABS)
+// 待決 leads while it holds a question and sits last when empty; every tab keeps its key wherever it stands.
+const tabsNow = () => (!batchOn() ? TABS : decisions().length ? [DECIDE_TAB, ...TABS] : [...TABS, DECIDE_TAB])
 // Cards in the order the tab draws them: by ticket, each ticket where its first question stopped.
 const decisionOrder = () => {
   const groups: { name: string; repo: string; items: Decision[] }[] = []
@@ -547,7 +570,7 @@ async function focusSel($: EngineInterface, at: number, gen: number) {
 }
 
 async function openPane($: EngineInterface) {
-  showTab('pending')
+  showTab(decisions().length ? 'decisions' : 'pending')
   startRepin()
   // Asked within the press itself, so the engine seats the pane at any width; an open after an await counts as unasked.
   const opened = $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
@@ -563,7 +586,7 @@ async function openPane($: EngineInterface) {
 async function pickCard($: EngineInterface, s: Session) {
   sel = s.key
   follow = true
-  if (s.pending && s.key !== focus.current) await act($, ['focus-pick', s.key])
+  if (s.pending && !s.decide && s.key !== focus.current) await act($, ['focus-pick', s.key])
   $.ui.invalidate('ui.render')
   const res = await $.ui.focus({ requestId: PANE, key: `name:${s.key}` }).catch(() => ({ deny: 'failed' }))
   if (!res.deny) held = ring.indexOf(`name:${s.key}`)
@@ -572,7 +595,7 @@ async function pickCard($: EngineInterface, s: Session) {
 // The recap dialog's 印出完整回報, as Enter on a card once did: a card waiting on you that is not on the band switches first (the switch prints it).
 async function printCard($: EngineInterface, s: Session) {
   sel = s.key
-  if (s.pending && s.key !== focus.current) await act($, ['focus-pick', s.key])
+  if (s.pending && !s.decide && s.key !== focus.current) await act($, ['focus-pick', s.key])
   else void show($, s.tag, s.key === focus.current ? s.key : null)
   $.ui.invalidate('ui.render')
 }
@@ -787,8 +810,9 @@ function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleT
     const approveLabel = focused ? `y ${APPROVE}` : APPROVE
     const manualLabel = focused ? `m ${MANUAL}` : MANUAL
     const rightWidth = (busy ? columns('送出中…') : columns(`${approveLabel} · ${manualLabel}`)) + (failed ? columns(APPROVE_FAILED) + 3 : 0)
-    const parts = fitParts(adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options), inner)
+    const advice = wrapParts(adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options), inner)
     const question = `${d.tag !== d.group ? `${d.tag} · ` : ''}${d.question}`
+    const picked = pickedOptions(d.answer)
     return (
       <Box key={`decision:${d.id}`} flexDirection="column" flexShrink={0} borderStyle={focused ? 'double' : 'round'} borderColor={focused ? theme.accent : failed ? theme.error : theme.border} paddingX={2}>
         <Box key={`decision-head:${d.id}`} flexDirection="row" justifyContent="space-between" height={1} flexShrink={0}>
@@ -805,9 +829,22 @@ function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleT
             )}
           </Box>
         </Box>
-        <Button key={`detail:${d.id}`} label={truncateColumns(question, inner)} plain autoFocus={focused ? true : undefined} onPress={() => void openDetail($, d)}><Text color={theme.dim}>{truncateColumns(question, inner)}</Text></Button>
-        <Box key={`decision-advice:${d.id}`} flexDirection="row" height={1} flexShrink={0} overflow="hidden">
-          {parts.map(p => <Text key={`decision-advice:${d.id}:${p.role}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}
+        <Button key={`detail:${d.id}`} label={truncateColumns(question, inner)} plain autoFocus={focused ? true : undefined} onPress={() => void openDetail($, d)}><Text color={theme.dim}>{wrapColumns(question, inner).join('\n')}</Text></Button>
+        {d.options.length > 0 && (
+          <Box key={`decision-options:${d.id}`} flexDirection="column" flexShrink={0}>
+            {d.options.map((o, i) => (
+              <Box key={`decision-option:${d.id}:${i}`} height={1} flexShrink={0}>
+                <Text color={picked.has(i) ? theme.accent : theme.fg} bold={picked.has(i)} wrap="truncate-end">{truncateColumns(`${String.fromCharCode(97 + i)}. ${o.replace(/\s+/g, ' ').trim()}`, inner)}</Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+        <Box key={`decision-advice:${d.id}`} flexDirection="column" flexShrink={0}>
+          {advice.map((line, n) => (
+            <Box key={`decision-advice:${d.id}:${n}`} flexDirection="row" height={1} flexShrink={0}>
+              {line.map((p, j) => <Text key={`decision-advice:${d.id}:${n}:${j}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}
+            </Box>
+          ))}
         </Box>
       </Box>
     )
@@ -1009,7 +1046,8 @@ export const register: Register = on => {
     const card = (r: Session, i: number) => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
-      const cell = statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
+      const status = statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
+      const cell = r.decide ? { ...status, label: DECIDE_TAB.label } : status
       // Stage is the ticket's progress, not a repo attribute: a quiet header tag where the name can spare it, else first on the bottom row.
       const stageWord = r.stage !== '—' && r.stage !== '未開工' ? r.stage : ''
       const stageInHeader = !!stageWord && cols >= 46

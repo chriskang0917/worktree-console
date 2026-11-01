@@ -1568,6 +1568,9 @@ function textChoices(text) {
   return { list, at, code, said };
 }
 
+// The options a text question lists, with their labels whole (the board clips them).
+export const textOptionLabels = (text) => textChoices(text).list.map((o) => o.label ?? "");
+
 // Options and the child's own suggestion are only read from fixed phrasings; anything else stays "—".
 function textEntry(tag, text) {
   const { list, at, code, said } = textChoices(text);
