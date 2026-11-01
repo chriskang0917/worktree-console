@@ -807,6 +807,27 @@ function goalTranscript(handle, worktreePath, prompt) {
   }
 }
 
+// Whether the session read prompt.md (Read or Bash) after the instruction that starts with `expect`.
+export function promptReadAfter(file, expect) {
+  let entries;
+  try {
+    entries = readEntries(file);
+  } catch {
+    return false;
+  }
+  const start = entries.findIndex((e) => instructionText(e)?.startsWith(expect));
+  if (start < 0) return false;
+  return entries.slice(start + 1).some((e) => {
+    const content = e.type === "assistant" ? e.message?.content : null;
+    if (!Array.isArray(content)) return false;
+    return content.some((part) => {
+      if (part.type !== "tool_use") return false;
+      const target = part.name === "Read" ? part.input?.file_path : part.name === "Bash" ? part.input?.command : null;
+      return typeof target === "string" && /prompt\.md/.test(target);
+    });
+  });
+}
+
 // true while the last goal_status is unmet, false without one, null when unreadable.
 export function goalInTranscript(file) {
   let lines;

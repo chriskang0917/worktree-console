@@ -9,6 +9,7 @@ import {
   afterSendLines,
   aligningRow,
   promptFile,
+  promptReadAfter,
   archivedLines,
   boardLines,
   childAnswer,
@@ -48,6 +49,7 @@ import {
   ticketKeys,
   selfInfo,
   sessionTag,
+  sessionTranscript,
   stripRef,
   todoLines,
   UNSEEN,
@@ -564,7 +566,9 @@ async function waitStart(target, expect, interview = false) {
     if (started && !interview) return { ok: true, label, repo, reason: null };
     if (started && interview) {
       const asked = agent.state === "done" && /[?？]/.test(agent.lastAssistantMessage || "");
-      if (PROMPT_READ.test(screen) || asked) return { ok: true, label, repo, reason: null };
+      const handle = row.handles.find((h) => h.paneKey === agent.paneKey)?.handle ?? row.handles[0]?.handle;
+      const file = agent.transcript || sessionTranscript(handle, target, agent.prompt);
+      if ((file && promptReadAfter(file, expect)) || PROMPT_READ.test(screen) || asked) return { ok: true, label, repo, reason: null };
       if (agent.state === "done") {
         reason = "需求訪談未啟動";
         break;

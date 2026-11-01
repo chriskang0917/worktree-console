@@ -1085,3 +1085,19 @@ test("同一輪「講一段 → 跑工具 → 再講一段」：回報包含上�
   assert.match(detail, /> 改好了，登入頁換成新版面。/);
   assert.doesNotMatch(detail, /舊回覆/);
 });
+
+test("await-start --interview：herdr 讀 transcript 判定讀了 prompt.md、逾時與訪談未啟動", () => {
+  const go = (status, entries) => {
+    const w = world([{ cwd: wt("proj-201-menu"), status, session: "s" }], { transcripts: { s: { cwd: wt("proj-201-menu"), entries } } });
+    return w.run(["await-start", "--path", wt("proj-201-menu"), "--expect", "PROJ-201 訪談", "--interview", "--timeout", "0"]);
+  };
+  const ask = user("PROJ-201 訪談需求");
+  const cat = go("working", [ask, call("t1", "Bash", { command: "cat /Users/x/.config/worktree-console/prompt.md" })]);
+  assert.deepEqual([cat.code, cat.out], [0, "[PROJ-201] 已開工"]);
+  const read = go("working", [ask, call("t1", "Read", { file_path: "/Users/x/.config/worktree-console/prompt.md" })]);
+  assert.deepEqual([read.code, read.out], [0, "[PROJ-201] 已開工"]);
+  const late = go("working", [ask, call("t1", "Bash", { command: "git status" })]);
+  assert.deepEqual([late.code, late.out], [1, "[PROJ-201] 未開工：逾時"]);
+  const quiet = go("done", [ask, said("好了")]);
+  assert.deepEqual([quiet.code, quiet.out], [1, "[PROJ-201] 未開工：需求訪談未啟動"]);
+});

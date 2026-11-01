@@ -687,6 +687,19 @@ test("await-start：已開工與未開工（trust 對話框、逾時）", () => 
   assert.equal(late.out, "[PROJ-104] 未開工：逾時");
 });
 
+test("await-start --interview：transcript 在首則指令後讀了 prompt.md 就算開工（Orca）", () => {
+  const go = (entries) => withTranscripts({ "s.jsonl": entries }, () => run("console.mjs", ["await-start", "--path", wt("proj-101-login"), "--expect", "PROJ-101 實作", "--interview", "--timeout", "0"]));
+  const ask = userText("PROJ-101 實作登入頁改版");
+  const cat = go([ask, toolUse("t1", "Bash", { command: "cat /Users/x/.config/worktree-console/prompt.md" })]);
+  assert.deepEqual([cat.code, cat.out], [0, "[PROJ-101] 已開工"]);
+  const read = go([ask, toolUse("t1", "Read", { file_path: "/Users/x/.config/worktree-console/prompt.md" })]);
+  assert.deepEqual([read.code, read.out], [0, "[PROJ-101] 已開工"]);
+  const other = go([ask, toolUse("t1", "Bash", { command: "git status" })]);
+  assert.deepEqual([other.code, other.out], [1, "[PROJ-101] 未開工：逾時"]);
+  const before = go([toolUse("t0", "Read", { file_path: "/x/prompt.md" }), toolResult("t0"), ask]);
+  assert.deepEqual([before.code, before.out], [1, "[PROJ-101] 未開工：逾時"]);
+});
+
 test("watcher：orca 不可達與逾時出口", () => {
   const down = run("watch.mjs", [], { env: { FAKE_ORCA_FAIL: "1" } });
   assert.equal(down.out, "[watch] orca-unreachable");
