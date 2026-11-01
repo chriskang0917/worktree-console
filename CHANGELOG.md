@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.13.0
+
+- feat(focus): make the 待決 tab readable and keep each question on one side
+
 ## 1.12.0
 
 - feat(console): split the interview sheet into settled and open questions

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { columns, statusCell } from './status-view.ts'
+import { columns, statusCell, wrapColumns } from './status-view.ts'
 import { focusBandRows } from './worktree-console-focus.tsx'
 import { THEMES } from './console-theme.ts'
 
@@ -2369,7 +2369,7 @@ test('待決：batch 沒打開（payload 沒有 decisions）時分頁、按鍵�
   off.focus = withDecisions()
   await clock.advance(5_000)
   ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
-  expect(await tabButtons(ui)).toEqual([['tab:pending', 'q', '待回覆 5'], ['tab:all', 'w', '全部 7'], ['tab:hidden', 'e', '封存 1'], ['tab:decisions', 'r', '待決 3']])
+  expect(await tabButtons(ui)).toEqual([['tab:decisions', 'r', '待決 3'], ['tab:pending', 'q', '待回覆 5'], ['tab:all', 'w', '全部 7'], ['tab:hidden', 'e', '封存 1']])
   expect(await footerLines(ui)).toEqual(['qwer 切分頁 · 1-9,0/↑↓ 選卡片'])
   expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
   await ui.unmount()
@@ -2590,6 +2590,7 @@ test('待決焦點：待回覆選了第一張卡後按 r 切到待決，引擎�
   await openPane($)
   const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
   const buttons = async () => (await ui.findAll({ type: 'Button' })).map((b: any) => b.key) as string[]
+  await ui.press({ key: 'tab:pending' })
   await focusPane($, `name:${keyOf('perm')}`, 'plugin')
   const at = (await buttons()).indexOf(w.focused.at(-1)!)
   await ui.press({ key: 'tab:decisions' })
@@ -2688,4 +2689,138 @@ test('待決詳情焦點：方向鍵或 Tab 走不到「✓ 核可」「自己�
   await dialog.unmount()
   expect(decideCalls(w)).toEqual([['decide', 'p1', 'manual'], ['decide', 'p3', 'approve']])
   await ui.unmount()
+})
+
+test('待決分頁位置：有題時排第一 `r: 待決 N  q: 待回覆 N  w: 全部 N  e: 封存 N`，0 題時排最後；按鍵不跟著位置變', async ($, on) => {
+  const w = world(withDecisions())
+  const clock = await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  expect(await tabButtons(ui)).toEqual([['tab:decisions', 'r', '待決 3'], ['tab:pending', 'q', '待回覆 5'], ['tab:all', 'w', '全部 7'], ['tab:hidden', 'e', '封存 1']])
+  w.focus = withDecisions([])
+  await clock.advance(5_000)
+  expect(await tabButtons(ui)).toEqual([['tab:pending', 'q', '待回覆 5'], ['tab:all', 'w', '全部 7'], ['tab:hidden', 'e', '封存 1'], ['tab:decisions', 'r', '待決 0']])
+  await ui.unmount()
+})
+
+test('待決 0 開面板：有題時停在待決、選第一張卡；0 題時照舊停在待回覆', async ($, on) => {
+  const w = world(withDecisions())
+  const clock = await start($, on, w)
+  await openPane($)
+  let ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  expect((await ui.find({ key: 'tab:decisions' }))?.props.dimColor).toBe(false)
+  expect((await ui.find({ key: 'decision:p1' }))?.props.borderStyle).toBe('double')
+  expect((await ui.find({ key: 'detail:p1' }))?.props.autoFocus).toBe(true)
+  expect(await cardTags(ui)).toEqual([])
+  await ui.unmount()
+  w.focus = withDecisions([])
+  await clock.advance(5_000)
+  await openPane($)
+  ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  expect((await ui.find({ key: 'tab:pending' }))?.props.dimColor).toBe(false)
+  expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
+  await ui.unmount()
+})
+
+test('待決清空：核可完最後一題停在待決的空白框、不自動跳分頁，分頁列已把待決移到最後；按 q 回待回覆', async ($, on) => {
+  const w = world(withDecisions([DECISIONS[0]]))
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'approve:p1' })
+  expect(decideCalls(w)).toEqual([['decide', 'p1', 'approve']])
+  expect(await ui.find({ key: 'decide-empty' })).toBeTruthy()
+  expect((await ui.find({ key: 'tab:decisions' }))?.props.dimColor).toBe(false)
+  expect(await tabButtons(ui)).toEqual([['tab:pending', 'q', '待回覆 5'], ['tab:all', 'w', '全部 7'], ['tab:hidden', 'e', '封存 1'], ['tab:decisions', 'r', '待決 0']])
+  await ui.press({ key: 'tab:pending' })
+  expect(await ui.find({ key: 'decide-empty' })).toBeFalsy()
+  expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
+  await ui.unmount()
+})
+
+const LONG_Q = '舊的 feat/proj-7882-old 已經合併進 dev，CI 也綠了，遠端那條 branch 留著只會讓人誤推，要不要現在就把遠端的 branch 刪掉，本機的先留著？'
+const LONG_REASON = '已合併進 dev 而且 CI 綠了，遠端留著沒有用處，之前同類題你都選刪掉'
+const longDecisions = () => withDecisions([decision('p1', { question: LONG_Q, options: ['現在刪掉遠端與本機的 branch，一次清乾淨', '先留著'], reason: LONG_REASON }), DECISIONS[2]])
+
+for (const cols of [40, 80]) {
+  test(`待決卡片排版（${cols} 欄）：動作與右上按鈕一行；完整題目照內寬換行不截斷；選項各一行 a. …，建議的用強調色；最後是建議與理由，照寬度換行不截斷；每行都不超出外框`, async ($, on) => {
+    const w = world(longDecisions())
+    appearanceConfig.set(w, { theme: 'dracula', motion: false })
+    await start($, on, w)
+    await openPane($)
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    const inner = cols - 6
+    const theme = THEMES.dracula
+    expect((await ui.find({ key: 'decision-head:p1' }))?.text).toBe('刪遠端 branchy ✓ 核可 · m 自己回')
+    const question = (await ui.find({ key: 'detail:p1' }))!.text.split('\n')
+    expect(question.length).toBeGreaterThan(1)
+    expect(question.join('').replace(/\s/g, '')).toBe(LONG_Q.replace(/\s/g, ''))
+    for (const line of question) expect(columns(line)).toBeLessThanOrEqual(inner)
+    const options = [(await ui.find({ key: 'decision-option:p1:0' }))!, (await ui.find({ key: 'decision-option:p1:1' }))!]
+    expect(options[0]!.text.startsWith('a. 現在刪掉遠端')).toBe(true)
+    expect(options[1]!.text).toBe('b. 先留著')
+    const color = async (text: string) => (await ui.findAll({ type: 'Text' })).find((t: any) => t.text === text)?.props.color
+    expect([await color(options[0]!.text), await color(options[1]!.text)]).toEqual([theme.accent, theme.fg])
+    for (const o of options) expect(columns(o.text)).toBeLessThanOrEqual(inner)
+    const advice = (await ui.findAll({ type: 'Box' })).filter((b: any) => /^decision-advice:p1:\d+$/.test(b.key)).map((b: any) => b.text as string)
+    expect(advice.join('').replace(/\s/g, '')).toBe(`建議：a 現在刪掉遠端與本機的 branch，一次清乾淨，${LONG_REASON}`.replace(/\s/g, ''))
+    for (const line of advice) expect(columns(line)).toBeLessThanOrEqual(inner)
+    expect(await ui.find({ key: 'decision-options:p3' })).toBeFalsy()
+    expect((await ui.find({ key: 'decision:p3' }))!.text).toContain('建議：照草案寫入，草案你已看過')
+    await ui.unmount()
+  })
+}
+
+test('待決卡片高度隨內容變：↑↓ 一次移一張卡，y、m、a 與 Enter 開詳情照舊', async ($, on) => {
+  const w = world(longDecisions())
+  const clock = await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(40), surface: 'terminal' })
+  await focusPane($, 'detail:p1', 'plugin')
+  await focusPane($, 'approve:p3', 'person')
+  expect(w.focused.at(-1)).toBe('detail:p3')
+  expect((await ui.find({ key: 'decision:p3' }))?.props.borderStyle).toBe('double')
+  await focusPane($, 'detail:p1', 'person')
+  expect(w.focused.at(-1)).toBe('detail:p1')
+  await ui.press({ key: 'detail:p1' })
+  expect(w.opened.at(-1)).toMatchObject({ id: DETAIL })
+  await ui.press({ key: 'decide-manual' })
+  expect(decideCalls(w).at(-1)).toEqual(['decide', 'p1', 'manual'])
+  await ui.press({ key: 'decide-yes' })
+  expect(decideCalls(w).at(-1)).toEqual(['decide', 'p3', 'approve'])
+  w.focus = longDecisions()
+  await clock.advance(5_000)
+  await ui.press({ key: 'decide-all' })
+  expect(decideCalls(w).at(-1)).toEqual(['decide', '--all', 'approve'])
+  await ui.unmount()
+})
+
+test('全部分頁：正排在待決的 session 卡片狀態字寫「待決」；按它的數字只選卡片、不搬上橫條', async ($, on) => {
+  const w = world({ ...withCards({ logging: { decide: true } as any }, 'perm', ['focusui', 'PROJ-6668', 'upgrade#2']), decisions: DECISIONS })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
+  await ui.press({ key: 'tab:all' })
+  expect((await ui.find({ key: `status:${keyOf('logging')}` }))?.text).toContain('待決')
+  expect((await ui.find({ key: `status:${keyOf('logging')}` }))?.text).not.toContain('待回答')
+  expect((await ui.find({ key: `status:${keyOf('focusui')}` }))?.text).toContain('待回答')
+  await ui.press({ key: `num:${keyOf('logging')}` })
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  await ui.press({ key: 'tab:pending' })
+  expect(await cardTags(ui)).not.toContain('logging')
+  await ui.unmount()
+})
+
+test('待決卡片換行：英文字整個移到下一行、不從中間切開；全形標點不落在行首；比一行還長的字才逐字切；每行不超過寬度', () => {
+  const text = `建議：a 現在刪掉遠端與本機的 branch，一次清乾淨，已合併進 dev 而且 CI 綠了，${'很'.repeat(5)}，遠端留著沒有用處`
+  for (const max of [20, 34, 74]) {
+    const lines = wrapColumns(text, max)
+    for (const line of lines) expect(columns(line)).toBeLessThanOrEqual(max)
+    expect(lines.join('').replace(/\s/g, '')).toBe(text.replace(/\s/g, ''))
+    for (let i = 1; i < lines.length; i++) {
+      expect(/^[，。、？！：；）]/.test(lines[i]!)).toBe(false)
+      expect(/[A-Za-z]$/.test(lines[i - 1]!) && /^[A-Za-z]/.test(lines[i]!)).toBe(false)
+    }
+  }
+  expect(wrapColumns('a'.repeat(12), 5)).toEqual(['aaaaa', 'aaaaa', 'aa'])
 })

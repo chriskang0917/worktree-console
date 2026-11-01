@@ -31,3 +31,50 @@ export function truncateColumns(text: string, max: number): string {
   }
   return `${result}…`
 }
+const WORD = /[\x21-\x7e]/
+const CLOSING = /[，。、？！：；）」』〕】…]/
+
+// Where each line starts and ends (code-point indices) when text wraps at `max` columns: an English word moves whole to
+// the next line when it fits on one, closing punctuation never starts a line, and a space a break lands on is dropped.
+export function wrapRanges(text: string, max: number): { from: number; to: number }[] {
+  const chars = [...text]
+  const tokens: { from: number; to: number; width: number }[] = []
+  for (let i = 0; i < chars.length; ) {
+    let j = i + 1
+    if (WORD.test(chars[i]!)) while (j < chars.length && WORD.test(chars[j]!)) j++
+    const width = chars.slice(i, j).reduce((n, c) => n + columns(c), 0)
+    if (j - i > 1 && width > max) for (let k = i; k < j; k++) tokens.push({ from: k, to: k + 1, width: columns(chars[k]!) })
+    else tokens.push({ from: i, to: j, width })
+    i = j
+  }
+  const lines: { from: number; to: number }[] = []
+  let from = 0
+  let used = 0
+  let prev: { from: number; width: number } | null = null
+  for (const t of tokens) {
+    if (used > 0 && used + t.width > max) {
+      if (chars[t.from] === ' ') {
+        lines.push({ from, to: t.from })
+        ;(from = t.to), (used = 0), (prev = null)
+        continue
+      }
+      if (CLOSING.test(chars[t.from]!) && prev && prev.from > from && prev.width + t.width <= max) {
+        lines.push({ from, to: prev.from })
+        ;(from = prev.from), (used = prev.width)
+      } else {
+        lines.push({ from, to: t.from })
+        ;(from = t.from), (used = 0)
+      }
+    }
+    used += t.width
+    prev = { from: t.from, width: t.width }
+  }
+  lines.push({ from, to: chars.length })
+  return lines
+}
+
+// Breaks text into lines of at most `max` columns, as wrapRanges lays them out.
+export function wrapColumns(text: string, max: number): string[] {
+  const chars = [...text]
+  return wrapRanges(text, max).map(r => chars.slice(r.from, r.to).join(''))
+}

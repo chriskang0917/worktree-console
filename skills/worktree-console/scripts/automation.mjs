@@ -32,7 +32,8 @@ export function readAutomation(home = consoleHome()) {
   }
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const day = (x) => (typeof x === "string" && DAY.test(x) ? x : null);
-  return { trial: { from: day(v.trial?.from), until: day(v.trial?.until) }, batch: { enabled: v.batch?.enabled === true } };
+  const verbs = Array.isArray(v.actions?.batch) ? v.actions.batch.filter((x) => typeof x === "string" && x) : null;
+  return { trial: { from: day(v.trial?.from), until: day(v.trial?.until) }, batch: { enabled: v.batch?.enabled === true }, batchVerbs: verbs ?? Object.keys(ACTION_LABEL) };
 }
 
 export const batchEnabled = (home = consoleHome()) => readAutomation(home)?.batch.enabled === true;
@@ -100,18 +101,20 @@ function freeBatch(home, now) {
 
 const merged = (a, b, target) => new Map([[target, [...(a?.get(target) ?? []), ...(b?.get(target) ?? [])].sort((x, y) => x.at - y.at)]]);
 
-// Splits the band's entries: with batch on, a waiting question whose ready prediction is second tier leaves the queue for 待決.
+// Splits the band's entries: with batch on, a waiting question whose ready prediction is second tier and names a batch action leaves the queue for 待決.
+// A question that has been the one on the band (`banded`) stays there, so a late prediction never moves it.
 // `batch` is null when batch is off, so callers keep today's output exactly.
 // Any failure here falls back to batch off, so a 待決 bug can never take the band down.
-export function splitBatch(entries, now = Date.now()) {
+export function splitBatch(entries, now = Date.now(), banded = new Set()) {
   try {
-    return batchEnabled() ? batchOf(entries, now) : { open: entries, batch: null };
+    const automation = readAutomation();
+    return automation?.batch.enabled === true ? batchOf(entries, now, banded, new Set(automation.batchVerbs)) : { open: entries, batch: null };
   } catch {
     return { open: entries, batch: null };
   }
 }
 
-function batchOf(entries, now) {
+function batchOf(entries, now, banded, verbs) {
   const manual = manualIds();
   const home = advisorHome();
   const byPath = loadAdvice(home, now);
@@ -120,8 +123,8 @@ function batchOf(entries, now) {
   const batch = [];
   for (const e of entries) {
     const status = e.item.session.status;
-    const p = status?.kind === "waiting" ? latestFor(merged(byPath, free, e.item.row.path), e.item.row.path, e.since) : null;
-    if (p?.status === "ready" && p.tier === "batch" && !isSheet(p) && !manual.has(p.id)) batch.push({ entry: e, prediction: p });
+    const p = status?.kind === "waiting" && !banded.has(e.key) ? latestFor(merged(byPath, free, e.item.row.path), e.item.row.path, e.since) : null;
+    if (p?.status === "ready" && p.tier === "batch" && verbs.has(p.verb) && !isSheet(p) && !manual.has(p.id)) batch.push({ entry: e, prediction: p });
     else open.push(e);
   }
   return { open, batch };

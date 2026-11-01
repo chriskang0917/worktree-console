@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { LABELS, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
+import { LABELS, textOptionLabels, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
 import { isConsoleSession } from "./log.mjs";
 import { adviceFor, advisorHome, advisorState, loadAdvice } from "./advice.mjs";
 import { readSummary } from "./summary.mjs";
@@ -192,12 +192,18 @@ export function waitLine(view) {
 
 // Loads the saved focus, applies `change` (a reply, a pick), steps it over `rows` and saves it back.
 export function syncFocus(rows, { now = Date.now(), change = null, heartbeat = false } = {}) {
-  const { open: entries, batch } = splitBatch(markAuto(focusEntries(rows), now), now);
-  const busy = rows.flatMap((row) => row.sessions.filter((s) => s.status.kind === "busy").map((s) => ({ paneKey: s.paneKey, handle: s.handle, tag: sessionTag(row, s) })));
   let state = loadFocus();
+  const all = focusEntries(rows);
+  const banded = new Set([...(state.banded ?? []), state.current].filter(Boolean));
+  const { open: entries, batch } = splitBatch(markAuto(all, now), now, banded);
+  const busy = rows.flatMap((row) => row.sessions.filter((s) => s.status.kind === "busy").map((s) => ({ paneKey: s.paneKey, handle: s.handle, tag: sessionTag(row, s) })));
   if (change) state = change(state, entries, now);
   const view = focusStep(state, entries, now, busy);
   if (heartbeat) view.state.modsAt = now;
+  if (batch) {
+    const live = new Set(all.map((e) => e.key));
+    view.state.banded = [...new Set([...banded, view.state.current].filter((k) => k && live.has(k)))];
+  }
   saveFocus(view.state);
   return batch ? { ...view, decisions: batch } : view;
 }
@@ -217,6 +223,13 @@ function optionsOf(item) {
   const e = item.entries[0];
   if (["permission", "anomaly"].includes(item.kind) || item.entries.length > 1 || e.options === "—") return [];
   return e.options.split("／").filter((o) => o !== "其他").map((o) => o.replace(/^[a-z](?:\s|$)/, "").trim());
+}
+
+// A 待決 card's options: a text question's labels whole, since the card gives each its own line.
+function decisionOptionsOf(item) {
+  if (item.kind !== "text" || item.entries.length > 1) return optionsOf(item);
+  const labels = textOptionLabels(item.session.status.text);
+  return labels.length ? labels : optionsOf(item);
 }
 
 // A card's bottom right: the ticket title (a temporary worktree's task title), or per session when several share the worktree.
@@ -250,6 +263,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
   const firsts = Object.fromEntries(Object.entries(view.state.firsts ?? {}).filter(([k]) => live.has(k)));
   const advice = loadAdvice(advisorHome(), now);
   const advisor = advice ? advisorState(advisorHome()) : null;
+  const deciding = new Set((view.decisions ?? []).map((b) => b.entry.item.session));
   const sessions = rows.flatMap((row) =>
     row.sessions.map((session) => {
       if (!(row.path in titles)) {
@@ -280,6 +294,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         archived: !!session.archived,
         pending: !!item,
         report: report.join("\n"),
+        ...(deciding.has(session) ? { decide: true } : {}),
       };
     }),
   );
@@ -297,7 +312,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
       queue: view.queue.map((e) => ({ key: e.key, isNew: (view.state.seen?.[e.key] ?? 0) > since })),
       stats: `${count(STATUS.anomaly[1]) ? `session 異常 ${count(STATUS.anomaly[1])} | ` : ""}等待回應 ${count("等待回應")} | 等待授權 ${count("等待授權")} | 回覆完畢 ${count("回覆完畢")} | 執行中 ${count("執行中")} | 封存 ${sessions.filter((s) => s.archived).length} | 閒置 ${count("閒置")}`,
       sessions,
-      ...(view.decisions ? { decisions: decisionCards(view.decisions, optionsOf, home) } : {}),
+      ...(view.decisions ? { decisions: decisionCards(view.decisions, decisionOptionsOf, home) } : {}),
     },
     titles,
     firsts,
