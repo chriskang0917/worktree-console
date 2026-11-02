@@ -76,6 +76,9 @@ const QUEUE_MAX = 5
 const TOAST_MAX = 30
 const SUMMARY_MAX = 20
 const CORNER_GAP = 2
+// 待回覆 cards put the repo where the stage sits elsewhere, as wide as the longest repo on the tab up to this.
+const REPO_MAX = 14
+const REPO_MAX_NARROW = 8
 const SENT_MAX = 50
 const MISS_TOAST = 3
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
@@ -698,7 +701,7 @@ async function openPane($: EngineInterface) {
   showTab(decisions().length ? 'decisions' : 'pending')
   startRepin()
   // Asked within the press itself, so the engine seats the pane at any width; an open after an await counts as unasked.
-  const opened = $.ui.open({ id: PANE, title: PANE_TITLE, focus: true })
+  const opened = $.ui.open({ id: PANE, title: PANE_TITLE, focus: true, backgroundColor: 'transparent' })
   await loadPreferences($)
   $.ui.invalidate('ui.render')
   await opened
@@ -903,7 +906,7 @@ function recapBand($: EngineInterface, e: any) {
 function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleTheme) {
   const { Box, Text, Button } = $.ui.resolve(e)
   const list = decisions()
-  const inner = Math.max(1, cols - 3)
+  const inner = Math.max(1, cols - 4)
   const center = (t: string) => `${' '.repeat(Math.max(0, Math.floor((cols - 2 - columns(t)) / 2)))}${t}`
   if (list.length === 0) {
     return (
@@ -927,8 +930,8 @@ function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleT
     const focused = d.id === chosen
     const busy = deciding.has(d.id)
     const failed = d.failed && !busy
-    const mark = <Text color={theme.accent} bold={focused || undefined}>{focused ? `${markGlyph()} ` : '  '}</Text>
-    const rail = <Text>{'  '}</Text>
+    const mark = <Text color={theme.accent} bold={focused || undefined}>{focused ? ` ${markGlyph()} ` : '   '}</Text>
+    const rail = <Text>{'   '}</Text>
     // The chosen card names the keys that act on it.
     const approveLabel = focused ? `y ${APPROVE}` : APPROVE
     const manualLabel = focused ? `m ${MANUAL}` : MANUAL
@@ -1146,10 +1149,13 @@ export const register: Register = on => {
     // Keep the selected label intact; only unselected labels shorten below 46 columns.
     const tabLabels = tabList.map(x => `${cols < 46 && x.id !== tab ? '' : `${x.label} `}${tabCount(x.id)}`)
     const tabIndex = tabList.findIndex(x => x.id === tab)
-    const tabStart = tabList.slice(0, tabIndex).reduce((n, x, i) => n + columns(`${x.key}: ${tabLabels[i]}`) + 2, 0)
-    const tabWidth = Math.min(Math.max(0, cols - tabStart), columns(`${tabList[tabIndex]!.key}: ${tabLabels[tabIndex]}`))
+    const tabWidths = tabList.map((x, i) => columns(`${x.key}: ${tabLabels[i]}`))
+    // space-between spreads the spare columns evenly; the layout rounds each tab's start to a whole column.
+    const tabSpare = Math.max(0, cols - tabWidths.reduce((a, b) => a + b, 0)) / Math.max(1, tabList.length - 1)
+    const tabStart = Math.min(cols, Math.round(tabWidths.slice(0, tabIndex).reduce((a, b) => a + b, 0) + tabIndex * tabSpare))
+    const tabWidth = Math.min(Math.max(0, cols - tabStart), tabWidths[tabIndex]!)
     const tabs = (
-      <Box key="tabs" flexDirection="row" columnGap={2} height={1} flexShrink={0} overflow="hidden">
+      <Box key="tabs" flexDirection="row" justifyContent="space-between" height={1} flexShrink={0} overflow="hidden">
         {tabList.map((x, i) => (
           <Button
             key={`tab:${x.id}`}
@@ -1176,20 +1182,23 @@ export const register: Register = on => {
     }
     const hidden = tab === 'hidden'
     const press = (r: Session) => (hidden ? unarchiveCard($, r) : toggleBrief($, r))
-    // The header row past the mark column and the right margin; the question row also leaves the number column blank.
-    const head = Math.max(1, cols - 3)
+    // The header row past the blank column, the mark and the right margin; the question row also leaves the number column blank.
+    const head = Math.max(1, cols - 4)
+    const onPending = tab === 'pending'
+    const repoWidth = onPending ? Math.min(cols >= 46 ? REPO_MAX : REPO_MAX_NARROW, Math.max(1, ...rows.map(r => columns(r.repo)))) : 0
     const card = (r: Session, i: number) => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
       const status = statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
       const cell = r.decide ? { ...status, label: DECIDE_TAB.label } : status
-      const mark = <Text color={theme.accent} bold={isSel || undefined}>{isSel ? `${markGlyph()} ` : '  '}</Text>
-      const rail = <Text>{'  '}</Text>
-      const stageWord = cols >= 46 && r.stage !== '—' && r.stage !== '未開工' ? r.stage : ''
+      const mark = <Text color={theme.accent} bold={isSel || undefined}>{isSel ? ` ${markGlyph()} ` : '   '}</Text>
+      const rail = <Text>{'   '}</Text>
+      const stageWord = !onPending && cols >= 46 && r.stage !== '—' && r.stage !== '未開工' ? r.stage : ''
       // The advisor's suggestion is ready: ✓ 建議, only the ✓ below 46 columns.
       const ready = r.advice?.state === 'ready'
       const hintWidth = ready ? (cols >= 46 ? 7 : 2) : 0
-      const tag = truncateColumns(r.tag, Math.max(1, head - 13 - (hidden ? 10 : 0) - (stageWord ? columns(stageWord) + 1 : 0) - hintWidth))
+      const lead = 13 + (onPending ? repoWidth + 1 : 0)
+      const tag = truncateColumns(r.tag, Math.max(1, head - lead - (hidden ? 10 : 0) - (stageWord ? columns(stageWord) + 1 : 0) - hintWidth))
       const name = <Text color={isSel ? theme.accent : theme.fg} bold>{tag}</Text>
       const summary = truncateColumns(r.summary, cols <= 36 ? 15 : SUMMARY_MAX)
       const question = truncateColumns(r.question.replace(/\s+/g, ' ').trim(), Math.max(1, head - 3 - (summary ? columns(summary) + CORNER_GAP : 0)))
@@ -1205,10 +1214,11 @@ export const register: Register = on => {
                 {hidden && <Text>  </Text>}
                 {hidden ? <Button key={`name:${r.key}`} label="取消封存" plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} /> : <Button key={`name:${r.key}`} label={tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)}>{name}</Button>}
               </Box>
-              {(ready || stageWord) && (
+              {(ready || stageWord || onPending) && (
                 <Box key={`right:${r.key}`} flexDirection="row" flexShrink={0}>
                   {ready && <Box key={`hint:${r.key}`} flexDirection="row" flexShrink={0} marginLeft={1}><Text color={theme.accent}>✓</Text>{cols >= 46 && <Text color={theme.dim}> 建議</Text>}</Box>}
                   {stageWord && <Box key={`stage:${r.key}`} width={columns(stageWord)} flexShrink={0} marginLeft={1}><Text color={theme.dim}>{stageWord}</Text></Box>}
+                  {onPending && <Box key={`repo:${r.key}`} width={repoWidth} flexShrink={0} marginLeft={1}><Text color={theme.dim} dimColor>{truncateColumns(r.repo, repoWidth)}</Text></Box>}
                 </Box>
               )}
             </Box>
@@ -1221,7 +1231,7 @@ export const register: Register = on => {
                 <Text color={theme.dim} wrap="truncate-end">{question}</Text>
               </Box>
               <Box key={`summary:${r.key}`} flexDirection="row" flexShrink={0}>
-                <Text wrap="truncate-end">{leadNumbers(Text, summary, theme)}</Text>
+                {onPending ? <Text color={theme.dim} wrap="truncate-end">{summary}</Text> : <Text wrap="truncate-end">{leadNumbers(Text, summary, theme)}</Text>}
               </Box>
             </Box>
           </Box>

@@ -46,20 +46,23 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
         assert.match(lines[row + 1], /^[─━]+$/, "分頁只有一行，下一行必須是底線");
         assert.equal([...lines[row + 1]].length, cols, "確認面板的實際欄寬");
         const segmentStart = lines[row].indexOf(`${key}:`);
-        const segment = lines[row].slice(segmentStart).split(/  (?=[qwe]:)/)[0];
+        const segment = lines[row].slice(segmentStart).split(/ +(?=[qwe]:)/)[0].trimEnd();
         const cellWidth = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
         const start = cellWidth(lines[row].slice(0, segmentStart));
         const end = start + cellWidth(segment);
         assert.equal(lines[row + 1], `${"─".repeat(start)}${"━".repeat(end - start)}${"─".repeat(cols - end)}`, `${key} 的粗底線必須只在所選分頁下方`);
         assert.ok(expectedContent(frame), "所選分頁內容必須完成繪製");
-        if (cols === 46) {
-          assert.equal(lines[row], `q: 待回覆 ${counts[0]}  w: 全部 ${counts[1]}  e: 封存 ${counts[2]}`);
-        }
+        // space-between: the first tab at the left edge, the last ending at the right edge, the spare columns spread between them.
+        assert.ok(lines[row].startsWith("q: "), lines[row]);
+        assert.ok(lines[row].endsWith(`e: ${cols >= 46 || key === "e" ? "封存 " : ""}${counts[2]}`), lines[row]);
+        assert.equal(cellWidth(lines[row]), cols, "最後一個分頁貼齊右緣");
+        const gaps = [...lines[row].matchAll(/ +(?=[qwe]:)/g)].map(m => m[0].length);
+        assert.ok(Math.max(...gaps) - Math.min(...gaps) <= 1, `分頁間距平均：${JSON.stringify(lines[row])}`);
         if (counts[index]) {
           const prefix = ["reply", "reply", "archive"][index];
-          const header = lines.find(line => line.includes(`${prefix}0`) && /^[·✢✳✶✻✽] /.test(line));
+          const header = lines.find(line => line.includes(`${prefix}0`) && /^ [·✢✳✶✻✽] /.test(line));
           assert.ok(header, lines.join("\n"));
-          assert.match(header, new RegExp(`^[·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${prefix}0${index === 2 ? '  取消封存' : ''}(?: +(?:規劃中|實作中|已推送))?$`), "首卡標頭右側沒有覆畫的數字");
+          assert.match(header, new RegExp(`^ [·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${prefix}0${index === 2 ? '  取消封存' : ''}${index === 0 ? " +fixture" : "(?: +(?:規劃中|實作中|已推送))?"}$`), "首卡標頭右側沒有覆畫的數字");
           assert.ok(!/[╭╮╰╯║═]/.test(lines.join("\n")), "卡片不畫外框");
         } else {
           assert.ok(lines.some(line => line.includes("目前沒有符合條件的 session")), lines.join("\n"));
@@ -101,12 +104,14 @@ const fgOf = (line, text) => {
   return at < 0 ? undefined : cells.slice(at, at + [...text].length).map(c => c.fg);
 };
 
-test("真實終端：neutral 摘要開頭的數字用預設前景色、其餘灰色；字中數字不拆", { timeout: 30_000 }, async () => {
+test("真實終端：neutral 全部分頁摘要開頭的數字用預設前景色、其餘灰色；字中數字不拆；待回覆分頁整段灰色", { timeout: 30_000 }, async () => {
   const terminal = await terminalFixture({ counts: [2, 2, 0, 0], summaries: ["1 未核對", "面板 v2 改版"], columns: 151 });
   try {
     await terminal.open();
-    const frame = await terminal.waitFor(f => f.includes("未核對") && f.includes("面板 v2 改版"), "等待摘要");
-    assert.ok(frame);
+    await terminal.waitFor(f => f.includes("未核對") && f.includes("面板 v2 改版"), "等待摘要");
+    const pendingLine = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n").find(line => line.includes("未核對"));
+    assert.ok(fgOf(pendingLine, "1 未核對").every(fg => fg !== "default"), `待回覆的開頭數字也是灰色：${JSON.stringify(pendingLine)}`);
+    await terminal.press("w", frame => panel(frame).join("\n").includes("── fixture"));
     const lines = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
     const counted = lines.find(line => line.includes("未核對"));
     const [lead] = fgOf(counted, "1 未核對") ?? [];
@@ -133,14 +138,13 @@ test("真實終端：切分頁、重按同一分頁與上下移動後，選中�
     const under = text[row + 1] ?? "";
     // The underline row is only ─ and ━, one column each.
     const mark = under.indexOf("━");
-    let start = 0;
-    const tab = (text[row] ?? "").trimEnd().split(/  (?=[qwe]:)/).find(segment => {
-      const hit = mark >= start && mark < start + width(segment);
-      start += width(segment) + 2;
-      return hit;
-    })?.replace(/^[qwe]: (\S+).*$/, "$1");
-    const selected = text.find(line => /^[·✢✳✶✻✽] /.test(line) && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
-    const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[(?:[0-9;]*;)?7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: /^[·✢✳✶✻✽] /.test(text[i]), label: plain(m[1]).trim() }))).filter(run => run.label);
+    const line = (text[row] ?? "").trimEnd();
+    const tab = [...line.matchAll(/[qwe]: [^ ]+(?: \d+)?/g)].find(m => {
+      const start = width(line.slice(0, m.index));
+      return mark >= start && mark < start + width(m[0]);
+    })?.[0].replace(/^[qwe]: (\S+).*$/, "$1");
+    const selected = text.find(line => /^ [·✢✳✶✻✽] /.test(line) && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
+    const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[(?:[0-9;]*;)?7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: /^ [·✢✳✶✻✽] /.test(text[i]), label: plain(m[1]).trim() }))).filter(run => run.label);
     return { tab, selected, inverse };
   };
   const settled = (state, tab, card) => state.tab === tab && state.selected === card && state.inverse.length > 0 && state.inverse.every(run => run.framed && run.label === card);
@@ -222,8 +226,8 @@ test("真實終端：卡片按 Enter 跳出摘要浮層、蓋在下方卡片上�
     assert.ok(lines[title + 3].includes("還沒有摘要"), lines.join("\n"));
     terminal.tmux("send-keys", "-t", "fixture:0.0", "Escape");
     const closed = await terminal.waitFor(frame => !open(frame), "Esc 後浮層應收起");
-    assert.ok(panel(closed).some(line => /^ {2}1: ↩ 已回覆  reply1/.test(line)), panel(closed).join("\n"));
-    assert.ok(panel(closed).some(line => /^✻ {4}↩ 已回覆  reply0/.test(line)), panel(closed).join("\n"));
+    assert.ok(panel(closed).some(line => /^ {3}1: ↩ 已回覆  reply1 +fixture$/.test(line)), panel(closed).join("\n"));
+    assert.ok(panel(closed).some(line => /^ ✻ {4}↩ 已回覆  reply0 +fixture$/.test(line)), panel(closed).join("\n"));
   } finally {
     await terminal.close();
   }
