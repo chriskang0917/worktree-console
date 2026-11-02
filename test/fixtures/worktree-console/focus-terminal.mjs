@@ -67,7 +67,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
     if (!prompt || !/^❯\s*(?:│|$)/.test(prompt) || !text.some(line => line.includes("│q:"))) return false;
     return lines.some((line, i) => {
       const at = text[i].indexOf("│", 40);
-      if (at < 0 || !/^[·✢✳✶✻✽] /.test(text[i].slice(at + 1))) return false;
+      if (at < 0 || !/^ [·✢✳✶✻✽] /.test(text[i].slice(at + 1))) return false;
       // The bold name's focus run opens with 1;7 and carries its own colour code.
       return /\x1b\[(?:[0-9;]*;)?7m(?:\x1b\[[0-9;:]*m)*[^\x1b]*\S/.test(line);
     });
@@ -111,7 +111,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
           const start = lines[row].indexOf("q:");
           const tabs = lines[row].slice(start).trimEnd();
           const segmentStart = tabs.indexOf(`${key}:`);
-          const segment = tabs.slice(segmentStart).split(/  (?=[qwe]:)/)[0];
+          const segment = tabs.slice(segmentStart).split(/ +(?=[qwe]:)/)[0].trimEnd();
           const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
           const markerStart = width(tabs.slice(0, segmentStart));
           // Each row is cut at its own sidebar divider: wide characters left of it can shift string indexes between rows.
