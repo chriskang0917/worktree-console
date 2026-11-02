@@ -12,7 +12,6 @@ type Session = {
   tag: string
   repo: string
   status: Status
-  stage: string
   summary: string
   question: string
   options: string[]
@@ -38,7 +37,6 @@ type Decision = {
   key: string
   tag: string
   repo: string
-  stage?: string | null
   group: string
   verb: string | null
   action: string
@@ -76,9 +74,9 @@ const QUEUE_MAX = 5
 const TOAST_MAX = 30
 const SUMMARY_MAX = 20
 const CORNER_GAP = 2
-// 待回覆 cards put the repo where the stage sits elsewhere, as wide as the longest repo on the tab up to this.
-const REPO_MAX = 14
-const REPO_MAX_NARROW = 8
+// A long 代號 is cut before the repo on its header row drops below REPO_MIN; where the row cannot hold both, the 代號 keeps TAG_MIN.
+const REPO_MIN = 8
+const TAG_MIN = 4
 const SENT_MAX = 50
 const MISS_TOAST = 3
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
@@ -237,36 +235,39 @@ function wrapRuns(runs: Run[], width: number): Run[][] {
 
 type Popover = { title: Run; keys: string; lines: Run[][]; print?: () => void }
 
-// A recap popover: where the session is, then its newest recap.
 function briefPopover(s: Session, width: number, theme: ConsoleTheme): Popover {
-  const stage = s.stage !== '—' && s.stage !== '未開工' ? s.stage : ''
   const brief = s.brief ?? null
   const runs: Run[] = [
-    { text: [s.repo, stage, s.summary].filter(Boolean).join(' · '), color: theme.dim },
-    { text: '\n\n' },
     brief?.text ? { text: brief.text, color: theme.fg } : { text: brief?.pending ? BRIEF_PENDING : BRIEF_EMPTY, color: theme.dim },
     ...(brief?.text && brief.pending ? [{ text: `\n新的${BRIEF_PENDING}`, color: theme.dim }] : []),
   ]
   return { title: { text: `${s.tag} 摘要`, color: theme.accent, bold: true }, keys: 'p 印出完整回報', lines: wrapRuns(runs, width) }
 }
 
-// A 待決 popover: what is to be done, the child's whole reply, the options, the advisor's suggestion and the precedent it leaned on.
+// A 待決 popover: the whole question, then the child's whole reply, the options, the advisor's suggestion and the precedent it leaned on.
 function decisionPopover(d: Decision, width: number, theme: ConsoleTheme): Popover {
   const paint = advicePaint(theme)
   const picked = pickedOptions(d.answer)
+  const quiet = theme.muted ?? theme.dim
   const label = (text: string): Run[] => [{ text: '\n\n' }, { text, color: theme.accent, bold: true }, { text: '\n' }]
   const flat = (text: string) => text.replace(/\s+/g, ' ').trim()
+  const option = (o: string, i: number): Run[] => {
+    const bold = picked.has(i) || undefined
+    return [
+      ...(i ? [{ text: '\n' }] : []),
+      { text: `${String.fromCharCode(97 + i)}.`, color: theme.accent, bold: true },
+      { text: ` ${flat(o)}`, color: theme.fg, bold },
+      ...(bold ? [{ text: ' ✓ 建議', color: theme.accent, bold }] : []),
+    ]
+  }
   const runs: Run[] = [
-    { text: [d.tag, d.repo, d.stage].filter(Boolean).join(' · '), color: theme.dim },
-    ...(d.failed ? [{ text: '\n上次核可沒送進子 session，可以再核可一次或自己回', color: theme.error }] : []),
-    ...label('子 session 的回覆'),
-    { text: d.context || d.question, color: theme.fg },
-    ...(d.options.length ? [...label('選項'), ...d.options.flatMap((o, i): Run[] => [...(i ? [{ text: '\n' }] : []), { text: `${String.fromCharCode(97 + i)}. ${flat(o)}`, color: picked.has(i) ? theme.accent : theme.fg, bold: picked.has(i) || undefined }])] : []),
+    { text: flat(d.question), color: theme.fg, bold: true },
+    ...(d.failed ? [{ text: '\n\n上次核可沒送進子 session，可以再核可一次或自己回', color: theme.error }] : []),
+    ...(d.context ? [...label('子 session 的回覆'), { text: d.context, color: theme.fg }] : []),
+    ...(d.options.length ? [...label('選項'), ...d.options.flatMap(option)] : []),
     ...label('advisor 建議'),
     ...adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options).map(p => ({ text: p.text, color: paint[p.role].color, bold: paint[p.role].bold })),
-    ...(d.precedent
-      ? [...label('參考的前例'), { text: '題目：', color: theme.dim }, { text: flat(d.precedent.question), color: theme.fg }, { text: '\n你當時回：', color: theme.dim }, { text: flat(d.precedent.answer), color: theme.fg }]
-      : []),
+    ...(d.precedent ? [...label('參考的前例'), { text: `題目：${flat(d.precedent.question)}\n你當時回：${flat(d.precedent.answer)}`, color: quiet }] : []),
   ]
   const keys = deciding.has(d.id) ? '送出中…' : `y ${APPROVE} · m ${MANUAL}`
   return { title: { text: d.action, color: theme.waiting, bold: true }, keys, lines: wrapRuns(runs, width) }
@@ -340,6 +341,13 @@ const leadNumbers = (Text: (props: any) => any, text: string, theme: ConsoleThem
   const lead = /^\d+(?=\s)/.exec(text)?.[0]
   // The quiet part is its own run: a parent colour would leak into neutral's colourless fg.
   return lead ? [<Text key="lead" color={theme.fg}>{lead}</Text>, <Text key="rest" color={theme.dim}>{text.slice(lead.length)}</Text>] : <Text color={theme.dim}>{text}</Text>
+}
+
+// The text centred across `cols` between runs of ─, at least 2 on each side with a space next to the text, the text cut first.
+function ruledLine(text: string, cols: number) {
+  const shown = truncateColumns(text, Math.max(1, cols - 6))
+  const left = Math.max(2, Math.floor((cols - columns(shown) - 2) / 2))
+  return `${'─'.repeat(left)} ${shown} ${'─'.repeat(Math.max(2, cols - columns(shown) - 2 - left))}`
 }
 
 let focus: Focus = { active: false }
@@ -472,9 +480,9 @@ function numberOf(t: Tab, i: number): string | undefined {
 
 const ruled = (rows: Session[], i: number, first: number) => tab !== 'pending' && (i === first || rows[i]!.repo !== rows[i - 1]!.repo)
 
-// A card's rows as drawn: the blank row, header and question rows; plus its repo rule outside 待回覆.
+// A card's rows as drawn: the blank row, header and question rows; plus its repo rule and the blank row above it outside 待回覆.
 function blockRows(rows: Session[], i: number, first: number): number {
-  return CARD_ROWS + (ruled(rows, i, first) ? 1 : 0)
+  return CARD_ROWS + (ruled(rows, i, first) ? 2 : 0)
 }
 
 // The pane row a card's header sits on, counted from the pane's top.
@@ -489,8 +497,8 @@ function decisionRow(id: string): number {
   let row = CHROME + 1
   for (const g of decisionOrder()) {
     row += 2
-    for (const [k, d] of g.items.entries()) {
-      if (k > 0) row += 1
+    for (const d of g.items) {
+      row += 1
       if (d.id === id) return row
       row += DECIDE_ROWS
     }
@@ -926,7 +934,7 @@ function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleT
   const headRoom = cols - 2 - allWidth - 1
   const groups = decisionOrder()
   const chosen = chosenDecision()?.id ?? null
-  const card = (d: Decision, k: number) => {
+  const card = (d: Decision) => {
     const focused = d.id === chosen
     const busy = deciding.has(d.id)
     const failed = d.failed && !busy
@@ -939,7 +947,7 @@ function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleT
     const advice = fitParts(adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options), inner)
     const question = truncateColumns(`${d.tag !== d.group ? `${d.tag} · ` : ''}${d.question}`.replace(/\s+/g, ' ').trim(), inner)
     return (
-      <Box key={`decision:${d.id}`} flexDirection="column" flexShrink={0} marginTop={k > 0 ? 1 : 0}>
+      <Box key={`decision:${d.id}`} flexDirection="column" flexShrink={0} marginTop={1}>
         <Box key={`decision-head:${d.id}`} flexDirection="row" height={1} flexShrink={0}>
           {mark}
           <Box key={`decision-top:${d.id}`} flexDirection="row" width={inner} flexShrink={0} justifyContent="space-between">
@@ -1185,7 +1193,6 @@ export const register: Register = on => {
     // The header row past the blank column, the mark and the right margin; the question row also leaves the number column blank.
     const head = Math.max(1, cols - 4)
     const onPending = tab === 'pending'
-    const repoWidth = onPending ? Math.min(cols >= 46 ? REPO_MAX : REPO_MAX_NARROW, Math.max(1, ...rows.map(r => columns(r.repo)))) : 0
     const card = (r: Session, i: number) => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
@@ -1193,17 +1200,20 @@ export const register: Register = on => {
       const cell = r.decide ? { ...status, label: DECIDE_TAB.label } : status
       const mark = <Text color={theme.accent} bold={isSel || undefined}>{isSel ? ` ${markGlyph()} ` : '   '}</Text>
       const rail = <Text>{'   '}</Text>
-      const stageWord = !onPending && cols >= 46 && r.stage !== '—' && r.stage !== '未開工' ? r.stage : ''
       // The advisor's suggestion is ready: ✓ 建議, only the ✓ below 46 columns.
       const ready = r.advice?.state === 'ready'
       const hintWidth = ready ? (cols >= 46 ? 7 : 2) : 0
-      const lead = 13 + (onPending ? repoWidth + 1 : 0)
-      const tag = truncateColumns(r.tag, Math.max(1, head - lead - (hidden ? 10 : 0) - (stageWord ? columns(stageWord) + 1 : 0) - hintWidth))
+      // The number, status and its gap left of the 代號, plus 取消封存 and its gap after it on 封存.
+      const lead = 13 + (hidden ? 10 : 0)
+      const room = head - lead - CORNER_GAP - hintWidth
+      const tag = truncateColumns(r.tag, Math.max(1, room - REPO_MIN, Math.min(TAG_MIN, room - 1)))
+      const repoWidth = Math.max(0, room - columns(tag))
+      const repo = truncateColumns(r.repo, repoWidth)
       const name = <Text color={isSel ? theme.accent : theme.fg} bold>{tag}</Text>
       const summary = truncateColumns(r.summary, cols <= 36 ? 15 : SUMMARY_MAX)
       const question = truncateColumns(r.question.replace(/\s+/g, ' ').trim(), Math.max(1, head - 3 - (summary ? columns(summary) + CORNER_GAP : 0)))
       return (
-        <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} marginTop={ruled(rows, i, top) ? 0 : 1}>
+        <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} marginTop={1}>
           <Box key={`card-head:${r.key}`} flexDirection="row" height={1} flexShrink={0}>
             {mark}
             <Box key={`card-top:${r.key}`} flexDirection="row" width={head} flexShrink={0} justifyContent="space-between">
@@ -1214,11 +1224,10 @@ export const register: Register = on => {
                 {hidden && <Text>  </Text>}
                 {hidden ? <Button key={`name:${r.key}`} label="取消封存" plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} /> : <Button key={`name:${r.key}`} label={tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)}>{name}</Button>}
               </Box>
-              {(ready || stageWord || onPending) && (
+              {(ready || repoWidth > 0) && (
                 <Box key={`right:${r.key}`} flexDirection="row" flexShrink={0}>
-                  {ready && <Box key={`hint:${r.key}`} flexDirection="row" flexShrink={0} marginLeft={1}><Text color={theme.accent}>✓</Text>{cols >= 46 && <Text color={theme.dim}> 建議</Text>}</Box>}
-                  {stageWord && <Box key={`stage:${r.key}`} width={columns(stageWord)} flexShrink={0} marginLeft={1}><Text color={theme.dim}>{stageWord}</Text></Box>}
-                  {onPending && <Box key={`repo:${r.key}`} width={repoWidth} flexShrink={0} marginLeft={1}><Text color={theme.dim} dimColor>{truncateColumns(r.repo, repoWidth)}</Text></Box>}
+                  {ready && <Box key={`hint:${r.key}`} flexDirection="row" width={hintWidth} flexShrink={0}><Text color={theme.accent}>✓</Text>{cols >= 46 && <Text color={theme.dim}> 建議</Text>}</Box>}
+                  {repoWidth > 0 && <Box key={`card-repo:${r.key}`} width={repoWidth} flexShrink={0}><Text color={theme.dim} dimColor>{`${' '.repeat(repoWidth - columns(repo))}${repo}`}</Text></Box>}
                 </Box>
               )}
             </Box>
@@ -1284,8 +1293,8 @@ export const register: Register = on => {
           {offscreen('below', rows.slice(end), end)}
         </Box>
         {top >= lastTop(rows) && (
-          <Box key="footer" flexShrink={0} marginTop={1} paddingLeft={1}>
-            <Text color={theme.dim}>{batchOn() ? FOOTER.replace('qwe', 'qwer') : FOOTER}</Text>
+          <Box key="footer" flexShrink={0} marginTop={1}>
+            <Text color={theme.dim}>{ruledLine(batchOn() ? FOOTER.replace('qwe', 'qwer') : FOOTER, cols)}</Text>
           </Box>
         )}
         {briefOver}

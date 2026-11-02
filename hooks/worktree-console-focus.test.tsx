@@ -603,7 +603,7 @@ test('pane tabs: only 待回覆 q, 全部 w, 封存 e with counts; the open tab 
   ])
   expect((await ui.findAll({ type: 'Button' })).filter((b: any) => b.props.hotkey === 'r')).toEqual([])
   expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
-  expect((await texts(ui)).some((t: string) => t.startsWith('──'))).toBe(false)
+  expect((await ui.findAll({ type: 'Box' })).some((b: any) => b.key?.startsWith('repo:'))).toBe(false)
   await ui.press({ key: 'tab:all' })
   expect((await ui.find({ key: 'tab:all' }))?.props.dimColor).toBe(false)
   expect((await ui.find({ key: 'tab:pending' }))?.props.dimColor).toBe(true)
@@ -632,7 +632,7 @@ test('全部 lists every session not archived, idle ones included with their 閒
   await ui.unmount()
 })
 
-test('pane groups by repo outside 待回覆: `── <repo> ── 共 N 個` counts every session of that repo; the rule takes the blank row above its first card, the next cards in the repo keep theirs', async ($, on) => {
+test('pane groups by repo outside 待回覆: `── <repo> ── 共 N 個` counts every session of that repo; a blank row sits above the rule and another between the rule and its first card, as above every card', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   await openPane($)
@@ -648,12 +648,12 @@ test('pane groups by repo outside 待回覆: `── <repo> ── 共 N 個` co
   expect(await cardTags(ui)).toContain('chart')
   expect((await ui.find({ key: 'repo:agent-skills' }))?.props.marginTop).toBe(1)
   expect((await ui.find({ key: 'repo:proj-v2-frontend' }))?.props.marginTop).toBe(1)
-  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.marginTop).toBe(0)
+  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.props.marginTop).toBe(1)
   expect((await ui.find({ key: `card:${keyOf('logging')}` }))?.props.marginTop).toBe(1)
   await ui.unmount()
 })
 
-test('cards: number (none on the question on screen) and nickname button, status icon and word, stage on the right; the question in grey, no options; summary, never 建議; no frame and no rail: the status colour sits on the status icon, the chosen card leads with an accent ✻ mark and its name in the accent', async ($, on) => {
+test('cards: number (none on the question on screen) and nickname button, status icon and word, the repo on the right and no stage on any tab; the question in grey, no options; summary, never 建議; no frame and no rail: the status colour sits on the status icon, the chosen card leads with an accent ✻ mark and its name in the accent', async ($, on) => {
   const w = world(focusOf('focusui', ['perm', 'logging', 'PROJ-6668', 'upgrade#2']))
   await start($, on, w)
   await openPane($)
@@ -692,7 +692,8 @@ test('cards: number (none on the question on screen) and nickname button, status
     const permCell = statusCell('等待授權', 0)
     const icon = findKey(await ui.drawn(), `status:${keyOf('perm')}`).children[0]
     expect([textOf(icon), icon.props.color]).toEqual([permCell.glyph, THEMES.neutral[permCell.glyphColor]])
-    expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.text).toContain('規劃中')
+    expect((await ui.find({ key: `card-head:${keyOf('focusui')}` }))?.text).toContain('agent-skills')
+    expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.text).not.toContain('規劃中')
     await ui.press({ key: 'tab:pending' })
     await ui.unmount()
   }
@@ -723,8 +724,7 @@ test('cards on 待回覆, 全部 (idle ones too) and 封存: no frame, a header 
       expect(box.props.borderStyle).toBeUndefined()
       expect(box.children.length).toBe(2)
       for (const child of box.children) expect([child.props.height, child.props.marginTop ?? 0]).toEqual([1, 0])
-      // Outside 待回覆 the repo rule takes the blank row above a repo's first card.
-      expect(box.props.marginTop).toBe(tag === 'h1' ? 0 : 1)
+      expect(box.props.marginTop).toBe(1)
       const q = findKey(box, `question:${keyOf(tag)}`).children[1]
       expect(q.type).toBe('Text')
       expect(q.props).toMatchObject({ color: THEMES.neutral.dim, wrap: 'truncate-end' })
@@ -744,89 +744,153 @@ test('cards on 待回覆, 全部 (idle ones too) and 封存: no frame, a header 
   }
 })
 
+// Columns a header-row node takes: a sized box its width, a button its label, text its cells, a row the sum of its children.
+const widthOf = (node: any): number => {
+  if (typeof node === 'string') return cells(node)
+  if (node?.props?.width !== undefined) return node.props.width
+  if (node?.type === 'Button' && !(node.children ?? []).length) return cells(`${node.props?.label ?? ''}`)
+  return (node?.children ?? []).reduce((n: number, c: any) => n + widthOf(c), 0)
+}
+// The header row as a terminal lays it out: the mark, the left part, the space-between gap, the right part.
+const headerOf = async (ui: any, key: string) => {
+  const root = await ui.drawn()
+  const top = findKey(root, `card-top:${key}`)
+  const [left, right] = top.children
+  const repo = right ? findKey(right, `card-repo:${key}`) : undefined
+  return { top, left, right, repo, gap: top.props.width - widthOf(left) - (right ? widthOf(right) : 0), repoText: repo ? textOf(repo) : '' }
+}
+
 for (const name of ['neutral', 'dracula'] as const) {
-  test(`待回覆卡片 repo（${name}）：左邊照舊是狀態圖示與狀態字（原狀態色），右邊不顯示階段，原位置是 repo；repo 用主題淡色加 dimColor，比題目更淡`, async ($, on) => {
-    const w = world(focusOf('focusui', ['perm', 'logging', 'PROJ-6668', 'upgrade#2']))
+  test(`卡片 repo（${name}）：待回覆、全部、封存的卡片第一行右端都有 repo，主題淡色加 dimColor，文字右端貼齊標題列右端、短 repo 左邊補空白；不顯示階段；待決卡片不放 repo`, async ($, on) => {
+    const w = world({ ...withDecisions(), current: keyOf('focusui'), queue: ['perm', 'logging', 'PROJ-6668', 'upgrade#2'].map(t => ({ key: keyOf(t), isNew: false })), sessions: SESSIONS })
     appearanceConfig.set(w, { theme: name, motion: false })
     await start($, on, w)
     await openPane($)
     const theme = THEMES[name]
     for (const cols of [80, 46, 36]) {
       const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
-      const root = await ui.drawn()
-      for (const r of w.focus.sessions.filter((x: Card) => x.pending && x.key !== keyOf('chart'))) {
-        const cell = statusCell(r.status, 0, { primary: r.key === keyOf('focusui') })
-        const status = findKey(root, `status:${r.key}`)
-        expect(textOf(status)).toContain(`${cell.glyph} ${cell.label}`)
-        expect([status.children[0].props.color, status.children[1].props.color]).toEqual([theme[cell.glyphColor], theme[cell.color]])
-        expect(findKey(root, `stage:${r.key}`)).toBeUndefined()
-        expect(textOf(findKey(root, `card-head:${r.key}`))).not.toMatch(/實作中|規劃中|已推送/)
-        const right = findKey(root, `right:${r.key}`)
-        const repoBox = right.children.at(-1)
-        expect(repoBox.props.key).toBe(`repo:${r.key}`)
-        expect(r.repo.startsWith(textOf(repoBox).replace(/…$/, ''))).toBe(true)
-        const repo = repoBox.children[0]
-        expect([repo.type, repo.props.color, repo.props.dimColor, repo.props.bold]).toEqual(['Text', theme.dim, true, undefined])
-        const question = findKey(root, `question:${r.key}`).children[1]
-        expect([question.props.color, question.props.dimColor]).toEqual([theme.dim, undefined])
+      for (const [tabKey, pick] of [['tab:pending', (x: Card) => x.pending && x.key !== keyOf('chart')], ['tab:all', (x: Card) => !x.archived], ['tab:hidden', (x: Card) => x.archived]] as const) {
+        await ui.press({ key: tabKey })
+        const root = await ui.drawn()
+        for (const r of SESSIONS.filter(pick)) {
+          const cell = statusCell(r.status, 0, { primary: r.key === keyOf('focusui') })
+          const status = findKey(root, `status:${r.key}`)
+          expect([status.children[0].props.color, status.children[1].props.color]).toEqual([theme[cell.glyphColor], theme[cell.color]])
+          expect(textOf(findKey(root, `card:${r.key}`))).not.toMatch(/實作中|規劃中|已推送/)
+          const h = await headerOf(ui, r.key)
+          expect(h.top.props).toMatchObject({ width: cols - 4, justifyContent: 'space-between' })
+          expect(h.right.children.at(-1).props.key).toBe(`card-repo:${r.key}`)
+          expect(cells(h.repoText)).toBe(h.repo.props.width)
+          if (cells(r.repo) < h.repo.props.width) expect(h.repoText).toBe(`${' '.repeat(h.repo.props.width - cells(r.repo))}${r.repo}`)
+          expect(r.repo.startsWith(h.repoText.trimStart().replace(/…$/, ''))).toBe(true)
+          const repo = h.repo.children[0]
+          expect([repo.type, repo.props.color, repo.props.dimColor, repo.props.bold]).toEqual(['Text', theme.dim, true, undefined])
+        }
       }
+      await ui.press({ key: 'tab:decisions' })
+      const root = await ui.drawn()
+      expect(textOf(root)).not.toMatch(/實作中|規劃中|已推送/)
+      for (const d of DECISIONS) {
+        expect(textOf(findKey(root, `decision-head:${d.id}`))).not.toContain(d.repo)
+        expect(findKey(root, `card-repo:${d.key}`)).toBeUndefined()
+      }
+      await ui.press({ key: 'tab:pending' })
       await ui.unmount()
     }
-    const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
-    await ui.press({ key: 'tab:all' })
-    expect((await ui.find({ key: `stage:${keyOf('perm')}` }))?.text).toBe('實作中')
-    expect(await ui.find({ key: `repo:${keyOf('perm')}` })).toBeUndefined()
-    await ui.press({ key: 'tab:pending' })
-    await ui.unmount()
   })
 }
 
-{
-  const shortRepos = { perm: { repo: 'ab' }, focusui: { repo: 'abcde' }, logging: { repo: 'abc' }, 'PROJ-6668': { repo: 'abcd' }, 'upgrade#2': { repo: 'a' } }
-  const longRepos = { perm: { repo: 'proj-agents-configuration' }, focusui: { repo: 'agent-skills' }, logging: { repo: '中控台' } }
-  // Columns drawn left of the 代號 button: a sized box takes its width, text its cells.
-  const offset = (node: any, key: string): { at: number; found: boolean } => {
-    if (typeof node === 'string') return { at: cells(node), found: false }
-    if (node?.props?.key === key) return { at: 0, found: true }
-    let at = 0
-    for (const child of node?.children ?? []) {
-      const part = offset(child, key)
-      if (part.found) return { at: at + part.at, found: true }
-      at += part.at
+test('卡片 repo 寬度＝標題列寬 − 代號前面各欄 − 代號 − 2 格間距 − ✓ 建議；面板越寬 repo 顯示越長，不按這一頁最長的 repo 留寬，也沒有 14／8 格上限', async ($, on) => {
+  const repos = { perm: { repo: 'proj-agents-configuration' }, focusui: { repo: 'ab' }, logging: { repo: 'sara-v2-frontend', advice: { state: 'ready', text: '', answer: 'a', reason: '' } }, 'PROJ-6668': { repo: 'sara-v2-frontend' }, 'upgrade#2': { repo: '中控台中控台中控台中控台' } }
+  const w = world(withRepos(repos))
+  appearanceConfig.set(w, { motion: false })
+  await start($, on, w)
+  await openPane($)
+  const shown = w.focus.sessions.filter((x: Card) => x.pending && x.key !== keyOf('chart'))
+  const seen: Record<string, number[]> = {}
+  for (const cols of [36, 40, 46, 60, 80, 120]) {
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    for (const r of shown) {
+      const h = await headerOf(ui, r.key)
+      const tag = (await ui.find({ key: `name:${r.key}` }))!.props.label as string
+      const hint = (r as any).advice ? (cols >= 46 ? 7 : 2) : 0
+      expect(h.repo.props.width).toBe(cols - 4 - 13 - cells(tag) - 2 - hint)
+      expect(h.gap).toBe(2)
+      ;(seen[r.tag] ??= []).push(h.repo.props.width)
+      const text = h.repoText.trimStart()
+      if (cells(r.repo) <= h.repo.props.width) expect(text).toBe(r.repo)
+      else expect([text.endsWith('…'), r.repo.startsWith(text.slice(0, -1)), cells(text) <= h.repo.props.width]).toEqual([true, true, true])
     }
-    return { at: node?.props?.width ?? at, found: false }
+    // 'ab' and the 25-cell repo sit behind 代號 of one width, so they get one width: the tab's longest repo sets nothing.
+    expect((await headerOf(ui, keyOf('perm'))).repo.props.width).toBe((await headerOf(ui, keyOf('focusui'))).repo.props.width + cells('focusui') - cells('perm'))
+    await ui.unmount()
   }
-  const tagColumn = async (ui: any, r: Card, _cols: number) => offset(findKey(await ui.drawn(), `card-head:${r.key}`), `name:${r.key}`).at
-  for (const [repos, cols, width] of [[shortRepos, 80, 5], [shortRepos, 36, 5], [longRepos, 80, 14], [longRepos, 46, 14], [longRepos, 45, 8], [longRepos, 36, 8]] as const) {
-    test(`待回覆卡片 repo 欄寬（${repos === shortRepos ? '短' : '長'} repo、${cols} 欄）：取這一頁最長的 repo，46 欄以上最多 14 欄、以下最多 8 欄，超過以 … 截；同一頁每張卡的 repo 與代號各自從同一欄開始`, async ($, on) => {
-    const w = world(withRepos(repos))
+  for (const list of Object.values(seen)) for (let i = 1; i < list.length; i++) expect(list[i]!).toBeGreaterThan(list[i - 1]!)
+  expect(seen['perm']!.at(-1)).toBeGreaterThan(14)
+})
+
+test('卡片 repo：46 欄以上、代號 9 格（PROJ-6668）、沒有 ✓ 建議時 sara-v2-frontend（16 格）完整顯示；36 欄時 repo 至少 8 格', async ($, on) => {
+  const w = world(withRepos({ 'PROJ-6668': { repo: 'sara-v2-frontend' } }))
+  appearanceConfig.set(w, { motion: false })
+  await start($, on, w)
+  await openPane($)
+  for (const cols of [46, 50, 70]) {
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    expect((await ui.find({ key: `name:${keyOf('PROJ-6668')}` }))!.props.label).toBe('PROJ-6668')
+    const h = await headerOf(ui, keyOf('PROJ-6668'))
+    expect(h.repoText.trimStart()).toBe('sara-v2-frontend')
+    expect(h.repoText).not.toContain('…')
+    await ui.unmount()
+  }
+  const ui = await $.ui.mount({ ...pane(36), surface: 'terminal' })
+  const h = await headerOf(ui, keyOf('PROJ-6668'))
+  expect(h.repo.props.width).toBeGreaterThanOrEqual(8)
+  expect(h.repoText.trimStart()).toBe('sara-v2…')
+  await ui.unmount()
+})
+
+for (const tabKey of ['tab:pending', 'tab:all', 'tab:hidden'] as const) {
+  test(`卡片 repo（${tabKey.slice(4)}）：代號太長時 repo 仍留 8 格、代號以 … 截短，代號與 repo 之間固定 2 格；標題列永遠一行、不超出面板`, async ($, on) => {
+    const huge = 'x'.repeat(60)
+    const hidden = tabKey === 'tab:hidden'
+    const sessions = [
+      card(huge, { repo: 'proj-agents-configuration', archived: hidden, pending: !hidden, advice: { state: 'ready', text: '', answer: 'a', reason: '' } } as any),
+      card('PROJ-6668-very-long-name', { repo: 'sara-v2-frontend', archived: hidden, pending: !hidden }),
+    ]
+    const w = world({ ...focusOf(hidden ? 'band' : huge, hidden ? [] : ['PROJ-6668-very-long-name']), sessions: [...sessions, ...(hidden ? [card('band')] : [])] })
     appearanceConfig.set(w, { motion: false })
     await start($, on, w)
     await openPane($)
-    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
-    const shown = w.focus.sessions.filter((x: Card) => x.pending && x.key !== keyOf('chart'))
-    const starts = new Set<number>()
-    for (const r of shown) {
-      const cell = await ui.find({ key: `repo:${r.key}` })
-      expect(cell?.props.width).toBe(width)
-      // Every repo box is the last thing on its header row, which spreads to the row's end: the repos start in one column.
-      const right = findKey(await ui.drawn(), `right:${r.key}`)
-      expect(right.children.at(-1).props.key).toBe(`repo:${r.key}`)
-      expect(findKey(await ui.drawn(), `card-top:${r.key}`).props).toMatchObject({ width: cols - 4, justifyContent: 'space-between' })
-      const text = textOf(findKey(await ui.drawn(), `repo:${r.key}`))
-      if (cells(r.repo) <= width) expect(text).toBe(r.repo)
-      else {
-        expect(text.endsWith('…')).toBe(true)
-        expect(cells(text)).toBeLessThanOrEqual(width)
-        expect(r.repo.startsWith(text.slice(0, -1))).toBe(true)
+    for (const cols of [36, 46, 60]) {
+      const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+      await ui.press({ key: tabKey })
+      for (const r of sessions) {
+        const h = await headerOf(ui, r.key)
+        expect(findKey(await ui.drawn(), `card-head:${r.key}`).props.height).toBe(1)
+        const tagText = hidden ? textOf(h.left.children[2]) : (await ui.find({ key: `name:${r.key}` }))!.props.label as string
+        // 取消封存 can leave 封存 no room for 8 cells of repo and 4 of 代號: the 代號 keeps 4, the repo still shows in the rest.
+        const hint = (r as any).advice ? (cols >= 46 ? 7 : 2) : 0
+        const room = cols - 4 - 23 - 2 - hint
+        expect(h.gap).toBe(2)
+        expect(h.repo).toBeDefined()
+        if (hidden && room - 8 < 4) {
+          expect(cells(tagText)).toBe(4)
+          expect(h.repo.props.width).toBe(room - 4)
+          expect(r.repo.startsWith(h.repoText.trimStart().replace(/…$/, ''))).toBe(true)
+          continue
+        }
+        expect(widthOf(h.left) + 2 + widthOf(h.right)).toBe(cols - 4)
+        if (r.tag === huge || cols < 60) {
+          expect(h.repo.props.width).toBe(8)
+          expect(tagText.endsWith('…')).toBe(true)
+          expect(r.tag.startsWith(tagText.slice(0, -1))).toBe(true)
+        }
+        expect(cells(h.repoText)).toBe(h.repo.props.width)
+        expect(r.repo.startsWith(h.repoText.trimStart().replace(/…$/, ''))).toBe(true)
       }
-      starts.add(await tagColumn(ui, r, cols))
+      await ui.unmount()
     }
-    // The blank column, the mark, the number column, the status and 2 cells.
-    expect([...starts]).toEqual([1 + 2 + 3 + 8 + 2])
-    await ui.unmount()
-    })
-  }
+  })
 }
 
 test('待回覆卡片深淺：文字中只有代號是前景色粗體（選中時強調色粗體），狀態照原狀態色；repo、題目、右側標題都是淡色，右側標題開頭的數字也淡；不顯示階段；✓ 建議照舊強調色', async ($, on) => {
@@ -1263,16 +1327,27 @@ test('卡片寬度: a ticketless worktree (backend…) keeps 代號, status and 
   }
 })
 
-test('cards on 全部 and 封存 never show the repo or 建議: the repo rule above them names it', async ($, on) => {
+test('cards on 全部 and 封存 show their repo on the header row and never the stage (規劃中, 實作中, 已推送) or 建議：, at any width', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   await openPane($)
-  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
-  await ui.press({ key: 'tab:all' })
-  for (const tag of ['focusui', 'PROJ-6668', 'tune', 'perm', 'chart']) expect((await ui.find({ key: `card:${keyOf(tag)}` }))?.text).not.toMatch(/agent-skills|proj-|hours-dashboard|建議：/)
-  await ui.press({ key: 'tab:hidden' })
-  expect((await ui.find({ key: `card:${keyOf('PROJ-6650')}` }))?.text).not.toMatch(/proj-v2-frontend|建議：/)
-  await ui.unmount()
+  for (const cols of [36, 46, 70, 120]) {
+    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+    await ui.press({ key: 'tab:all' })
+    for (const tag of ['focusui', 'PROJ-6668', 'tune', 'perm', 'chart']) {
+      const r = SESSIONS.find(s => s.tag === tag)!
+      expect((await ui.find({ key: `card:${keyOf(tag)}` }))?.text).not.toMatch(/規劃中|實作中|已推送|建議：/)
+      expect((await ui.find({ key: `stage:${keyOf(tag)}` }))).toBeUndefined()
+      expect(r.repo.startsWith((await ui.find({ key: `card-repo:${keyOf(tag)}` }))!.text.trimStart().replace(/…$/, ''))).toBe(true)
+    }
+    await ui.press({ key: 'tab:hidden' })
+    expect((await ui.find({ key: `card:${keyOf('PROJ-6650')}` }))?.text).not.toMatch(/規劃中|實作中|已推送|建議：/)
+    // 取消封存 takes 10 cells: below 46 columns the row cannot hold 8 cells of repo and 4 of 代號, so the 代號 keeps 4 and the repo the rest.
+    expect((await ui.find({ key: `card-repo:${keyOf('PROJ-6650')}` }))?.text.trimStart()).toMatch(cols >= 46 ? /^proj-v2/ : /^pr…$/)
+    if (cols < 46) expect((await ui.find({ key: `card-head:${keyOf('PROJ-6650')}` }))?.text).toContain('PRO…')
+    await ui.press({ key: 'tab:pending' })
+    await ui.unmount()
+  }
 })
 
 test('band 8 with text in the prompt: the text goes on as typed and nothing is deferred', async ($, on) => {
@@ -1327,10 +1402,49 @@ function arrows($: any, ui: any, w: World) {
     at = (await buttons()).indexOf(w.focused.at(-1)!)
   }
 }
+// The keys line's text, without the ─ runs around it.
 const footerLines = async (ui: any) => {
   const root = await ui.drawn()
   const footer = root.children.find((c: any) => c.props.key === 'footer')
-  return footer ? footer.children.map((t: any) => t.children.join('')) : null
+  return footer ? footer.children.map((t: any) => t.children.join('').replace(/^─+ (.*) ─+$/, '$1')) : null
+}
+
+for (const tabKey of ['tab:pending', 'tab:all', 'tab:hidden'] as const) for (const batch of [false, true]) {
+  test(`按鍵說明（${tabKey.slice(4)}${batch ? '，待決打開' : ''}）：補滿整行、文字置中，前後用 ─ 夾住、兩邊至少各 2 個；太窄時先截說明文字；待決底下的說明不變`, async ($, on) => {
+    {
+      const w = world(batch ? withDecisions() : pending())
+      appearanceConfig.set(w, { motion: false })
+      await start($, on, w)
+      await openPane($)
+      const keys = batch ? 'qwer 切分頁 · 1-9,0/↑↓ 選卡片' : 'qwe 切分頁 · 1-9,0/↑↓ 選卡片'
+      for (const cols of [20, 30, 36, 46, 70, 81]) {
+        const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+        await ui.press({ key: tabKey })
+        const footer = (await ui.drawn()).children.find((c: any) => c.props.key === 'footer')
+        expect(footer.props.paddingLeft).toBeUndefined()
+        const line = textOf(footer)
+        expect(cells(line)).toBe(cols)
+        const m = /^(─+) (.+) (─+)$/.exec(line)!
+        expect(m).not.toBeNull()
+        const [, left, text, right] = m
+        expect(left!.length).toBeGreaterThanOrEqual(2)
+        expect(right!.length).toBeGreaterThanOrEqual(2)
+        expect(Math.abs(left!.length - right!.length)).toBeLessThanOrEqual(1)
+        if (cells(keys) <= cols - 6) expect(text).toBe(keys)
+        else expect([text!.endsWith('…'), keys.startsWith(text!.slice(0, -1)), cells(text!) <= cols - 6, cells(text!) >= cols - 7]).toEqual([true, true, true, true])
+        expect(paintOf(await ui.drawn(), line)?.color).toBe(THEMES.neutral.dim)
+        await ui.unmount()
+      }
+      if (batch) {
+        const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
+        await ui.press({ key: 'tab:decisions' })
+        expect((await ui.find({ key: 'decide-footer' }))?.text).toBe('Enter 詳情 · y 核可 · m 自己回 · a 全部核可 · qwer 切分頁')
+        expect((await ui.find({ key: 'decide-footer' }))?.text).not.toContain('─')
+        expect((await ui.find({ key: 'decide-footer' }))?.props.paddingLeft).toBe(1)
+        await ui.unmount()
+      }
+    }
+  })
 }
 
 test('待回覆 numbers: the question on screen has none; the queue is 1, 2, … in order, the first 5 the same session as the band, and the same number picks the same session in the pane and on the band', async ($, on) => {
@@ -1598,7 +1712,38 @@ test('↑↓ onto a card out of view scrolls the pane until that card shows whol
   await ui.unmount()
 })
 
-test('refined：46 欄以上階段是標頭右側灰色小標，更窄不畫（留給摘要浮層）；未開工與無階段不顯示', async ($, on) => {
+test('全部的 repo 分組線與它下面第一張卡之間空一行，捲動照新的列數算：分組線前空一行、線一行、卡上方空一行、卡兩行；↑↓ 選到的卡照舊完整露出，捲到底時按鍵說明也露出', async ($, on) => {
+  const list = [card('a1', { repo: 'r1' }), card('a2', { repo: 'r1', pending: false }), card('b1', { repo: 'r2', pending: false }), card('c1', { repo: 'r3', pending: false }), card('c2', { repo: 'r3', pending: false })]
+  const w = world({ ...focusOf('a1', []), sessions: list })
+  appearanceConfig.set(w, { motion: false })
+  await start($, on, w)
+  await openPane($)
+  // 13 rows: the tab row and its underline leave 11 for the cards; a card under a rule takes 5, any other 3.
+  const ui = await $.ui.mount({ ...pane(70, 13), surface: 'terminal' })
+  await ui.press({ key: 'tab:all' })
+  const arrow = arrows($, ui, w)
+  const used = async () => {
+    const cards = (await ui.drawn()).children.find((c: any) => c.props.key === 'cards')
+    return cards.children.filter((c: any) => typeof c === 'object' && (c.props.key?.startsWith('card:') || c.props.key?.startsWith('repo:'))).reduce((n: number, c: any) => n + (c.props.marginTop ?? 0) + (c.props.key.startsWith('card:') ? 2 : 1), 0)
+  }
+  expect(await drawnTags(ui)).toEqual(['a1', 'a2'])
+  expect(await used()).toBe(8)
+  for (const [tag, shown, rows] of [['a2', ['a1', 'a2'], 8], ['b1', ['a2', 'b1'], 10], ['c1', ['b1', 'c1'], 10], ['c2', ['c1', 'c2'], 8]] as const) {
+    await arrow(1)
+    expect(await chosenTag(ui)).toBe(tag)
+    expect(await drawnTags(ui)).toEqual(shown)
+    expect(await used()).toBe(rows)
+    expect(await used()).toBeLessThanOrEqual(11)
+  }
+  expect(await footerLines(ui)).toEqual([FOOTER_TEXT])
+  for (const tag of ['a2', 'b1', 'c1']) {
+    const box = await ui.find({ key: `card:${keyOf(tag)}` })
+    if (box) expect(box.props.marginTop).toBe(1)
+  }
+  await ui.unmount()
+})
+
+test('階段字（規劃中、實作中、已推送、未開工）在待回覆、全部、封存的卡片上都不畫，任何寬度都一樣；全部的卡片第一行改放 repo', async ($, on) => {
   const name = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
   const cards = [card('短名', { repo: 'claude-personal' }), card(name), card('無進度', { stage: '—' }), card('沒開工', { stage: '未開工' })]
   const w = world({ ...focusOf('短名', [name, '無進度', '沒開工']), sessions: cards })
@@ -1610,21 +1755,13 @@ test('refined：46 欄以上階段是標頭右側灰色小標，更窄不畫（�
     await ui.press({ key: 'tab:pending' })
     for (const c of cards) expect(await ui.find({ key: `stage:${c.key}` })).toBeUndefined()
     expect((await ui.find({ key: `card:${cards[0]!.key}` }))!.text).not.toContain('實作中')
-    // 待回覆 cards never carry the stage; 全部 keeps it.
     await ui.press({ key: 'tab:all' })
-    const header = cols >= 46
-    const stage = await ui.find({ key: `stage:${cards[0]!.key}` })
-    expect(stage?.text).toBe(header ? '實作中' : undefined)
-    if (header) expect((await ui.find({ type: 'Text', text: '實作中' }))?.props.color).toBe('gray')
-    expect(await ui.find({ key: `stage:${cards[2]!.key}` })).toBeUndefined()
-    expect(await ui.find({ key: `stage:${cards[3]!.key}` })).toBeUndefined()
-    expect((await ui.find({ key: `card:${cards[3]!.key}` }))!.text).not.toContain('未開工')
     for (const c of cards) {
-      expect((await ui.find({ key: `card:${c.key}` }))!.text).not.toContain('階段')
-      expect((await ui.find({ key: `summary:${c.key}` }))!.text).not.toContain('實作中')
+      expect(await ui.find({ key: `stage:${c.key}` })).toBeUndefined()
+      expect((await ui.find({ key: `card:${c.key}` }))!.text).not.toMatch(/實作中|未開工|階段/)
     }
-    if (!header) expect((await ui.find({ key: `card:${cards[0]!.key}` }))!.text).not.toContain('實作中')
-    expect((await ui.find({ key: `card:${cards[0]!.key}` }))!.text).not.toContain('claude-personal')
+    expect(await ui.find({ type: 'Text', text: '實作中' })).toBeUndefined()
+    expect((await ui.find({ key: `card-repo:${cards[0]!.key}` }))!.text.trimStart().replace(/…$/, '')).toBe(cols >= 38 ? 'claude-personal' : 'claude-personal'.slice(0, cols - 4 - 13 - 4 - 2 - 1))
     await ui.press({ key: 'tab:pending' })
     await ui.unmount()
   }
@@ -1688,7 +1825,7 @@ function paintOf(root: Painted, text: string): { color?: string; bold?: boolean 
   return found
 }
 
-test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段小標也是 dim 且不加粗', async ($, on) => {
+test('refined neutral：底列摘要與 repo、問題同為 dim 灰；全部的卡片不畫階段，repo 是 dim 灰加 dimColor、不加粗', async ($, on) => {
   const c = card('甲', { repo: 'frontend', summary: '現場報工端埋' })
   const w = world({ ...focusOf('甲', []), sessions: [c] })
   appearanceConfig.set(w, { motion: false })
@@ -1698,9 +1835,9 @@ test('refined neutral：底列摘要與 repo、問題同為 dim 灰，階段小�
   expect(paintOf(await ui.drawn(), '現場報工端埋')?.color).toBe('gray')
   expect(await ui.find({ type: 'Text', text: '實作中' })).toBeUndefined()
   await ui.press({ key: 'tab:all' })
-  const stage = await ui.find({ type: 'Text', text: '實作中' })
-  expect(stage?.props.color).toBe('gray')
-  expect(stage?.props.bold).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: '實作中' })).toBeUndefined()
+  const repo = findKey(await ui.drawn(), `card-repo:${c.key}`).children[0]
+  expect([textOf(repo).trimStart(), repo.props.color, repo.props.dimColor, repo.props.bold]).toEqual(['frontend', 'gray', true, undefined])
   await ui.unmount()
 })
 
@@ -2246,7 +2383,8 @@ test('refined：超過五筆排隊仍顯示完整隱藏數', async ($, on) => {
 })
 
 test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱且不超寬', async ($, on) => {
-  const cards = [card('abcdefghijklmnopqrst', { repo: 'fe' }), card('abcdefghijklmno', { repo: 'fe' }), card('ABCDEFGHIJ', { archived: true, pending: false }), card('ABCDEFG', { archived: true, pending: false })]
+  // The longest 代號 each header row holds whole beside its repo: 19 and 9 on 待回覆, 9 on 封存 at 46, and 4 there at 36, which cannot hold 8 cells of repo.
+  const cards = [card('abcdefghijklmnopqrs', { repo: 'fe' }), card('abcdefghi', { repo: 'fe' }), card('ABCDEFGHI', { archived: true, pending: false }), card('ABCD', { archived: true, pending: false })]
   const w = world({ ...focusOf(cards[0]!.tag, [cards[1]!.tag]), sessions: cards })
   appearanceConfig.set(w, { motion: false })
   await start($, on, w)
@@ -2578,7 +2716,7 @@ const withCards = (extra: Record<string, Partial<Card> & { advice?: any; brief?:
   sessions: SESSIONS.map(s => (extra[s.tag] ? { ...s, ...extra[s.tag] } : s)),
 })
 
-test('卡片 ✓ 建議: a card whose suggestion is ready reads ✓ (accent) 建議 (dim) on its header right, before the stage; below 46 columns only ✓; the header stays one row', async ($, on) => {
+test('卡片 ✓ 建議: a card whose suggestion is ready reads ✓ (accent) 建議 (dim) on its header right, before the repo, on 待回覆 and 全部 alike; below 46 columns only ✓; the header stays one row', async ($, on) => {
   const w = world(withCards({ focusui: { advice: READY }, logging: { advice: { state: 'pending', text: '建議產生中… 3 秒' } }, 'PROJ-6668': { advice: null } }))
   await start($, on, w)
   await openPane($)
@@ -2588,9 +2726,12 @@ test('卡片 ✓ 建議: a card whose suggestion is ready reads ✓ (accent) 建
     expect(textOf(hint)).toBe('✓ 建議')
     expect(paintOf(hint, '✓')?.color).toBe(THEMES.neutral.accent)
     expect(paintOf(hint, ' 建議')?.color).toBe(THEMES.neutral.dim)
-    expect(textOf(findKey(await ui.drawn(), `right:${keyOf('focusui')}`))).toBe('✓ 建議agent-skills')
-    await ui.press({ key: 'tab:all' })
-    expect(textOf(findKey(await ui.drawn(), `right:${keyOf('focusui')}`))).toBe('✓ 建議規劃中')
+    for (const tabKey of ['tab:pending', 'tab:all']) {
+      await ui.press({ key: tabKey })
+      const right = textOf(findKey(await ui.drawn(), `right:${keyOf('focusui')}`))
+      expect(right).toMatch(/^✓ 建議 +agent-skills$/)
+      expect(right).not.toContain('規劃中')
+    }
     await ui.press({ key: 'tab:pending' })
     const header = findKey(await ui.drawn(), `card:${keyOf('focusui')}`).children[0]
     expect(cells(textOf(header))).toBeLessThanOrEqual(cols - 1)
@@ -2599,7 +2740,8 @@ test('卡片 ✓ 建議: a card whose suggestion is ready reads ✓ (accent) 建
   const narrow = await $.ui.mount({ ...pane(40), surface: 'terminal' })
   expect(textOf(await narrow.find({ key: `hint:${keyOf('focusui')}` }))).toBe('✓')
   const header = findKey(await narrow.drawn(), `card:${keyOf('focusui')}`).children[0]
-  expect(cells(textOf(header))).toBeLessThanOrEqual(40 - 6)
+  // The mark and the header row, less the 2 cells space-between puts before the right part.
+  expect(cells(textOf(header))).toBeLessThanOrEqual(40 - 1 - 2)
   await narrow.unmount()
 })
 
@@ -2639,8 +2781,10 @@ test('摘要浮層: Enter on a card (or a click on its nickname) opens its recap
   const rows = (await popRows(ui))!
   expect(rows[0]).toContain('logging 摘要')
   expect(rows[0]).toContain('p 印出完整回報')
-  expect(rows[1]).toContain('agent-skills · 實作中 · feat/logging')
-  expect(rows.join('\n')).toContain(text)
+  // The recap starts on the first text row: no repo, stage or summary line above it.
+  expect(rows[1]).toContain(text)
+  expect(rows.join('\n')).not.toMatch(/agent-skills|實作中|feat\/logging/)
+  expect(paintOf(box, text)?.color).toBe(THEMES.neutral.fg)
   for (const row of rows) expect(cells(row)).toBeLessThanOrEqual(70)
   await ui.press({ key: `name:${keyOf('logging')}` })
   expect(await popRows(ui)).toBeNull()
@@ -2684,7 +2828,7 @@ test('摘要浮層: a session with no recap yet says 還沒有摘要; one being 
     await ui.press({ key: `name:${keyOf(tag)}` })
     const rows = (await popRows(ui))!
     await ui.press({ key: `name:${keyOf(tag)}` })
-    return rows.slice(3, -1).map(r => r.replace(/^┃ /, '').trim())
+    return rows.slice(1, -1).map(r => r.replace(/^┃ /, '').trim())
   }
   expect(await read('perm')).toEqual(['還沒有摘要'])
   expect(await read('logging')).toEqual(['摘要產生中…'])
@@ -2731,13 +2875,13 @@ test('摘要浮層捲動: the popover stops at the pane rows in view; past that 
   // focusui heads the pane: its rows are 3 and 4, so the popover takes rows 5 to the bottom of the view.
   expect([box.props.top, box.props.height]).toEqual([5, view - 5])
   const body = view - 5 - 2
-  const total = 32
+  const total = 30
   const bottom = async () => (await popRows(ui))!.at(-1)!
   expect(await bottom()).toContain(`j/k 捲動 · 第 1–${body} 行／共 ${total} 行`)
-  expect((await popRows(ui))![1]).toContain('agent-skills')
+  expect((await popRows(ui))![1]).toContain('第 1 行摘要')
   await ui.press({ key: 'popover-down' })
   expect(await bottom()).toContain(`第 2–${body + 1} 行`)
-  expect((await popRows(ui))![1]).not.toContain('agent-skills')
+  expect((await popRows(ui))![1]).toContain('第 2 行摘要')
   await ui.press({ key: 'popover-up' })
   expect(await bottom()).toContain(`第 1–${body} 行`)
   expect(await scroll(1, { column: 5, row: 8 })).toEqual({})
@@ -2767,11 +2911,11 @@ test('摘要浮層位置: a card in the pane\'s lower half opens its popover abo
   // perm is the fourth card: its header sits on row 2 + 3 * 3 + 1 = 12, past the middle; above it are rows 2..11.
   let box = findKey(await ui.drawn(), 'popover')
   expect([box.props.top, box.props.height]).toEqual([2, 12 - 2])
-  expect((await popRows(ui))!.at(-1)).toContain('j/k 捲動 · 第 1–8 行／共 32 行')
+  expect((await popRows(ui))!.at(-1)).toContain('j/k 捲動 · 第 1–8 行／共 30 行')
   await ui.press({ key: `name:${keyOf('logging')}` })
   // logging's header is row 6, in the upper half: the popover starts under its two rows.
   box = findKey(await ui.drawn(), 'popover')
-  expect([box.props.top, box.props.height]).toEqual([8, 2 + 3])
+  expect([box.props.top, box.props.height]).toEqual([8, 2 + 1])
   expect((await popRows(ui))!.at(-1)).not.toContain('j/k')
   await ui.unmount()
 })
@@ -2911,8 +3055,8 @@ test('待決浮層：Enter（選中卡片的題目）或點題目在卡片正下
   expect(w.opened.length).toBe(opened)
   const root = await ui.drawn()
   const box = findKey(root, 'popover')
-  // The tab rows, the count row, the group's blank row and rule: p1's three rows are 5..7.
-  expect(box.props).toMatchObject({ position: 'absolute', top: 8, left: 0 })
+  // The tab rows, the count row, the group's blank row and rule, the blank row under it: p1's three rows are 6..8.
+  expect(box.props).toMatchObject({ position: 'absolute', top: 9, left: 0 })
   expect(root.children.at(-1)).toBe(box)
   expect((await popRows(ui))![0]).toContain('刪遠端 branch')
   expect(decideCalls(w)).toEqual([])
@@ -2928,32 +3072,63 @@ test('待決浮層：Enter（選中卡片的題目）或點題目在卡片正下
   await ui.unmount()
 })
 
-test('待決浮層內容：動作、代號、repo、階段，子 session 那則回覆全文、選項（建議的用強調色）、advisor 建議與理由、參考的前例；長內容照寬度換行不截斷', async ($, on) => {
-  const w = world(detailed())
-  await start($, on, w)
-  await openPane($)
-  for (const cols of [40, 60]) {
-    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
-    await ui.press({ key: 'tab:decisions' })
-    await ui.press({ key: 'detail:p1' })
-    const rows = (await popRows(ui))!
-    expect(rows[0]).toContain('刪遠端 branch')
-    expect(rows[0]).toContain('y ✓ 核可 · m 自己回')
-    expect(rows.at(-1)).not.toContain('j/k')
-    for (const row of rows) expect(cells(row)).toBeLessThanOrEqual(cols)
-    const body = rows.slice(1, -1).map(r => r.replace(/^┃ /, '').trimEnd())
-    expect(body[0]).toBe('PROJ-7882 · proj-v2-frontend · 實作中')
-    const after = (label: string) => body.slice(body.indexOf(label) + 1)
-    expect(after('子 session 的回覆').join('').replace(/\s/g, '').startsWith(LONG_REPLY.replace(/\s/g, ''))).toBe(true)
-    expect(after('選項').slice(0, 2)).toEqual(['a. 刪掉', 'b. 先留著'])
-    const color = async (text: string) => (await ui.findAll({ type: 'Text' })).find((t: any) => t.text === text)?.props
-    expect((await color('a. 刪掉'))).toMatchObject({ color: THEMES.neutral.accent, bold: true })
-    expect(after('advisor 建議')[0]).toBe('建議：a 刪掉，已合併進 dev，留著沒用')
-    expect(after('參考的前例').join('').replace(/\s/g, '')).toContain('題目：要刪掉feat/proj-7001的遠端branch嗎？')
-    expect(after('參考的前例').join('')).toContain('你當時回：a')
-    await ui.unmount()
-  }
-})
+for (const name of ['neutral', 'dracula'] as const) {
+  test(`待決浮層內容（${name}）：完整題目（前景色粗體）開頭，接著子 session 的回覆、選項、advisor 建議、參考的前例，各段空一行；不畫代號、repo、階段；標題強調色粗體、正文前景色、前例次要色；都靠左不縮排；長內容照寬度換行不截斷`, async ($, on) => {
+    const long = `${'這題要先確認遠端 branch 已合併，'.repeat(4)}要刪掉嗎？`
+    const w = world(withDecisions(detailed().decisions.map((d: any) => (d.id === 'p1' ? { ...d, question: long } : d))))
+    appearanceConfig.set(w, { theme: name, motion: false })
+    await start($, on, w)
+    await openPane($)
+    const theme = THEMES[name]
+    for (const cols of [40, 60]) {
+      const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
+      await ui.press({ key: 'tab:decisions' })
+      await ui.press({ key: 'detail:p1' })
+      const rows = (await popRows(ui))!
+      expect(rows[0]).toContain('刪遠端 branch')
+      expect(rows[0]).toContain('y ✓ 核可 · m 自己回')
+      expect(rows.at(-1)).not.toContain('j/k')
+      for (const row of rows) expect(cells(row)).toBeLessThanOrEqual(cols)
+      expect(rows.join('')).not.toMatch(/實作中|proj-v2-frontend|PROJ-7882 ·/)
+      const body = rows.slice(1, -1).map(r => r.replace(/^┃ /, '').trimEnd())
+      for (const line of body) expect(line.startsWith(' ')).toBe(false)
+      const labels = ['子 session 的回覆', '選項', 'advisor 建議', '參考的前例']
+      const at = labels.map(l => body.indexOf(l))
+      expect(at.every((n, i) => n > 0 && (i === 0 || n > at[i - 1]!))).toBe(true)
+      for (const n of at) expect(body[n - 1]).toBe('')
+      expect(body.slice(0, at[0]! - 1).join('').replace(/\s/g, '')).toBe(long.replace(/\s/g, ''))
+      const after = (label: string) => body.slice(body.indexOf(label) + 1)
+      expect(after('子 session 的回覆').join('').replace(/\s/g, '').startsWith(LONG_REPLY.replace(/\s/g, ''))).toBe(true)
+      expect(after('選項').slice(0, 2)).toEqual(['a. 刪掉 ✓ 建議', 'b. 先留著'])
+      expect(after('advisor 建議')[0]).toBe('建議：a 刪掉，已合併進 dev，留著沒用')
+      expect(after('參考的前例').join('').replace(/\s/g, '')).toContain('題目：要刪掉feat/proj-7001的遠端branch嗎？')
+      expect(after('參考的前例').join('')).toContain('你當時回：a')
+      const box = findKey(await ui.drawn(), 'popover')
+      const runs: { text: string; color?: string; bold?: boolean }[] = []
+      const walk = (node: any) => {
+        if (typeof node !== 'object' || !node) return
+        if (node.type === 'Text' && (node.children ?? []).every((c: any) => typeof c === 'string')) runs.push({ text: textOf(node), color: node.props?.color, bold: node.props?.bold })
+        for (const c of node.children ?? []) walk(c)
+      }
+      walk(box)
+      const paint = (text: string) => runs.filter(r => r.text.trim() && text.includes(r.text.trim())).map(r => [r.color, !!r.bold])
+      const quiet = theme.muted ?? theme.dim
+      const lineRuns = (n: number) => findKey(box, `popover-line:${n}`).children.slice(1, -1).map((t: any) => [t.props?.color, !!t.props?.bold])
+      for (let n = 0; n < at[0]! - 1; n++) expect(lineRuns(n)).toEqual([[theme.fg, true]])
+      for (const l of labels) expect(paint(l)).toContainEqual([theme.accent, true])
+      for (let n = at[0]! + 1; n < at[1]! - 1; n++) if (body[n]) expect(lineRuns(n)).toEqual([[theme.fg, false]])
+      const runOf = (text: string) => runs.find(r => r.text === text)
+      expect([runOf('a.')?.color, runOf('a.')?.bold, runOf('b.')?.color, runOf('b.')?.bold]).toEqual([theme.accent, true, theme.accent, true])
+      expect([runOf(' 刪掉')?.color, runOf(' 刪掉')?.bold, runOf(' 先留著')?.color, !!runOf(' 先留著')?.bold]).toEqual([theme.fg, true, theme.fg, false])
+      expect([runOf(' ✓ 建議')?.color, runOf(' ✓ 建議')?.bold]).toEqual([theme.accent, true])
+      expect([runOf('建議：')?.color, runOf('a')?.color, runOf('a')?.bold, runOf('，已合併進 dev，留著沒用')?.color]).toEqual([theme.accent, theme.fg, true, quiet])
+      const precedent = runs.filter(r => r.text.includes('你當時回') || r.text.includes('題目：') || r.text.includes('feat/proj-7001'))
+      expect(precedent.length).toBeGreaterThan(0)
+      for (const r of precedent) expect([r.color, !!r.bold]).toEqual([quiet, false])
+      await ui.unmount()
+    }
+  })
+}
 
 test('待決浮層內容：沒有前例時不畫前例；送出失敗的題寫上次沒送進子 session；沒有選項時不畫選項', async ($, on) => {
   const w = world(withDecisions(DECISIONS.map(d => (d.id === 'p3' ? { ...d, failed: true } : d))))
@@ -3232,7 +3407,7 @@ for (const cols of [40, 80]) {
     expect(lines[2].startsWith('   建議：a')).toBe(true)
     expect(lines.join('')).not.toContain('先留著')
     expect(await ui.find({ key: 'decision-option:p1:0' })).toBeFalsy()
-    expect(findKey(root, 'decision:p3').props.marginTop).toBe(0)
+    expect(findKey(root, 'decision:p3').props.marginTop).toBe(1)
     expect(textOf(findKey(root, 'decision:p3'))).toContain('建議：照草案寫入，草案你已看過')
     const theme = THEMES.dracula
     const other = findKey(root, 'decision:p3').children[0]
