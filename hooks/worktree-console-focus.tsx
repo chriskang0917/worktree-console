@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { loadAppearance, THEMES, type Appearance, type ConsoleTheme } from './console-theme.ts'
-import { statusCell, columns, truncateColumns, wrapColumns, wrapRanges } from './status-view.ts'
+import { statusCell, columns, truncateColumns, wrapRanges } from './status-view.ts'
 import { registerKeepaliveView } from './keepalive-view.tsx'
 import { SUMMARY_MAX_LINES, summaryLines } from './session-summary-view.tsx'
 
@@ -70,14 +70,12 @@ const POLL_MS = 5_000
 const IDLE_EVERY = 3
 const PANE = 'worktree-console-pending'
 const PANE_TITLE = '中控台'
-const BRIEF = 'worktree-console-brief'
 const BRIEF_EMPTY = '還沒有摘要'
 const BRIEF_PENDING = '摘要產生中…'
 const QUEUE_MAX = 5
 const TOAST_MAX = 30
 const SUMMARY_MAX = 20
 const CORNER_GAP = 2
-const REPO_MIN = 4
 const SENT_MAX = 50
 const MISS_TOAST = 3
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
@@ -86,7 +84,14 @@ const FOOTER = 'qwe 切分頁 · 1-9,0/↑↓ 選卡片'
 const CHROME = 2
 // The keys line after the last card and the gap above it, drawn only once the cards are scrolled to the end.
 const FOOT = 2
-const CARD_ROWS = 5
+// A card: the blank row above it, then its two rows.
+const CARD_ROWS = 3
+const CARD_BODY = 2
+const DECIDE_ROWS = 3
+export const MARK_SPIN = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
+export const MARK_STILL = '✻'
+// The popover's rows around its text: the title rule and the bottom rule.
+const POP_CHROME = 2
 
 const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean }[] = [
   { id: 'pending', key: 'q', label: '待回覆', pick: s => s.pending },
@@ -98,9 +103,7 @@ const DECIDE_TAB = { id: 'decisions' as Tab, key: 'r', label: '待決', pick: (_
 const DECIDE_EMPTY = '沒有等你核可的動作'
 const DECIDE_EMPTY_HINT = '刪遠端 branch、@ 同事這類題會排到這裡'
 const DECIDE_FOOTER = ['Enter 詳情 · y 核可 · m 自己回', 'a 全部核可 · qwer 切分頁']
-const DECIDE_DETAIL = 'worktree-console-decision'
 const MANUAL = '自己回'
-const DETAIL_GONE = '這題已不在待決'
 const APPROVE = '✓ 核可'
 const APPROVE_FAILED = '送出失敗'
 const DECIDE_TIMEOUT_MS = 300_000
@@ -205,18 +208,113 @@ function fitParts(parts: AdvicePart[], width: number): AdvicePart[] {
   return cut
 }
 
-// The parts laid out over lines of `width` columns as wrapColumns breaks them, each line keeping its parts' roles.
-function wrapParts(parts: AdvicePart[], width: number): AdvicePart[][] {
-  const chars = parts.flatMap(p => [...p.text].map(c => ({ c, role: p.role })))
-  return wrapRanges(chars.map(x => x.c).join(''), width).map(r => {
-    const line: AdvicePart[] = []
-    for (const { c, role } of chars.slice(r.from, r.to)) {
-      const last = line[line.length - 1]
-      if (last?.role === role) line[line.length - 1] = { ...last, text: last.text + c }
-      else line.push({ role, text: c })
+type Run = { text: string; color?: string; bold?: boolean }
+
+// The runs laid out over lines of `width` columns as wrapColumns breaks them, a newline starting a line; each piece keeps its run's style.
+function wrapRuns(runs: Run[], width: number): Run[][] {
+  const paragraphs: { c: string; run: Run }[][] = [[]]
+  for (const run of runs) {
+    for (const c of run.text) {
+      if (c === '\n') paragraphs.push([])
+      else paragraphs[paragraphs.length - 1]!.push({ c, run })
     }
-    return line
-  })
+  }
+  return paragraphs.flatMap(chars =>
+    wrapRanges(chars.map(x => x.c).join(''), width).map(r => {
+      const line: Run[] = []
+      for (const { c, run } of chars.slice(r.from, r.to)) {
+        const last = line[line.length - 1]
+        if (last && last.color === run.color && last.bold === run.bold) line[line.length - 1] = { ...last, text: last.text + c }
+        else line.push({ color: run.color, bold: run.bold, text: c })
+      }
+      return line
+    }),
+  )
+}
+
+type Popover = { title: Run; keys: string; lines: Run[][]; print?: () => void }
+
+// A recap popover: where the session is, then its newest recap.
+function briefPopover(s: Session, width: number, theme: ConsoleTheme): Popover {
+  const stage = s.stage !== '—' && s.stage !== '未開工' ? s.stage : ''
+  const brief = s.brief ?? null
+  const runs: Run[] = [
+    { text: [s.repo, stage, s.summary].filter(Boolean).join(' · '), color: theme.dim },
+    { text: '\n\n' },
+    brief?.text ? { text: brief.text, color: theme.fg } : { text: brief?.pending ? BRIEF_PENDING : BRIEF_EMPTY, color: theme.dim },
+    ...(brief?.text && brief.pending ? [{ text: `\n新的${BRIEF_PENDING}`, color: theme.dim }] : []),
+  ]
+  return { title: { text: `${s.tag} 摘要`, color: theme.accent, bold: true }, keys: 'p 印出完整回報', lines: wrapRuns(runs, width) }
+}
+
+// A 待決 popover: what is to be done, the child's whole reply, the options, the advisor's suggestion and the precedent it leaned on.
+function decisionPopover(d: Decision, width: number, theme: ConsoleTheme): Popover {
+  const paint = advicePaint(theme)
+  const picked = pickedOptions(d.answer)
+  const label = (text: string): Run[] => [{ text: '\n\n' }, { text, color: theme.accent, bold: true }, { text: '\n' }]
+  const flat = (text: string) => text.replace(/\s+/g, ' ').trim()
+  const runs: Run[] = [
+    { text: [d.tag, d.repo, d.stage].filter(Boolean).join(' · '), color: theme.dim },
+    ...(d.failed ? [{ text: '\n上次核可沒送進子 session，可以再核可一次或自己回', color: theme.error }] : []),
+    ...label('子 session 的回覆'),
+    { text: d.context || d.question, color: theme.fg },
+    ...(d.options.length ? [...label('選項'), ...d.options.flatMap((o, i): Run[] => [...(i ? [{ text: '\n' }] : []), { text: `${String.fromCharCode(97 + i)}. ${flat(o)}`, color: picked.has(i) ? theme.accent : theme.fg, bold: picked.has(i) || undefined }])] : []),
+    ...label('advisor 建議'),
+    ...adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options).map(p => ({ text: p.text, color: paint[p.role].color, bold: paint[p.role].bold })),
+    ...(d.precedent
+      ? [...label('參考的前例'), { text: '題目：', color: theme.dim }, { text: flat(d.precedent.question), color: theme.fg }, { text: '\n你當時回：', color: theme.dim }, { text: flat(d.precedent.answer), color: theme.fg }]
+      : []),
+  ]
+  const keys = deciding.has(d.id) ? '送出中…' : `y ${APPROVE} · m ${MANUAL}`
+  return { title: { text: d.action, color: theme.waiting, bold: true }, keys, lines: wrapRuns(runs, width) }
+}
+
+// Draws the popover over the cards, under the card whose rows are `start`..`end` (rows of the drawing), or over it when the card sits in
+// the pane's lower half; it never reaches past the pane's rows in view, and scrolls its own text.
+function popoverBox($: EngineInterface, e: any, p: Popover, at: { start: number; end: number; offset: number }, cols: number, theme: ConsoleTheme) {
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const view = e.props.scroll.bodyRows as number
+  const shown = at.start - at.offset
+  const above = shown > view / 2
+  const room = above ? shown - CHROME : view - (at.end - at.offset)
+  const height = Math.min(p.lines.length + POP_CHROME, Math.max(POP_CHROME + 1, room))
+  const rows = height - POP_CHROME
+  popView = { rows, total: p.lines.length }
+  pop!.at = Math.max(0, Math.min(pop!.at, p.lines.length - rows))
+  const from = pop!.at
+  const inner = Math.max(1, cols - 2)
+  const keys = truncateColumns(p.keys, Math.max(0, cols - 8))
+  const title = truncateColumns(p.title.text, Math.max(1, cols - columns(keys) - 7))
+  const scroll = p.lines.length > rows ? ` j/k 捲動 · 第 ${from + 1}–${from + rows} 行／共 ${p.lines.length} 行 ` : ''
+  const fill = (n: number) => '─'.repeat(Math.max(0, n))
+  return (
+    <Box key="popover" position="absolute" top={above ? at.start - height : at.end} left={0} width={cols} height={height} flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
+      <Box key="popover-title" flexDirection="row" height={1} flexShrink={0}>
+        <Text color={theme.accent}>{'── '}</Text>
+        <Text color={p.title.color} bold={p.title.bold}>{title}</Text>
+        <Text color={theme.accent}>{` ${fill(cols - columns(title) - columns(keys) - 7)} `}</Text>
+        <Text color={theme.dim}>{keys}</Text>
+        <Text color={theme.accent}>{' ─'}</Text>
+      </Box>
+      {p.lines.slice(from, from + rows).map((line, n) => (
+        <Box key={`popover-line:${from + n}`} flexDirection="row" height={1} flexShrink={0}>
+          <Text color={theme.accent}>{'┃ '}</Text>
+          {line.map((r, j) => <Text key={`popover-run:${from + n}:${j}`} color={r.color} bold={r.bold}>{r.text}</Text>)}
+          <Text>{' '.repeat(Math.max(0, inner - line.reduce((w, r) => w + columns(r.text), 0)))}</Text>
+        </Box>
+      ))}
+      <Box key="popover-bottom" flexDirection="row" height={1} flexShrink={0}>
+        <Text color={theme.accent}>{'──'}</Text>
+        <Text color={theme.dim}>{scroll}</Text>
+        <Text color={theme.accent}>{fill(cols - 2 - columns(scroll))}</Text>
+      </Box>
+      <Box key="popover-keys" height={0} flexShrink={0} overflow="hidden">
+        <Button key="popover-down" hotkey="j" label="" plain onPress={() => scrollPop($, 1)} />
+        <Button key="popover-up" hotkey="k" label="" plain onPress={() => scrollPop($, -1)} />
+        {p.print && <Button key="popover-print" hotkey="p" label="" plain onPress={p.print} />}
+      </Box>
+    </Box>
+  )
 }
 
 // The options a bare a／b／c answer picks, by index.
@@ -261,6 +359,7 @@ const misses = new Map<string, number>()
 let appearance: Appearance = { theme: 'neutral', motion: true }
 let animation: { cancel(): void } | null = null
 let animationTick = 0
+let paneFocused = false
 let visibleKeys: string[] = []
 let bandKey: string | null = null
 const warned = new Set<string>()
@@ -270,10 +369,11 @@ let countdown: { key: string; tag: string; answer: string; meaning: string; unti
 let countdownTick: { cancel(): void } | null = null
 const counted = new Set<string>()
 let sending = false
-let briefFor: { key: string; tag: string } | null = null
 const deciding = new Set<string>()
 let decideSel: string | null = null
-let detailFor: string | null = null
+// The one popover on the pane: a card's recap or a 待決 question's detail, `at` its first text line in view.
+let pop: { kind: 'brief' | 'decision'; id: string; at: number } | null = null
+let popView = { rows: 0, total: 0 }
 async function loadPreferences($: EngineInterface) {
   const home = await $.env.get('WORKTREE_CONSOLE_HOME') || `${await $.env.get('HOME')}/.config/worktree-console`
   const warnings: string[] = []
@@ -288,9 +388,12 @@ async function loadPreferences($: EngineInterface) {
   }
 }
 
+const markSpins = () => appearance.motion && paneFocused && (tab === 'decisions' ? chosenDecision() !== null : sel !== null && visibleKeys.includes(sel))
+const markGlyph = () => (markSpins() ? MARK_SPIN[animationTick % MARK_SPIN.length]! : MARK_STILL)
+
 function visibleAnimationFrame(tick: number): number {
   const primary = primaryKey()
-  let frame = 0
+  let frame = markSpins() ? 16 | ((tick % MARK_SPIN.length) << 5) : 0
   for (const session of sessions()) {
     if (!visibleKeys.includes(session.key) && bandKey !== session.key) continue
     if (session.status === '等待授權') {
@@ -364,11 +467,32 @@ function numberOf(t: Tab, i: number): string | undefined {
   return n < 0 ? undefined : DIGITS[n]
 }
 
-// A card's rows as drawn: frame, header, question, corner line; plus its repo rule outside 待回覆.
+const ruled = (rows: Session[], i: number, first: number) => tab !== 'pending' && (i === first || rows[i]!.repo !== rows[i - 1]!.repo)
+
+// A card's rows as drawn: the blank row, header and question rows; plus its repo rule outside 待回覆.
 function blockRows(rows: Session[], i: number, first: number): number {
-  const r = rows[i]!
-  const rule = tab !== 'pending' && (i === first || r.repo !== rows[i - 1]!.repo) ? (i === first ? 1 : 2) : 0
-  return CARD_ROWS + rule
+  return CARD_ROWS + (ruled(rows, i, first) ? 1 : 0)
+}
+
+// The pane row a card's header sits on, counted from the pane's top.
+function cardRow(rows: Session[], i: number): number {
+  let row = CHROME
+  for (let k = top; k < i; k++) row += blockRows(rows, k, top)
+  return row + blockRows(rows, i, top) - CARD_BODY
+}
+
+// The row a 待決 card's action sits on in the tab's whole drawing, or -1.
+function decisionRow(id: string): number {
+  let row = CHROME + 1
+  for (const g of decisionOrder()) {
+    row += 2
+    for (const [k, d] of g.items.entries()) {
+      if (k > 0) row += 1
+      if (d.id === id) return row
+      row += DECIDE_ROWS
+    }
+  }
+  return -1
 }
 
 function fits(rows: Session[], from: number, to: number, avail: number, extra = 0): boolean {
@@ -537,6 +661,7 @@ async function act($: EngineInterface, args: string[]) {
 
 function showTab(t: Tab) {
   tab = t
+  pop = null
   decideSel = null
   sel = t === 'pending' ? (focus.current ?? null) : (rowsOf(t)[0]?.key ?? null)
   top = 0
@@ -592,7 +717,7 @@ async function pickCard($: EngineInterface, s: Session) {
   if (!res.deny) held = ring.indexOf(`name:${s.key}`)
 }
 
-// The recap dialog's 印出完整回報, as Enter on a card once did: a card waiting on you that is not on the band switches first (the switch prints it).
+// The recap popover's p: a card waiting on you that is not on the band switches first (the switch prints it).
 async function printCard($: EngineInterface, s: Session) {
   sel = s.key
   if (s.pending && !s.decide && s.key !== focus.current) await act($, ['focus-pick', s.key])
@@ -600,16 +725,22 @@ async function printCard($: EngineInterface, s: Session) {
   $.ui.invalidate('ui.render')
 }
 
-// Enter on a card, or a click on its nickname, opens that session's recap in a dialog Esc closes; nothing reaches the conversation.
-async function openBrief($: EngineInterface, s: Session) {
-  sel = s.key
-  briefFor = { key: s.key, tag: s.tag }
-  const opened = $.ui.open({ id: BRIEF, title: `${s.tag} 摘要`, focus: true, closeOnEscape: true })
+function togglePop($: EngineInterface, kind: 'brief' | 'decision', id: string) {
+  pop = pop?.kind === kind && pop.id === id ? null : { kind, id, at: 0 }
   $.ui.invalidate('ui.render')
-  await opened
 }
 
-const briefSession = () => (briefFor ? (byKey(briefFor.key) ?? sessions().find(s => s.tag === briefFor!.tag) ?? null) : null)
+function scrollPop($: EngineInterface, by: number) {
+  if (!pop) return
+  pop.at = Math.max(0, Math.min(pop.at + by, popView.total - popView.rows))
+  $.ui.invalidate('ui.render')
+}
+
+// Enter on a card, or a click on its nickname, opens or closes that session's recap in a popover under the card; nothing reaches the conversation.
+function toggleBrief($: EngineInterface, s: Session) {
+  sel = s.key
+  togglePop($, 'brief', s.key)
+}
 
 // The 封存 tab's button: runs `console.mjs unarchive` straight from the mod, so nothing reaches the conversation.
 async function unarchiveCard($: EngineInterface, s: Session) {
@@ -673,20 +804,10 @@ async function manualCard($: EngineInterface, id: string) {
   moveOn($, after)
 }
 
-// Enter on a card, or a click on its question: the question's whole context in a dialog Esc closes; nothing reaches the conversation.
-async function openDetail($: EngineInterface, d: Decision) {
+// Enter on a card, or a click on its question, opens or closes the question's whole context in a popover; nothing reaches the conversation.
+function toggleDetail($: EngineInterface, d: Decision) {
   decideSel = d.id
-  detailFor = d.id
-  const opened = $.ui.open({ id: DECIDE_DETAIL, title: `${d.tag} 待決`, focus: true, closeOnEscape: true })
-  $.ui.invalidate('ui.render')
-  await opened
-}
-
-async function fromDetail($: EngineInterface, act: (id: string) => Promise<void>) {
-  const id = detailFor
-  await $.ui.close({ id: DECIDE_DETAIL }).catch(() => {})
-  detailFor = null
-  if (id) await act(id)
+  togglePop($, 'decision', d.id)
 }
 
 const countsText = () => {
@@ -782,7 +903,7 @@ function recapBand($: EngineInterface, e: any) {
 function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleTheme) {
   const { Box, Text, Button } = $.ui.resolve(e)
   const list = decisions()
-  const inner = Math.max(1, cols - 6)
+  const inner = Math.max(1, cols - 3)
   const center = (t: string) => `${' '.repeat(Math.max(0, Math.floor((cols - 2 - columns(t)) / 2)))}${t}`
   if (list.length === 0) {
     return (
@@ -802,49 +923,44 @@ function decisionsBody($: EngineInterface, e: any, cols: number, theme: ConsoleT
   const headRoom = cols - 2 - allWidth - 1
   const groups = decisionOrder()
   const chosen = chosenDecision()?.id ?? null
-  const card = (d: Decision) => {
+  const card = (d: Decision, k: number) => {
     const focused = d.id === chosen
     const busy = deciding.has(d.id)
     const failed = d.failed && !busy
+    const mark = <Text color={theme.accent} bold={focused || undefined}>{focused ? `${markGlyph()} ` : '  '}</Text>
+    const rail = <Text>{'  '}</Text>
     // The chosen card names the keys that act on it.
     const approveLabel = focused ? `y ${APPROVE}` : APPROVE
     const manualLabel = focused ? `m ${MANUAL}` : MANUAL
     const rightWidth = (busy ? columns('送出中…') : columns(`${approveLabel} · ${manualLabel}`)) + (failed ? columns(APPROVE_FAILED) + 3 : 0)
-    const advice = wrapParts(adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options), inner)
-    const question = `${d.tag !== d.group ? `${d.tag} · ` : ''}${d.question}`
-    const picked = pickedOptions(d.answer)
+    const advice = fitParts(adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options), inner)
+    const question = truncateColumns(`${d.tag !== d.group ? `${d.tag} · ` : ''}${d.question}`.replace(/\s+/g, ' ').trim(), inner)
     return (
-      <Box key={`decision:${d.id}`} flexDirection="column" flexShrink={0} borderStyle={focused ? 'double' : 'round'} borderColor={focused ? theme.accent : failed ? theme.error : theme.border} paddingX={2}>
-        <Box key={`decision-head:${d.id}`} flexDirection="row" justifyContent="space-between" height={1} flexShrink={0}>
-          <Text color={theme.waiting} bold wrap="truncate-end">{truncateColumns(d.action, Math.max(1, inner - rightWidth - 1))}</Text>
-          <Box key={`decision-right:${d.id}`} flexDirection="row" flexShrink={0}>
-            {failed && <Text color={theme.error}>{APPROVE_FAILED}</Text>}
-            {failed && <Text color={theme.dim}> · </Text>}
-            {busy ? <Text color={theme.dim}>送出中…</Text> : (
-              <Box key={`decision-actions:${d.id}`} flexDirection="row">
-                <Button key={`approve:${d.id}`} label={approveLabel} plain onPress={() => void approveCards($, d.id)}>{focused && <Text color={theme.dim}>y </Text>}<Text color={theme.accent} bold>{APPROVE}</Text></Button>
-                <Text color={theme.dim}> · </Text>
-                <Button key={`manual:${d.id}`} label={manualLabel} plain onPress={() => void manualCard($, d.id)}>{focused && <Text color={theme.dim}>m </Text>}<Text color={theme.fg}>{MANUAL}</Text></Button>
-              </Box>
-            )}
+      <Box key={`decision:${d.id}`} flexDirection="column" flexShrink={0} marginTop={k > 0 ? 1 : 0}>
+        <Box key={`decision-head:${d.id}`} flexDirection="row" height={1} flexShrink={0}>
+          {mark}
+          <Box key={`decision-top:${d.id}`} flexDirection="row" width={inner} flexShrink={0} justifyContent="space-between">
+            <Text color={theme.waiting} bold wrap="truncate-end">{truncateColumns(d.action, Math.max(1, inner - rightWidth - 1))}</Text>
+            <Box key={`decision-right:${d.id}`} flexDirection="row" flexShrink={0}>
+              {failed && <Text color={theme.error}>{APPROVE_FAILED}</Text>}
+              {failed && <Text color={theme.dim}> · </Text>}
+              {busy ? <Text color={theme.dim}>送出中…</Text> : (
+                <Box key={`decision-actions:${d.id}`} flexDirection="row">
+                  <Button key={`approve:${d.id}`} label={approveLabel} plain onPress={() => void approveCards($, d.id)}>{focused && <Text color={theme.dim}>y </Text>}<Text color={theme.accent} bold>{APPROVE}</Text></Button>
+                  <Text color={theme.dim}> · </Text>
+                  <Button key={`manual:${d.id}`} label={manualLabel} plain onPress={() => void manualCard($, d.id)}>{focused && <Text color={theme.dim}>m </Text>}<Text color={theme.fg}>{MANUAL}</Text></Button>
+                </Box>
+              )}
+            </Box>
           </Box>
         </Box>
-        <Button key={`detail:${d.id}`} label={truncateColumns(question, inner)} plain autoFocus={focused ? true : undefined} onPress={() => void openDetail($, d)}><Text color={theme.dim}>{wrapColumns(question, inner).join('\n')}</Text></Button>
-        {d.options.length > 0 && (
-          <Box key={`decision-options:${d.id}`} flexDirection="column" flexShrink={0}>
-            {d.options.map((o, i) => (
-              <Box key={`decision-option:${d.id}:${i}`} height={1} flexShrink={0}>
-                <Text color={picked.has(i) ? theme.accent : theme.fg} bold={picked.has(i)} wrap="truncate-end">{truncateColumns(`${String.fromCharCode(97 + i)}. ${o.replace(/\s+/g, ' ').trim()}`, inner)}</Text>
-              </Box>
-            ))}
-          </Box>
-        )}
-        <Box key={`decision-advice:${d.id}`} flexDirection="column" flexShrink={0}>
-          {advice.map((line, n) => (
-            <Box key={`decision-advice:${d.id}:${n}`} flexDirection="row" height={1} flexShrink={0}>
-              {line.map((p, j) => <Text key={`decision-advice:${d.id}:${n}:${j}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}
-            </Box>
-          ))}
+        <Box key={`decision-question:${d.id}`} flexDirection="row" height={1} flexShrink={0}>
+          {rail}
+          <Button key={`detail:${d.id}`} label={question} plain autoFocus={focused ? true : undefined} onPress={() => toggleDetail($, d)}><Text color={theme.dim}>{question}</Text></Button>
+        </Box>
+        <Box key={`decision-advice:${d.id}`} flexDirection="row" height={1} flexShrink={0}>
+          {rail}
+          {advice.map((p, j) => <Text key={`decision-advice:${d.id}:${j}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}
         </Box>
       </Box>
     )
@@ -918,7 +1034,7 @@ export const register: Register = on => {
   // The engine walks ↑↓ one Button back or forth through the pane, keeping its place by index: a step from where it held is one card up or down.
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (tab === 'decisions') {
-      // ↑↓ step a whole card and land on its question, and every button that sends hands the focus to a question, so Enter opens the detail and never approves.
+      // ↑↓ step a whole card and land on its question, and every button that sends hands the focus to a question, so Enter opens the popover and never approves.
       const list = decisionList()
       const hit = /^(detail|approve|manual):(.+)$/.exec(e.element ?? '')
       const sends = /^decide-(all|yes|manual)$/.test(e.element ?? '')
@@ -934,6 +1050,7 @@ export const register: Register = on => {
         return res
       }
       decideSel = target.id
+      if (pop && pop.id !== target.id) pop = null
       $.ui.invalidate('ui.render')
       const want = `detail:${target.id}`
       const res = await next({ ...e, element: want })
@@ -958,6 +1075,7 @@ export const register: Register = on => {
       return res
     }
     sel = target.key
+    if (pop && pop.id !== target.key) pop = null
     reveal(rows, rows.indexOf(target))
     $.ui.invalidate('ui.render')
     const want = `name:${target.key}`
@@ -966,14 +1084,16 @@ export const register: Register = on => {
     return res
   })
 
-  // The detail's 核可 and 自己回 take no focus, so arrows and Tab never stop on them; y, m or a click sends.
-  on('ui.focus', { component: 'Pane', requestId: DECIDE_DETAIL }, async ($, e, next) => (/^detail-(approve|manual)$/.test(e.element ?? '') ? { deny: 'detail-sends' } : next(e)))
-
   // The pane keeps its own window over the cards, the keys line riding after the last one: the wheel moves a card, a page key a screenful.
+  // An open popover takes the wheel and the page keys for its own text.
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const page = !e.pointer && Math.abs(e.by) >= e.bodyRows
+    if (focus.active && pop) {
+      scrollPop($, Math.sign(e.by) * (page ? Math.max(1, popView.rows) : 1))
+      return {}
+    }
     if (!focus.active || !frame || tab === 'decisions') return next(e)
     const rows = rowsOf(tab)
-    const page = !e.pointer && Math.abs(e.by) >= e.bodyRows
     top += Math.sign(e.by) * (page ? Math.max(1, endOf(rows, top) - top) : 1)
     clampTop(rows)
     $.ui.invalidate('ui.render')
@@ -983,10 +1103,10 @@ export const register: Register = on => {
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE) {
       visibleKeys = []
+      paneFocused = false
+      pop = null
       syncAnimation($)
     }
-    if (e.id === BRIEF) briefFor = null
-    if (e.id === DECIDE_DETAIL) detailFor = null
     return next(e)
   })
 
@@ -1007,8 +1127,17 @@ export const register: Register = on => {
     clampTop(rows)
     const end = endOf(rows, top)
     visibleKeys = rows.slice(top, end).map(r => r.key)
+    paneFocused = !!e.props.isFocused
     syncAnimation($)
-    ring = [...tabList.map(x => `tab:${x.id}`), ...(tab === 'decisions' ? ['decide-all', ...decisionList().flatMap(d => [`approve:${d.id}`, `manual:${d.id}`, `detail:${d.id}`]), 'decide-yes', 'decide-manual'] : []), ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`])]
+    // Esc hands the keys back to the prompt, which closes the popover; so does its card leaving the tab or the window.
+    const popAt = pop?.kind === 'brief' ? rows.findIndex(r => r.key === pop!.id) : -1
+    if (pop && (!e.props.isFocused || (pop.kind === 'decision' ? tab !== 'decisions' || !decisions().some(d => d.id === pop!.id) : tab === 'decisions' || tab === 'hidden' || popAt < top || popAt >= end))) pop = null
+    ring = [
+      ...tabList.map(x => `tab:${x.id}`),
+      ...(tab === 'decisions' ? ['decide-all', ...decisionList().flatMap(d => [`approve:${d.id}`, `manual:${d.id}`, `detail:${d.id}`]), 'decide-yes', 'decide-manual'] : []),
+      ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`]),
+      ...(pop ? ['popover-down', 'popover-up', ...(pop.kind === 'brief' ? ['popover-print'] : [])] : []),
+    ]
     const at = (drawing += 1)
     if (repin) {
       const gen = repinGen
@@ -1038,49 +1167,62 @@ export const register: Register = on => {
       </Box>
     )
     const underline = <Text color={theme.border}>{'─'.repeat(Math.min(cols, tabStart))}<Text color={theme.accent}>{'━'.repeat(tabWidth)}</Text>{'─'.repeat(Math.max(0, cols - tabStart - tabWidth))}</Text>
-    const shell = (body: any) => <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>{tabs}{underline}{body}</Box>
-    if (tab === 'decisions') return shell(decisionsBody($, e, cols, theme))
+    const shell = (body: any, extra: any = null) => <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>{tabs}{underline}{body}{extra}</Box>
+    if (tab === 'decisions') {
+      const d = pop?.kind === 'decision' ? decisions().find(x => x.id === pop!.id) : undefined
+      const row = d ? decisionRow(d.id) : -1
+      const over = d && row >= 0 ? popoverBox($, e, decisionPopover(d, Math.max(1, cols - 2), theme), { start: row, end: row + DECIDE_ROWS, offset: e.props.scroll.offset ?? 0 }, cols, theme) : null
+      return shell(decisionsBody($, e, cols, theme), over)
+    }
     const hidden = tab === 'hidden'
-    const press = (r: Session) => (hidden ? unarchiveCard($, r) : openBrief($, r))
-    const inner = Math.max(1, cols - 6)
+    const press = (r: Session) => (hidden ? unarchiveCard($, r) : toggleBrief($, r))
+    // The header row past the mark column and the right margin; the question row also leaves the number column blank.
+    const head = Math.max(1, cols - 3)
     const card = (r: Session, i: number) => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
       const status = statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
       const cell = r.decide ? { ...status, label: DECIDE_TAB.label } : status
-      // Stage is the ticket's progress, not a repo attribute: a quiet header tag where the name can spare it, else first on the bottom row.
-      const stageWord = r.stage !== '—' && r.stage !== '未開工' ? r.stage : ''
-      const stageInHeader = !!stageWord && cols >= 46
+      const mark = <Text color={theme.accent} bold={isSel || undefined}>{isSel ? `${markGlyph()} ` : '  '}</Text>
+      const rail = <Text>{'  '}</Text>
+      const stageWord = cols >= 46 && r.stage !== '—' && r.stage !== '未開工' ? r.stage : ''
       // The advisor's suggestion is ready: ✓ 建議, only the ✓ below 46 columns.
       const ready = r.advice?.state === 'ready'
       const hintWidth = ready ? (cols >= 46 ? 7 : 2) : 0
-      const tag = truncateColumns(r.tag, Math.max(1, inner - 13 - (hidden ? 10 : 0) - (stageInHeader ? 7 : 0) - hintWidth))
+      const tag = truncateColumns(r.tag, Math.max(1, head - 13 - (hidden ? 10 : 0) - (stageWord ? columns(stageWord) + 1 : 0) - hintWidth))
+      const name = <Text color={isSel ? theme.accent : theme.fg} bold>{tag}</Text>
       const summary = truncateColumns(r.summary, cols <= 36 ? 15 : SUMMARY_MAX)
-      const room = inner - columns(summary) - CORNER_GAP - (stageWord && !stageInHeader ? columns(stageWord) + 3 : 0)
-      const repo = tab === 'pending' && room >= REPO_MIN && cols > 36 ? truncateColumns(r.repo, room) : ''
+      const question = truncateColumns(r.question.replace(/\s+/g, ' ').trim(), Math.max(1, head - 3 - (summary ? columns(summary) + CORNER_GAP : 0)))
       return (
-        <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} borderStyle={isSel ? 'double' : 'round'} borderColor={isSel ? theme.accent : theme.border} paddingX={2}>
-          <Box flexDirection="row" justifyContent="space-between">
-            <Box flexDirection="row">
-              <Box key={`number:${r.key}`} width={3} flexShrink={0} overflow="hidden">{num ? <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} /> : <Text>   </Text>}</Box>
-              <Box flexDirection="row"><Box key={`status:${r.key}`} flexDirection="row" width={8} flexShrink={0}><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}`}</Text></Box><Text>  </Text></Box>
-              {hidden && <Text color={theme.fg}>{`${tag}  `}</Text>}
-              <Button key={`name:${r.key}`} label={hidden ? '取消封存' : tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} />
-            </Box>
-            {(ready || stageInHeader) && (
-              <Box key={`right:${r.key}`} flexDirection="row" flexShrink={0}>
-                {ready && <Box key={`hint:${r.key}`} flexDirection="row" flexShrink={0} marginLeft={1}><Text color={theme.accent}>✓</Text>{cols >= 46 && <Text color={theme.dim}> 建議</Text>}</Box>}
-                {stageInHeader && <Box key={`stage:${r.key}`} width={columns(stageWord)} flexShrink={0} marginLeft={1}><Text color={theme.dim}>{stageWord}</Text></Box>}
+        <Box key={`card:${r.key}`} flexDirection="column" flexShrink={0} marginTop={ruled(rows, i, top) ? 0 : 1}>
+          <Box key={`card-head:${r.key}`} flexDirection="row" height={1} flexShrink={0}>
+            {mark}
+            <Box key={`card-top:${r.key}`} flexDirection="row" width={head} flexShrink={0} justifyContent="space-between">
+              <Box flexDirection="row">
+                <Box key={`number:${r.key}`} width={3} flexShrink={0} overflow="hidden">{num ? <Button key={`num:${r.key}`} hotkey={num} label="" plain onPress={() => pickCard($, r)} /> : <Text>   </Text>}</Box>
+                <Box flexDirection="row"><Box key={`status:${r.key}`} flexDirection="row" width={8} flexShrink={0}><Text color={theme[cell.glyphColor]}>{cell.glyph}</Text><Text color={theme[cell.color]}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}`}</Text></Box><Text>  </Text></Box>
+                {hidden && name}
+                {hidden && <Text>  </Text>}
+                {hidden ? <Button key={`name:${r.key}`} label="取消封存" plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} /> : <Button key={`name:${r.key}`} label={tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)}>{name}</Button>}
               </Box>
-            )}
-          </Box>
-          <Text color={theme.dim} wrap="truncate-end">{truncateColumns(r.question.replace(/\s+/g, ' ').trim(), inner)}</Text>
-          <Box flexDirection="row" justifyContent="space-between">
-            <Box key={`corner:${r.key}`} flexDirection="row" flexShrink={0}>
-              <Text wrap="truncate-end" color={theme.dim}>{stageInHeader || !stageWord ? repo : `${stageWord}${repo ? ` · ${repo}` : ''}`}</Text>
+              {(ready || stageWord) && (
+                <Box key={`right:${r.key}`} flexDirection="row" flexShrink={0}>
+                  {ready && <Box key={`hint:${r.key}`} flexDirection="row" flexShrink={0} marginLeft={1}><Text color={theme.accent}>✓</Text>{cols >= 46 && <Text color={theme.dim}> 建議</Text>}</Box>}
+                  {stageWord && <Box key={`stage:${r.key}`} width={columns(stageWord)} flexShrink={0} marginLeft={1}><Text color={theme.dim}>{stageWord}</Text></Box>}
+                </Box>
+              )}
             </Box>
-            <Box key={`summary:${r.key}`} flexDirection="row" flexShrink={0}>
-              <Text wrap="truncate-end">{leadNumbers(Text, summary, theme)}</Text>
+          </Box>
+          <Box key={`card-question:${r.key}`} flexDirection="row" height={1} flexShrink={0}>
+            {rail}
+            <Box key={`card-bottom:${r.key}`} flexDirection="row" width={head} flexShrink={0} justifyContent="space-between">
+              <Box key={`question:${r.key}`} flexDirection="row" flexShrink={1} overflow="hidden">
+                <Text>   </Text>
+                <Text color={theme.dim} wrap="truncate-end">{question}</Text>
+              </Box>
+              <Box key={`summary:${r.key}`} flexDirection="row" flexShrink={0}>
+                <Text wrap="truncate-end">{leadNumbers(Text, summary, theme)}</Text>
+              </Box>
             </Box>
           </Box>
         </Box>
@@ -1097,7 +1239,7 @@ export const register: Register = on => {
       if (tab !== 'pending' && (j === 0 || r.repo !== rows[i - 1]!.repo)) {
         const tail = ` 共 ${sessions().filter(x => x.repo === r.repo).length} 個`
         out.push(
-          <Box key={`repo:${r.repo}`} flexShrink={0} marginTop={j === 0 ? 0 : 1}>
+          <Box key={`repo:${r.repo}`} flexShrink={0} marginTop={1}>
             <Text wrap="truncate-end"><Text color={theme.dim}>{'── '}</Text><Text color={theme.fg}>{r.repo}</Text><Text color={theme.dim}>{` ${'─'.repeat(Math.max(2, cols - columns(r.repo) - columns(tail) - 4))}${tail}`}</Text></Text>
           </Box>,
         )
@@ -1117,6 +1259,11 @@ export const register: Register = on => {
         })}
       </Box>
     )
+    const briefSession = pop?.kind === 'brief' ? rows[popAt] : undefined
+    const briefRow = briefSession ? cardRow(rows, popAt) : 0
+    const briefOver = briefSession
+      ? popoverBox($, e, { ...briefPopover(briefSession, Math.max(1, cols - 2), theme), print: () => void ((pop = null), printCard($, briefSession)) }, { start: briefRow, end: briefRow + CARD_BODY, offset: 0 }, cols, theme)
+      : null
     return (
       <Box flexDirection="column" height={dock ? e.props.scroll.bodyRows : undefined} {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
         {tabs}
@@ -1131,76 +1278,7 @@ export const register: Register = on => {
             <Text color={theme.dim}>{batchOn() ? FOOTER.replace('qwe', 'qwer') : FOOTER}</Text>
           </Box>
         )}
-      </Box>
-    )
-  })
-
-  on('ui.render', { component: 'Pane', requestId: BRIEF }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const theme = THEMES[appearance.theme]
-    const s = briefSession()
-    if (!s) return <Text color={theme.dim}>{BRIEF_EMPTY}</Text>
-    const brief = s.brief ?? null
-    return (
-      <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
-        <Box key="brief-text">{brief?.text ? <Text color={theme.fg} wrap="wrap">{brief.text}</Text> : <Text color={theme.dim}>{brief?.pending ? BRIEF_PENDING : BRIEF_EMPTY}</Text>}</Box>
-        {brief?.text && brief.pending ? <Box key="brief-pending"><Text color={theme.dim}>{`新的${BRIEF_PENDING}`}</Text></Box> : null}
-        <Box key="brief-actions" marginTop={1} flexDirection="row">
-          <Button
-            key="brief-print"
-            label="印出完整回報"
-            autoFocus
-            onPress={async () => {
-              await $.ui.close({ id: BRIEF }).catch(() => {})
-              await printCard($, s)
-            }}
-          />
-          <Text color={theme.dim}>  Esc 關閉</Text>
-        </Box>
-      </Box>
-    )
-  })
-
-  // 待決's detail: what is to be done, the child's whole reply around the question, the advisor's suggestion and the precedent it leaned on.
-  on('ui.render', { component: 'Pane', requestId: DECIDE_DETAIL }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const theme = THEMES[appearance.theme]
-    const d = decisions().find(x => x.id === detailFor) ?? null
-    if (!d) return <Text color={theme.dim}>{DETAIL_GONE}</Text>
-    const paint = advicePaint(theme)
-    const busy = deciding.has(d.id)
-    const section = (key: string, label: string, body: any) => (
-      <Box key={key} flexDirection="column" marginTop={1} flexShrink={0}>
-        <Text color={theme.accent} bold>{label}</Text>
-        {body}
-      </Box>
-    )
-    const where = [d.repo, d.stage].filter(Boolean).join(' · ')
-    return (
-      <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
-        <Box key="detail-head" flexDirection="column" flexShrink={0}>
-          <Text color={theme.waiting} bold wrap="wrap">{d.action}</Text>
-          <Text wrap="wrap"><Text color={theme.fg} bold>{d.tag}</Text>{where ? <Text color={theme.dim}>{` · ${where}`}</Text> : null}</Text>
-          {d.failed && <Text color={theme.error} wrap="wrap">上次核可沒送進子 session，可以再核可一次或自己回</Text>}
-        </Box>
-        {section('detail-context', '子 session 的回覆', <Text color={theme.fg} wrap="wrap">{d.context || d.question}</Text>)}
-        {section('detail-advice', 'advisor 建議', <Text wrap="wrap">{adviceSegments({ state: 'ready', text: '', answer: d.answer, reason: d.reason }, d.options).map(p => <Text key={`detail-advice:${p.role}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}</Text>)}
-        {d.precedent && section('detail-precedent', '參考的前例', (
-          <Box key="detail-precedent-body" flexDirection="column">
-            <Text wrap="wrap"><Text color={theme.dim}>題目：</Text><Text color={theme.fg}>{d.precedent.question.replace(/\s+/g, ' ').trim()}</Text></Text>
-            <Text wrap="wrap"><Text color={theme.dim}>你當時回：</Text><Text color={theme.fg}>{d.precedent.answer.replace(/\s+/g, ' ').trim()}</Text></Text>
-          </Box>
-        ))}
-        <Box key="detail-actions" marginTop={1} flexDirection="row" flexShrink={0}>
-          {busy ? <Text color={theme.dim}>送出中…</Text> : (
-            <Box key="detail-buttons" flexDirection="row">
-              <Button key="detail-approve" hotkey="y" label={APPROVE} plain onPress={() => fromDetail($, id => approveCards($, id))} />
-              <Text color={theme.dim}> · </Text>
-              <Button key="detail-manual" hotkey="m" label={MANUAL} plain onPress={() => fromDetail($, id => manualCard($, id))} />
-            </Box>
-          )}
-          <Text color={theme.dim}>  Esc 關閉</Text>
-        </Box>
+        {briefOver}
       </Box>
     )
   })

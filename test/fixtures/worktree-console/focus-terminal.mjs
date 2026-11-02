@@ -59,7 +59,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
   assert.equal(launch.status, 0, launch.stderr);
   const capture = () => tmux("capture-pane", "-p", "-t", "fixture:0.0");
   const plain = text => text.replace(/\x1b\[[0-9;:]*m/g, "");
-  // The prompt row is empty, and inside the panel the framed card's name is the inverse focus run.
+  // The prompt row is empty, and inside the panel the chosen card's name, on the row its mark leads, is the inverse focus run.
   const ready = () => {
     const lines = tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
     const text = lines.map(plain);
@@ -67,8 +67,9 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
     if (!prompt || !/^❯\s*(?:│|$)/.test(prompt) || !text.some(line => line.includes("│q:"))) return false;
     return lines.some((line, i) => {
       const at = text[i].indexOf("│", 40);
-      if (at < 0 || !text[i].slice(at + 1).startsWith("║")) return false;
-      return /\x1b\[7m[^\x1b]*\S/.test(line);
+      if (at < 0 || !/^[·✢✳✶✻✽] /.test(text[i].slice(at + 1))) return false;
+      // The bold name's focus run opens with 1;7 and carries its own colour code.
+      return /\x1b\[(?:[0-9;]*;)?7m(?:\x1b\[[0-9;:]*m)*[^\x1b]*\S/.test(line);
     });
   };
   const typedZero = () => capture().split("\n").some(line => /^❯\s+0+\s*(?:│|$)/.test(line));
