@@ -117,11 +117,11 @@ test('/focus-show draws the sheet without the quote box: questions, options and 
     expect(shown.filter(el => el.text.split('\n').some(l => l.startsWith('>')))).toEqual([])
 
     for (const q of ['第 1 題：批改單這樣定稿嗎？', '待決定 1：/focus-show 要改到什麼程度？']) {
-      expect((await row.find({ type: 'Text', text: q }))?.props).toMatchObject({ color: 'remember', weight: 'bold' })
+      expect((await row.find({ type: 'Text', text: q }))?.props).toMatchObject({ color: 'remember', bold: true })
     }
     const letters = (await row.findAll({ type: 'Text' })).filter(el => /^[a-z]\.$/.test(el.text))
-    expect(letters.map(el => [el.text, el.props.color, el.props.weight])).toEqual([['a.', 'remember', 'bold'], ['b.', 'remember', 'bold']])
-    expect((await row.findAll({ type: 'Text', text: '重點' })).find(el => el.text === '重點')?.props.weight).toBe('bold')
+    expect(letters.map(el => [el.text, el.props.color, el.props.bold])).toEqual([['a.', 'remember', true], ['b.', 'remember', true]])
+    expect((await row.findAll({ type: 'Text', text: '重點' })).find(el => el.text === '重點')?.props.bold).toBe(true)
     const advice = (await row.findAll({ type: 'Text', text: '建議：b' })).at(0)
     expect(advice?.props.color).toBe('success')
 

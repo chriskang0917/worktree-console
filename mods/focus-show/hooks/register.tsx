@@ -59,11 +59,11 @@ export const register: Register = on => {
     const { Box, Text, Markdown } = $.ui.resolve(e)
     const blocks = layout(e.props.text)
     if (!blocks) return <Markdown text={unquote(e.props.text).join('\n')} />
-    const bold = (s: string) => s.split(/\*\*(.+?)\*\*/).map((part, i) => (i % 2 ? <Text weight="bold">{part}</Text> : part)).filter(part => part !== '')
+    const bold = (s: string) => s.split(/\*\*(.+?)\*\*/).map((part, i) => (i % 2 ? <Text bold>{part}</Text> : part)).filter(part => part !== '')
     const draw = (b: Block) => {
-      if (b.kind === 'question') return <Text weight="bold" color="remember">{b.text.replace(/\*\*/g, '')}</Text>
-      if (b.kind === 'option') return <Text>{'- '}<Text weight="bold" color="remember">{b.letter}</Text>{' '}{bold(b.text)}</Text>
-      if (b.kind === 'advice') return <Text color="success"><Text weight="bold">建議：</Text>{bold(b.text)}</Text>
+      if (b.kind === 'question') return <Text bold color="remember">{b.text.replace(/\*\*/g, '')}</Text>
+      if (b.kind === 'option') return <Text>{'- '}<Text bold color="remember">{b.letter}</Text>{' '}{bold(b.text)}</Text>
+      if (b.kind === 'advice') return <Text color="success"><Text bold>建議：</Text>{bold(b.text)}</Text>
       if (b.kind === 'rule') return <Text dimColor>{b.text}</Text>
       return <Markdown text={b.text} dimColor={b.kind === 'lead'} />
     }
