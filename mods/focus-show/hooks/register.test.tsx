@@ -30,7 +30,7 @@ test('/focus-show <代號> prints the report the focus band saved, as markdown i
   expect((await $.command.run({ command: 'focus-show', args: 'nope' })).text).toBe('[nope] 沒有可印的題目')
   for (const surface of ['terminal', 'desktop'] as const) {
     const row = await $.ui.mount({ plugin: 'focus-show', surface, component: 'CommandOutput', props: { command: 'focus-show', args: 'PROJ-6668', text: REPORT, isErrored: false } })
-    expect((await row.find({ type: 'Markdown' }))?.props.text).toBe(REPORT)
+    expect((await row.find({ type: 'Markdown' }))?.props.text).toBe(REPORT.replace(/^> /gm, ''))
     await row.unmount()
   }
 })
@@ -81,4 +81,63 @@ test('a focus.json with no version (worktree-console too old) prints one line sa
   const files = { '/tmp/wtc/focus.json': JSON.stringify({ current: 'pane-a@100', seen: { 'pane-a@100': 1 } }), '/tmp/wtc/show/perm@k1.md': '### 🔐 perm 等你授權', '/tmp/wtc/show/perm.md': '### 🔐 perm 等你授權' }
   if (!(await start($, on, files, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
   for (const args of ['perm k1', 'perm']) expect((await $.command.run({ command: 'focus-show', args })).text).toBe('[perm] 印不出題目：worktree-console 太舊，不認得這個檔案格式，請更新 worktree-console')
+})
+
+const SHEET = [
+  '### 💬 color 等你回應',
+  '',
+  '> 進度：正在查 /focus-show 印出的內容從哪裡產生。',
+  '>',
+  '> **第 1 題：批改單這樣定稿嗎？**',
+  '>',
+  '> **已決定**',
+  '> 1. 灰框是回報文字自己帶的，出處 `lib.mjs:1341`',
+  '>    - 每行都被加上引用符號',
+  '>',
+  '> ────────────────────',
+  '>',
+  '> **待決定 1：/focus-show 要改到什麼程度？**',
+  '>',
+  '> - **a.** 只拿掉引用框',
+  '> - **b.** 拿掉引用框並把**重點**上色',
+  '>',
+  '> 建議：b，只有 b 做得到',
+  '',
+  '| | 選項 |',
+  '| --- | --- |',
+  '| a | 全照建議並動工（建議） |',
+].join('\n')
+
+test('/focus-show draws the sheet without the quote box: questions, options and advice styled, the lead before the first question dim', async ($, on) => {
+  if (!(await start($, on, { '/tmp/wtc/show/color.md': SHEET }, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  expect((await $.command.run({ command: 'focus-show', args: 'color' })).text).toBe(SHEET)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const row = await $.ui.mount({ plugin: 'focus-show', surface, component: 'CommandOutput', props: { command: 'focus-show', args: 'color', text: SHEET, isErrored: false } })
+    const shown = [...(await row.findAll({ type: 'Text' })), ...(await row.findAll({ type: 'Markdown' }))]
+    expect(shown.filter(el => el.text.split('\n').some(l => l.startsWith('>')))).toEqual([])
+
+    for (const q of ['第 1 題：批改單這樣定稿嗎？', '待決定 1：/focus-show 要改到什麼程度？']) {
+      expect((await row.find({ type: 'Text', text: q }))?.props).toMatchObject({ color: 'remember', weight: 'bold' })
+    }
+    const letters = (await row.findAll({ type: 'Text' })).filter(el => /^[a-z]\.$/.test(el.text))
+    expect(letters.map(el => [el.text, el.props.color, el.props.weight])).toEqual([['a.', 'remember', 'bold'], ['b.', 'remember', 'bold']])
+    expect((await row.findAll({ type: 'Text', text: '重點' })).find(el => el.text === '重點')?.props.weight).toBe('bold')
+    const advice = (await row.findAll({ type: 'Text', text: '建議：b' })).at(0)
+    expect(advice?.props.color).toBe('success')
+
+    expect((await row.find({ type: 'Markdown', text: '進度：' }))?.props).toMatchObject({ text: '進度：正在查 /focus-show 印出的內容從哪裡產生。', dimColor: true })
+    expect((await row.find({ type: 'Markdown', text: '### 💬' }))?.props.dimColor).toBeFalsy()
+    expect((await row.find({ type: 'Text', text: '────' }))?.props.dimColor).toBe(true)
+    expect((await row.find({ type: 'Markdown', text: '**已決定**' }))?.props.text).toBe('**已決定**\n1. 灰框是回報文字自己帶的，出處 `lib.mjs:1341`\n   - 每行都被加上引用符號')
+    expect((await row.find({ type: 'Markdown', text: '| --- |' }))?.props).toMatchObject({ text: '| | 選項 |\n| --- | --- |\n| a | 全照建議並動工（建議） |' })
+    await row.unmount()
+  }
+})
+
+test('a report with no question line draws as markdown, only without the quote box', async ($, on) => {
+  const report = '### ⏸ color 回覆完畢\n\n> 定稿完成（動工）：**color.md**\n>\n> - a. 照做'
+  if (!(await start($, on, {}, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  const row = await $.ui.mount({ plugin: 'focus-show', surface: 'terminal', component: 'CommandOutput', props: { command: 'focus-show', args: 'color', text: report, isErrored: false } })
+  expect((await row.findAll({ type: 'Markdown' })).map(el => el.props.text)).toEqual(['### ⏸ color 回覆完畢\n\n定稿完成（動工）：**color.md**\n\n- a. 照做'])
+  await row.unmount()
 })
