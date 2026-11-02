@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.15.0
+
+- feat(focus): show the repo on pending cards, dim all but the nickname, spread the tabs and drop the panel background
+
 ## focus-show 0.4.0
 
 - feat(focus-show): draw the quote rail beside the child session's report again
