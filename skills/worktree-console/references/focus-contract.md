@@ -15,7 +15,7 @@
 ## 題目編號的傳法
 
 - 題目編號（`stopId`）只在 `scripts/focus.mjs` 算：一題的 key（session＋停下時間）算成一段短字串。`focusPayload` 把它放在每張卡片的 `id`，`saveFocus` 寫進 `currentId`／`queuedIds`。
-- 橫條印題目時送 `/focus-show <代號> <編號>`，編號就是那張卡片的 `id`；手打或按 Enter 印非橫條上的題目時只送 `/focus-show <代號>`。
+- 橫條印題目時送 `/focus-show <代號> <編號>`，編號就是那張卡片的 `id`；手打或在面板摘要浮層按 `p` 印非橫條上的題目時只送 `/focus-show <代號>`。
 - focus-show 只拿參數裡的編號跟 `currentId`、`queuedIds` 比對字串：等於 `currentId` 就印，在 `queuedIds` 裡回「這題已退回排隊，輪到時再印」，都不是回「這題已回覆或已交棒，略過」，讀不到 `focus.json` 回「這題已不在橫條上，略過」。
 - 公式不要改：還沒更新的 focus-show 0.1.2 自己用同一條公式算，改了它就悄悄印不出題目。
 

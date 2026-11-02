@@ -57,9 +57,10 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
         }
         if (counts[index]) {
           const prefix = ["reply", "reply", "archive"][index];
-          const header = lines.find(line => line.includes(`${prefix}0`) && /[║│]/.test(line));
+          const header = lines.find(line => line.includes(`${prefix}0`) && /^[·✢✳✶✻✽] /.test(line));
           assert.ok(header, lines.join("\n"));
-          assert.match(header, new RegExp(`已回覆  ${prefix}0${index === 2 ? '  取消封存' : ''}(?: +(?:規劃中|實作中|已推送))? +[║│]$`), "首卡標頭右側沒有覆畫的數字");
+          assert.match(header, new RegExp(`^[·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${prefix}0${index === 2 ? '  取消封存' : ''}(?: +(?:規劃中|實作中|已推送))?$`), "首卡標頭右側沒有覆畫的數字");
+          assert.ok(!/[╭╮╰╯║═]/.test(lines.join("\n")), "卡片不畫外框");
         } else {
           assert.ok(lines.some(line => line.includes("目前沒有符合條件的 session")), lines.join("\n"));
         }
@@ -123,7 +124,7 @@ test("真實終端：切分頁、重按同一分頁與上下移動後，選中�
   const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 151 });
   const width = text => [...text].reduce((sum, char) => sum + (/[^\x00-\x7f]/.test(char) ? 2 : 1), 0);
   const plain = text => text.replace(/\x1b\[[0-9;]*m/g, "");
-  // The shown tab (the label over the ━ underline), the framed card's name and every inverse run in the panel.
+  // The shown tab (the label over the ━ underline), the chosen card's name (its row led by the spinning mark) and every inverse run in the panel.
   const read = () => {
     // The panel's part of each row: after its dock divider; the prompt's own cursor block sits left of it.
     const parts = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n").map(line => line.indexOf("│", 40) < 0 ? "" : line.slice(line.indexOf("│", 40) + 1));
@@ -138,8 +139,8 @@ test("真實終端：切分頁、重按同一分頁與上下移動後，選中�
       start += width(segment) + 2;
       return hit;
     })?.replace(/^[qwe]: (\S+).*$/, "$1");
-    const selected = text.find(line => line.startsWith("║") && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
-    const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: text[i].startsWith("║"), label: plain(m[1]).trim() }))).filter(run => run.label);
+    const selected = text.find(line => /^[·✢✳✶✻✽] /.test(line) && /\b(reply|work)\d\b/.test(line))?.match(/\b(reply|work)\d\b/)[0];
+    const inverse = parts.flatMap((part, i) => [...part.matchAll(/\x1b\[(?:[0-9;]*;)?7m(.*?)\x1b\[(?:0|27)m/g)].map(m => ({ framed: /^[·✢✳✶✻✽] /.test(text[i]), label: plain(m[1]).trim() }))).filter(run => run.label);
     return { tab, selected, inverse };
   };
   const settled = (state, tab, card) => state.tab === tab && state.selected === card && state.inverse.length > 0 && state.inverse.every(run => run.framed && run.label === card);
@@ -203,6 +204,26 @@ test("真實終端：橫條標題列左邊狀態與代號、右邊「8: 延後�
     assert.match(head, /^ {2}│ ↩ 已回覆 {2}reply0 +8: 延後處理 · 9: 顯示問題$/, head);
     assert.equal(width(head), width(lines[rule]), `${head}\n${lines[rule]}`);
     assert.equal(lines.filter(line => line.includes("顯示問題")).length, 1);
+  } finally {
+    await terminal.close();
+  }
+});
+
+test("真實終端：卡片按 Enter 跳出摘要浮層、蓋在下方卡片上；Esc 把鍵盤交回輸入框後浮層收起", { timeout: 30_000 }, async () => {
+  const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 151 });
+  const open = frame => panel(frame).some(line => line.startsWith("── reply0 摘要"));
+  try {
+    await terminal.open();
+    terminal.tmux("send-keys", "-t", "fixture:0.0", "Enter");
+    const shown = await terminal.waitFor(open, "等待摘要浮層");
+    const lines = panel(shown);
+    const title = lines.findIndex(line => line.startsWith("── reply0 摘要"));
+    assert.ok(lines[title].includes("p 印出完整回報"), lines.join("\n"));
+    assert.ok(lines[title + 3].includes("還沒有摘要"), lines.join("\n"));
+    terminal.tmux("send-keys", "-t", "fixture:0.0", "Escape");
+    const closed = await terminal.waitFor(frame => !open(frame), "Esc 後浮層應收起");
+    assert.ok(panel(closed).some(line => /^ {2}1: ↩ 已回覆  reply1/.test(line)), panel(closed).join("\n"));
+    assert.ok(panel(closed).some(line => /^✻ {4}↩ 已回覆  reply0/.test(line)), panel(closed).join("\n"));
   } finally {
     await terminal.close();
   }
