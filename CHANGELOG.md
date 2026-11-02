@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.14.0
+
+- feat(focus): compact frameless cards with a spinning selection mark and in-pane popovers
+
 ## focus-show 0.3.0
 
 - feat(focus-show): draw the report without the quote box, with questions, options and advice in theme colours
