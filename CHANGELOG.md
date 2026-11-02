@@ -1,5 +1,9 @@
 # Changelog
 
+## focus-show 0.3.0
+
+- feat(focus-show): draw the report without the quote box, with questions, options and advice in theme colours
+
 ## 1.13.0
 
 - feat(focus): make the 待決 tab readable and keep each question on one side
