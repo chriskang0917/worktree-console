@@ -30,7 +30,7 @@ test('/focus-show <代號> prints the report the focus band saved, as markdown i
   expect((await $.command.run({ command: 'focus-show', args: 'nope' })).text).toBe('[nope] 沒有可印的題目')
   for (const surface of ['terminal', 'desktop'] as const) {
     const row = await $.ui.mount({ plugin: 'focus-show', surface, component: 'CommandOutput', props: { command: 'focus-show', args: 'PROJ-6668', text: REPORT, isErrored: false } })
-    expect((await row.find({ type: 'Markdown' }))?.props.text).toBe(REPORT.replace(/^> /gm, ''))
+    expect((await row.findAll({ type: 'Markdown' })).map(el => el.props.text).filter(t => !String(t).startsWith('▎'))).toEqual(['### 💬 PROJ-6668 等你回應', '你要 A、A＋另開後端票做 B，還是其他做法？', '- a. 這張票只在卡片上顯示「缺多少」（建議）\n- b. 卡片直接顯示狀態標籤'])
     await row.unmount()
   }
 })
@@ -138,6 +138,51 @@ test('a report with no question line draws as markdown, only without the quote b
   const report = '### ⏸ color 回覆完畢\n\n> 定稿完成（動工）：**color.md**\n>\n> - a. 照做'
   if (!(await start($, on, {}, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
   const row = await $.ui.mount({ plugin: 'focus-show', surface: 'terminal', component: 'CommandOutput', props: { command: 'focus-show', args: 'color', text: report, isErrored: false } })
-  expect((await row.findAll({ type: 'Markdown' })).map(el => el.props.text)).toEqual(['### ⏸ color 回覆完畢\n\n定稿完成（動工）：**color.md**\n\n- a. 照做'])
+  expect((await row.findAll({ type: 'Markdown' })).map(el => el.props.text).filter(t => !String(t).startsWith('▎'))).toEqual(['### ⏸ color 回覆完畢', '定稿完成（動工）：**color.md**\n\n- a. 照做'])
+  await row.unmount()
+})
+
+// The quoted part of a report: a Box that leaves two columns on its left, its first child the rail drawn over them.
+async function quoted(row: any) {
+  const boxes = await row.findAll({ type: 'Box' })
+  return boxes.filter((b: any) => b.props.paddingLeft === 2 && b.children[0]?.props?.position === 'absolute').map((b: any) => {
+    const [rail, ...body] = b.children
+    const text = (el: any): string => (typeof el === 'string' ? el : [el.props?.text ?? '', ...(el.children ?? []).map(text)].join(''))
+    return { box: b, rail, body: body.map(text).join('\n') }
+  })
+}
+
+const LONG = '這一行故意寫得很長'.repeat(20)
+
+test('/focus-show draws a rail left of every quoted line, blank and wrapped ones included, and none beside the heading or the table', async ($, on) => {
+  const sheet = SHEET.replace('> 進度：正在查 /focus-show 印出的內容從哪裡產生。', `> 進度：${LONG}`)
+  if (!(await start($, on, {}, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const row = await $.ui.mount({ plugin: 'focus-show', surface, component: 'CommandOutput', props: { command: 'focus-show', args: 'color', text: sheet, isErrored: false } })
+    const quotes = await quoted(row)
+    expect(quotes).toHaveLength(1)
+    const [{ rail, body }] = quotes
+    expect(rail.props).toMatchObject({ position: 'absolute', top: 0, bottom: 0, left: 0, overflow: 'hidden' })
+    expect(quotes[0].box.props.marginTop ?? 0).toBe(0)
+    const bars = rail.children[0]
+    expect(bars.props.dimColor).toBe(true)
+    expect(bars.type).toBe('Markdown')
+    const rows = (bars.props.text as string).split('  \n')
+    expect(rows.every((r: string) => r === '▎')).toBe(true)
+    expect(rows.length).toBeGreaterThan(sheet.split('\n').filter(l => l.startsWith('>')).join('').length)
+    for (const t of [`進度：${LONG}`, '第 1 題：批改單這樣定稿嗎？', '已決定', '────', '待決定 1：/focus-show 要改到什麼程度？', '只拿掉引用框', '建議：', 'b，只有 b 做得到']) expect(body).toContain(t)
+    for (const t of ['### 💬 color 等你回應', '| --- |', '全照建議並動工']) expect(body).not.toContain(t)
+    expect((await row.find({ type: 'Markdown', text: '### 💬' }))?.props.text).toBe('### 💬 color 等你回應')
+    await row.unmount()
+  }
+})
+
+test('a report with no question line, a ⏸ reply among them, also draws the rail beside its quoted lines and not its heading', async ($, on) => {
+  const report = `### ⏸ color 回覆完畢\n\n> 定稿完成（動工）：${LONG}\n>\n> - a. 照做`
+  if (!(await start($, on, {}, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  const row = await $.ui.mount({ plugin: 'focus-show', surface: 'terminal', component: 'CommandOutput', props: { command: 'focus-show', args: 'color', text: report, isErrored: false } })
+  const quotes = await quoted(row)
+  expect(quotes.map(q => q.body)).toEqual([`定稿完成（動工）：${LONG}\n\n- a. 照做`])
+  expect((quotes[0].rail.children[0].props.text as string).split('  \n').length).toBeGreaterThan(LONG.length)
   await row.unmount()
 })
