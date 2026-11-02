@@ -1,5 +1,9 @@
 # Changelog
 
+## focus-show 0.4.0
+
+- feat(focus-show): draw the quote rail beside the child session's report again
+
 ## 1.14.0
 
 - feat(focus): compact frameless cards with a spinning selection mark and in-pane popovers

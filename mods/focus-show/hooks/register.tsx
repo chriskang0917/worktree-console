@@ -58,7 +58,6 @@ export const register: Register = on => {
   on('ui.render', { component: 'CommandOutput', props: { command: 'focus-show' } }, async ($, e) => {
     const { Box, Text, Markdown } = $.ui.resolve(e)
     const blocks = layout(e.props.text)
-    if (!blocks) return <Markdown text={unquote(e.props.text).join('\n')} />
     const bold = (s: string) => s.split(/\*\*(.+?)\*\*/).map((part, i) => (i % 2 ? <Text bold>{part}</Text> : part)).filter(part => part !== '')
     const draw = (b: Block) => {
       if (b.kind === 'question') return <Text bold color="remember">{b.text.replace(/\*\*/g, '')}</Text>
@@ -67,28 +66,52 @@ export const register: Register = on => {
       if (b.kind === 'rule') return <Text dimColor>{b.text}</Text>
       return <Markdown text={b.text} dimColor={b.kind === 'lead'} />
     }
-    return <Box flexDirection="column">{blocks.map(b => <Box marginTop={b.gap ? 1 : 0}>{draw(b)}</Box>)}</Box>
+    const groups: Block[][] = []
+    for (const b of blocks) {
+      const last = groups.at(-1)
+      if (last && last[0]!.quoted === b.quoted) last.push(b)
+      else groups.push([b])
+    }
+    return (
+      <Box flexDirection="column">
+        {groups.map(group => {
+          const body = group.map((b, i) => <Box marginTop={i > 0 && b.gap ? 1 : 0}>{draw(b)}</Box>)
+          // A blank row of its own, not a margin: the Claude Code in a herdr tab drew the rail over the margin above the quote.
+          const gap = group[0]!.gap ? <Text> </Text> : null
+          if (!group[0]!.quoted) return <Box flexDirection="column">{gap}{body}</Box>
+          // One rail row per source character is more rows than the text can wrap to; the overflow is cut at the box's height.
+          const rows = group.reduce((n, b) => n + b.rows, 0)
+          return (
+            <Box flexDirection="column">
+              {gap}
+              <Box flexDirection="column" paddingLeft={2}>
+                <Box position="absolute" top={0} bottom={0} left={0} overflow="hidden"><Markdown dimColor text={Array(rows).fill('▎').join('  \n')} /></Box>
+                {body}
+              </Box>
+            </Box>
+          )
+        })}
+      </Box>
+    )
   })
 }
 
 type Shape =
   | { kind: 'markdown' | 'lead' | 'question' | 'advice' | 'rule'; text: string }
   | { kind: 'option'; letter: string; text: string }
-type Block = Shape & { gap: boolean }
+type Block = Shape & { gap: boolean; quoted: boolean; rows: number }
 
 const QUESTION = /^\*\*(第 ?\d+ ?題|待決定 ?\d+)[：:].*\*\*$/
 const OPTION = /^- \*\*([a-z])\.\*\* ?(.*)$/
 const ADVICE = /^建議[：:]\s*(.*)$/
 const RULE = /^─+$/
 
-// The console quotes every line of a child session's report; the quote box is what makes it grey.
-function unquote(text: string) {
-  return text.split('\n').map(l => l.replace(/^> ?/, ''))
-}
-
-// Question, option, advice and divider lines become their own blocks; everything else stays markdown, the lines before the first question dim. Null when there is no question line.
-function layout(text: string): Block[] | null {
-  const lines = unquote(text)
+// The console quotes every line of a child session's report with `>`: those lines draw with a rail on their left instead of the grey quote box.
+// Question, option, advice and divider lines become their own blocks and the lines before the first question dim; with no question line, every line stays markdown.
+function layout(text: string): Block[] {
+  const raw = text.split('\n')
+  const quoted = raw.map(l => l.startsWith('>'))
+  const lines = raw.map(l => l.replace(/^> ?/, ''))
   const fence = (l: string) => /^\s*(```|~~~)/.test(l)
   let fenced = false
   const inFence = lines.map(l => {
@@ -97,31 +120,40 @@ function layout(text: string): Block[] | null {
     return was || fence(l)
   })
   const first = lines.findIndex((l, i) => !inFence[i] && QUESTION.test(l.trim()))
-  if (first < 0) return null
   const blocks: Block[] = []
-  let chunk: { lines: string[]; dim: boolean; gap: boolean } | null = null
+  let chunk: { lines: string[]; dim: boolean; gap: boolean; quoted: boolean; rows: number } | null = null
   let gap = false
+  let carried = 0
   const flush = () => {
     if (!chunk) return
     while (chunk.lines.at(-1) === '') chunk.lines.pop()
-    blocks.push({ kind: chunk.dim ? 'lead' : 'markdown', text: chunk.lines.join('\n'), gap: chunk.gap })
+    blocks.push({ kind: chunk.dim ? 'lead' : 'markdown', text: chunk.lines.join('\n'), gap: chunk.gap, quoted: chunk.quoted, rows: chunk.rows })
     chunk = null
   }
   lines.forEach((l, i) => {
     const t = l.trim()
-    const own = inFence[i] ? null : ownBlock(t)
+    const size = raw[i]!.length + 1
+    const own = first < 0 || inFence[i] ? null : ownBlock(t)
     if (own) {
       flush()
-      blocks.push({ ...own, gap: gap && blocks.length > 0 })
+      blocks.push({ ...own, gap: gap && blocks.length > 0, quoted: quoted[i]!, rows: size + carried })
       gap = false
+      carried = 0
     } else if (t === '' && !inFence[i]) {
-      chunk?.lines.push('')
+      if (chunk) {
+        chunk.lines.push('')
+        chunk.rows += size
+      } else carried += size
       gap = true
     } else {
       const dim = i < first && !t.startsWith('#')
-      if (chunk && chunk.dim !== dim) flush()
-      chunk ??= { lines: [], dim, gap: gap && blocks.length > 0 }
+      if (chunk && (chunk.dim !== dim || chunk.quoted !== quoted[i])) flush()
+      if (!chunk) {
+        chunk = { lines: [], dim, gap: gap && blocks.length > 0, quoted: quoted[i]!, rows: carried }
+        carried = 0
+      }
       chunk.lines.push(l)
+      chunk.rows += size
       gap = false
     }
   })
