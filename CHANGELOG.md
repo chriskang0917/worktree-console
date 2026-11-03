@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.0
+
+- feat(focus): right-align the repo on every card tab, drop the stage and lead popovers with their content
+
 ## 1.15.0
 
 - feat(focus): show the repo on pending cards, dim all but the nickname, spread the tabs and drop the panel background
