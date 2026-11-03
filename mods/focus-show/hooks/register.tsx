@@ -119,6 +119,12 @@ function layout(text: string): Block[] {
     if (fence(l)) fenced = !fenced
     return was || fence(l)
   })
+  // The console leaves a markdown table outside the quote so it still draws as a table; one right after quoted lines is part of that message.
+  raw.forEach((l, i) => {
+    if (quoted[i] || inFence[i] || !l.trimStart().startsWith('|')) return
+    const before = raw.slice(0, i).findLastIndex(p => p.trim() !== '')
+    if (before >= 0 && quoted[before]) quoted[i] = true
+  })
   const first = lines.findIndex((l, i) => !inFence[i] && QUESTION.test(l.trim()))
   const blocks: Block[] = []
   let chunk: { lines: string[]; dim: boolean; gap: boolean; quoted: boolean; rows: number } | null = null

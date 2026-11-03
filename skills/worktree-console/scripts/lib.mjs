@@ -1442,6 +1442,7 @@ const NEXT_STEP = /下一步建議\s*(?:是)?\s*[:：]?\s*\**\s*([^。！!\n*]+)
 // `B`, `a`, `2` or a combination like `A＋C`, ending the suggestion or followed by punctuation.
 const REC_CODE = /^([A-Za-z]|\d{1,2})(?:\s*[＋+、和]\s*(?:[A-Za-z]|\d{1,2}))*(?=$|[\s，。,.：:；;！!）)]*$|[，。,.：:；;！!）)])/;
 const TOPIC = /^\s*\**\s*第\s*[一二三四五六七八九十\d]+\s*題/;
+const TOPIC_NUM = /第\s*([一二三四五六七八九十\d]+)\s*題/;
 const PICK = /選哪|哪一(?:個|種|項)|哪個|哪幾(?:個|項)|你要哪|選\s*\**\s*[A-Za-z\d]{1,2}\s*\**\s*還是|要選\s*\**\s*[A-Za-z\d]{1,2}(?![A-Za-z\d])/;
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 const SHEET_ITEM = /^(?:\*\*)?\d{1,2}(?:\*\*)?[.)、]\s/;
@@ -1548,12 +1549,44 @@ function optionLists(prose) {
   return lists;
 }
 
-// The option list of a text reply and which one the child suggested: { list, at, code, said }, `at` -1 when none is listed.
-// Only after the last「第 N 題」, and only when the child asks to pick (選哪個…), names a listed code as its suggestion or marks an option（建議）; a list of reasons or a yes/no question gives no options.
+// The option list of a text reply and which one the child suggested: { list, at, code, said, groups }, `at` -1 when none is listed.
+// Several「第 N 題」each listing options (a batch sheet aside) make `groups`, one per question; `list` is then 全照建議 and 要改, or nothing when a question has no suggestion.
 function textChoices(text) {
+  const groups = batchSheet(text) ? [] : topicGroups(proseLines(text));
+  if (groups.length < 2) return lastTopicChoices(text);
+  if (groups.some((g) => g.at < 0)) return { list: [], at: -1, code: null, said: undefined, groups };
+  const all = groups.map((g) => `${g.num} ${g.code}`).join("、");
+  const [one, two] = groups;
+  const other = one.list.find((o) => o.code !== one.code).code;
+  const list = [
+    { code: all, label: `全照建議（${all}）` },
+    { code: null, label: `要改：逐題回，例如「${one.num} ${other}、${two.num} ${two.code}」` },
+  ];
+  return { list, at: 0, code: all, said: undefined, groups };
+}
+
+// Each「第 N 題」 up to the next one that lists options: { num, list, at, code }, num as the child wrote it; one with no suggestion still counts, with `at` -1.
+function topicGroups(prose) {
+  const starts = prose.flatMap((l, i) => (TOPIC.test(l) ? [i] : []));
+  return starts
+    .map((s, k) => {
+      const part = prose.slice(s, starts[k + 1]);
+      const picked = pickChoices(part);
+      return { num: prose[s].match(TOPIC_NUM)[1], ...picked, list: picked.list.length > 0 ? picked.list : (optionLists(part).at(-1) ?? []) };
+    })
+    .filter((g) => g.list.length > 0);
+}
+
+// Only after the last「第 N 題」.
+function lastTopicChoices(text) {
   let prose = proseLines(text);
   const topic = prose.findLastIndex((l) => TOPIC.test(l));
   if (topic >= 0) prose = prose.slice(topic);
+  return pickChoices(prose);
+}
+
+// Only when the child asks to pick (選哪個…), names a listed code as its suggestion or marks an option（建議）; a list of reasons or a yes/no question gives no options.
+function pickChoices(prose) {
   const said = prose.filter((l) => !/[?？]/.test(l) && !optionLine(l)).map((l) => l.match(SUGGEST)?.[1].trim()).filter(Boolean).at(-1);
   const rec = said?.match(REC_CODE);
   const lists = optionLists(prose);
@@ -1594,7 +1627,7 @@ export function childAnswer(item, text) {
   const t = String(text ?? "").trim();
   const at = (s) => (/^[a-z]$/i.test(s) ? LETTERS.indexOf(s.toLowerCase()) : -1);
   if (item.kind === "menu") return t.split(/[；;]/).map((p) => (at(p.trim()) >= 0 ? String(at(p.trim()) + 1) : p.trim())).join("；");
-  if (item.kind === "text" && at(t) >= 0 && at(t) < (item.choices?.length ?? 0)) return item.choices[at(t)];
+  if (item.kind === "text" && at(t) >= 0 && at(t) < (item.choices?.length ?? 0)) return item.choices[at(t)] ?? t;
   return t;
 }
 
@@ -1778,9 +1811,11 @@ export function reportLines(row, status, session = null, { again = false } = {})
     const where = session?.handle ? `請到 herdr 分頁 ${session.handle} 看畫面後手動處理` : "請到 herdr 分頁看畫面後手動處理";
     return [...lines, `> herdr 回報 ${status.raw ?? "?"}，但讀不到這個 session 的對話紀錄，分不出在等什麼；${where}。`, "", "子 session 畫面：", "```", ...(screen.length > 0 ? screen : ["（讀不到畫面）"]), "```"];
   }
-  const { list, at } = status.kind === "waiting" ? textChoices(status.text) : { list: [] };
-  const choices = list.map((o, i) => `- ${letter(i)}. ${o.label || o.code}${i === at ? "（建議）" : ""}`);
-  return [...lines, ...quote(status.text || "（沒有輸出）"), ...(choices.length > 0 ? ["", ...choices] : [])];
+  const { list, at, groups = [] } = status.kind === "waiting" ? textChoices(status.text) : { list: [] };
+  const choices = (list, at) => list.map((o, i) => `- ${letter(i)}. ${o.label || o.code}${i === at ? "（建議）" : ""}`);
+  const blocks = groups.length > 0 ? groups.map((g) => [`第 ${g.num} 題`, ...choices(g.list, g.at)]) : [];
+  if (list.length > 0) blocks.push(groups.length > 0 ? ["整體", ...choices(list, -1)] : choices(list, at));
+  return [...lines, ...quote(status.text || "（沒有輸出）"), ...blocks.flatMap((b) => ["", ...b])];
 }
 
 export function reportBlock(reports, rows) {

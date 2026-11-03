@@ -154,7 +154,7 @@ async function quoted(row: any) {
 
 const LONG = '這一行故意寫得很長'.repeat(20)
 
-test('/focus-show draws a rail left of every quoted line, blank and wrapped ones included, and none beside the heading or the table', async ($, on) => {
+test('/focus-show draws a rail left of every quoted line, blank and wrapped ones included, and the table right after them, none beside the heading', async ($, on) => {
   const sheet = SHEET.replace('> 進度：正在查 /focus-show 印出的內容從哪裡產生。', `> 進度：${LONG}`)
   if (!(await start($, on, {}, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
   for (const surface of ['terminal', 'desktop'] as const) {
@@ -171,7 +171,8 @@ test('/focus-show draws a rail left of every quoted line, blank and wrapped ones
     expect(rows.every((r: string) => r === '▎')).toBe(true)
     expect(rows.length).toBeGreaterThan(sheet.split('\n').filter(l => l.startsWith('>')).join('').length)
     for (const t of [`進度：${LONG}`, '第 1 題：批改單這樣定稿嗎？', '已決定', '────', '待決定 1：/focus-show 要改到什麼程度？', '只拿掉引用框', '建議：', 'b，只有 b 做得到']) expect(body).toContain(t)
-    for (const t of ['### 💬 color 等你回應', '| --- |', '全照建議並動工']) expect(body).not.toContain(t)
+    for (const t of ['| --- |', '全照建議並動工']) expect(body).toContain(t)
+    expect(body).not.toContain('### 💬 color 等你回應')
     expect((await row.find({ type: 'Markdown', text: '### 💬' }))?.props.text).toBe('### 💬 color 等你回應')
     await row.unmount()
   }
@@ -184,5 +185,58 @@ test('a report with no question line, a ⏸ reply among them, also draws the rai
   const quotes = await quoted(row)
   expect(quotes.map(q => q.body)).toEqual([`定稿完成（動工）：${LONG}\n\n- a. 照做`])
   expect((quotes[0].rail.children[0].props.text as string).split('  \n').length).toBeGreaterThan(LONG.length)
+  await row.unmount()
+})
+
+const TABLED = [
+  '### ⏸ advisor 回覆完畢',
+  '',
+  '> **問題**：升版 commit 的 CI 停在「等待核准」。',
+  '',
+  '| PR | 升版 commit 的 CI |',
+  '|---|---|',
+  '| agent-skills #16 | b39b026 等待核准 |',
+  '',
+  '> **建議**：核准這兩次 CI 再合併。',
+].join('\n')
+
+test('a markdown table between quoted lines joins their rail: one quoted part runs over the text, the table and the text after it', async ($, on) => {
+  if (!(await start($, on, {}, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const row = await $.ui.mount({ plugin: 'focus-show', surface, component: 'CommandOutput', props: { command: 'focus-show', args: 'advisor', text: TABLED, isErrored: false } })
+    const quotes = await quoted(row)
+    expect(quotes).toHaveLength(1)
+    expect(quotes[0].body).toBe('**問題**：升版 commit 的 CI 停在「等待核准」。\n\n| PR | 升版 commit 的 CI |\n|---|---|\n| agent-skills #16 | b39b026 等待核准 |\n\n**建議**：核准這兩次 CI 再合併。')
+    const outside = (await row.findAll({ type: 'Markdown' })).map(el => String(el.props.text)).filter(t => !t.startsWith('▎') && !quotes[0].body.includes(t))
+    expect(outside).toEqual(['### ⏸ advisor 回覆完畢'])
+    await row.unmount()
+  }
+})
+
+const MENU = [
+  '### 💬 color 等你選擇',
+  '',
+  '> 第 1 題 **顏色**　警示用什麼顏色？',
+  '',
+  '| # | 選項 | 說明 |',
+  '| --- | --- | --- |',
+  '| a | **深琥珀** | 比紅色暗 |',
+  '| b | 其他 | 自行輸入 |',
+  '',
+  '> 第 2 題 **數字**　兩個數字分開算嗎？',
+  '',
+  '| # | 選項 | 說明 |',
+  '| --- | --- | --- |',
+  '| a | 分開 | 不重疊 |',
+  '| b | 其他 | 自行輸入 |',
+].join('\n')
+
+test('a menu question\'s option tables sit in the same column as its question and on the same rail, the last table included', async ($, on) => {
+  if (!(await start($, on, {}, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  const row = await $.ui.mount({ plugin: 'focus-show', surface: 'terminal', component: 'CommandOutput', props: { command: 'focus-show', args: 'color', text: MENU, isErrored: false } })
+  const quotes = await quoted(row)
+  expect(quotes).toHaveLength(1)
+  for (const t of ['警示用什麼顏色？', '| a | **深琥珀** | 比紅色暗 |', '兩個數字分開算嗎？', '| a | 分開 | 不重疊 |']) expect(quotes[0].body).toContain(t)
+  expect((quotes[0].rail.children[0].props.text as string).split('  \n').length).toBeGreaterThanOrEqual(MENU.split('\n').length - 2)
   await row.unmount()
 })
