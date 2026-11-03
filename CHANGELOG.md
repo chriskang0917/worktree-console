@@ -1,5 +1,13 @@
 # Changelog
 
+## focus-show 0.4.1
+
+- fix(console): list each question's options in multi-question reports and align tables with the quote in /focus-show
+
+## 1.16.1
+
+- fix(console): list each question's options in multi-question reports and align tables with the quote in /focus-show
+
 ## 1.16.0
 
 - feat(focus): right-align the repo on every card tab, drop the stage and lead popovers with their content
