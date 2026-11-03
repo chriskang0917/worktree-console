@@ -35,7 +35,8 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
         const expectedContent = frame => {
           const content = panel(frame).join("\n");
           if (!counts[index]) return content.includes("目前沒有符合條件的 session");
-          return content.includes(`${["reply", "reply", "archive"][index]}0`)
+          // 封存 below 46 columns keeps 4 cells of 代號 beside its repo.
+          return content.includes(index === 2 && cols < 46 ? "arc…  取消封存" : `${["reply", "reply", "archive"][index]}0`)
             && (index !== 1 || content.includes("── fixture"));
         };
         const frame = await terminal.press(key, expectedContent);
@@ -60,9 +61,11 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
         assert.ok(Math.max(...gaps) - Math.min(...gaps) <= 1, `分頁間距平均：${JSON.stringify(lines[row])}`);
         if (counts[index]) {
           const prefix = ["reply", "reply", "archive"][index];
-          const header = lines.find(line => line.includes(`${prefix}0`) && /^ [·✢✳✶✻✽] /.test(line));
+          const name = index === 2 && cols < 46 ? "arc…" : `${prefix}0`;
+          const header = lines.find(line => line.includes(name) && /^ [·✢✳✶✻✽] /.test(line));
           assert.ok(header, lines.join("\n"));
-          assert.match(header, new RegExp(`^ [·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${prefix}0${index === 2 ? '  取消封存' : ''}${index === 0 ? " +fixture" : "(?: +(?:規劃中|實作中|已推送))?"}$`), "首卡標頭右側沒有覆畫的數字");
+          assert.match(header, new RegExp(`^ [·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${name}${index === 2 ? '  取消封存' : ''} +(?:fixture|fix[a-z]*…)$`), "首卡標頭右側沒有覆畫的數字、不畫階段，repo 貼齊右端");
+          assert.equal([...header].reduce((n, c) => n + (/[\u3000-\u9fff\uff00-\uffef]/u.test(c) ? 2 : 1), 0), cols - 1, `repo 右端貼齊標題列右端：${JSON.stringify(header)}`);
           assert.ok(!/[╭╮╰╯║═]/.test(lines.join("\n")), "卡片不畫外框");
         } else {
           assert.ok(lines.some(line => line.includes("目前沒有符合條件的 session")), lines.join("\n"));
@@ -223,7 +226,7 @@ test("真實終端：卡片按 Enter 跳出摘要浮層、蓋在下方卡片上�
     const lines = panel(shown);
     const title = lines.findIndex(line => line.startsWith("── reply0 摘要"));
     assert.ok(lines[title].includes("p 印出完整回報"), lines.join("\n"));
-    assert.ok(lines[title + 3].includes("還沒有摘要"), lines.join("\n"));
+    assert.ok(lines[title + 1].includes("還沒有摘要"), lines.join("\n"));
     terminal.tmux("send-keys", "-t", "fixture:0.0", "Escape");
     const closed = await terminal.waitFor(frame => !open(frame), "Esc 後浮層應收起");
     assert.ok(panel(closed).some(line => /^ {3}1: ↩ 已回覆  reply1 +fixture$/.test(line)), panel(closed).join("\n"));
