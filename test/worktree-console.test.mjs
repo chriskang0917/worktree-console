@@ -40,6 +40,7 @@ import {
   collect,
   reportLines,
   sessionTag,
+  textOptionLabels,
 } from "../skills/worktree-console/scripts/lib.mjs";
 import { addDays, decisionCards, localDay, splitBatch } from "../skills/worktree-console/scripts/automation.mjs";
 import { FOCUS_WAIT_MS, emptyFocus, focusCancel, focusPick, focusReplied, focusSkip, focusStep, loadFocus, saveFocus, saveTitles } from "../skills/worktree-console/scripts/focus.mjs";
@@ -2957,6 +2958,86 @@ test("批改單分已決定與待決定：選項只截最後的 a、b、c 三項
   assert.equal(item.entries[0].suggest, "a");
   const report = reportLines(listRow("PROJ-102"), asking(SPLIT_SHEET));
   assert.deepEqual(report.slice(-3), ["- a. 全照建議並動工（建議）", "- b. 全照建議先不動工", "- c. 要改"]);
+});
+
+// SARA-990's report: 第 76、77、78 題 each list a, b, c with a（建議）.
+const THREE = fs.readFileSync(path.join(root, "test/fixtures/worktree-console/sara-990-three-questions.md"), "utf8");
+const UNSURE = THREE.replace("**第 77 題：要怎麼改？**\n- a（建議）：", "**第 77 題：要怎麼改？**\n- a：");
+const replyEnv = () => ({ WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" });
+
+test("多題訊息：回報底下的選項清單每題一組、組前標題號、（建議）標在該題的建議上，最下面一組整體選項", () => {
+  const report = reportLines(listRow("SARA-990"), asking(THREE));
+  const tail = report.slice(report.findLastIndex((l) => l.startsWith(">")) + 1);
+  assert.deepEqual(tail, [
+    "",
+    "第 76 題",
+    "- a. 先在示範面板加一顆「警示顏色（建議）",
+    "- b. 直接改深琥珀",
+    "- c. 維持紫紅",
+    "",
+    "第 77 題",
+    "- a. 點卡片只展開（建議）",
+    "- b. 維持現在的做法",
+    "- c. 點卡片照樣算讀過",
+    "",
+    "第 78 題",
+    "- a. 三個分頁不重疊（建議）",
+    "- b. 鈴鐺改回所有未讀通知",
+    "- c. 維持現在的做法",
+    "",
+    "整體",
+    "- a. 全照建議（76 a、77 a、78 a）",
+    "- b. 要改：逐題回，例如「76 b、77 a」",
+  ]);
+});
+
+test("多題訊息：橫條卡片與待決分頁只列整體選項，不列各題的選項；建議是 a", () => {
+  const [item] = pendingItems([listRow("SARA-990", session(asking(THREE)))]);
+  assert.equal(item.entries[0].options, "a 全照建議（76 a、…／b 要改：逐題回，例…");
+  assert.equal(item.entries[0].suggest, "a");
+  assert.deepEqual(textOptionLabels(THREE), ["全照建議（76 a、77 a、78 a）", "要改：逐題回，例如「76 b、77 a」"]);
+  const view = focusRun(replyWorld(THREE, "x"), { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) });
+  assert.deepEqual(view.sessions.find((s) => s.tag === "PROJ-102(question)").options, ["全照建議（76 a、…", "要改：逐題回，例…"]);
+});
+
+test("多題訊息：回 a 送出照各題建議展開的「76 a、77 a、78 a」，回 b 或其他文字原文照送", () => {
+  const all = replyWorld(THREE, "76 a、77 a、78 a");
+  assert.equal(run("console.mjs", ["reply", "--repo", app(), "--", "a"], { dir: all, env: replyEnv() }).lines[0], "[PROJ-102(question)] 已送出");
+  assert.deepEqual(sentTo(all), ["terminal send --terminal term_b --text 76 a、77 a、78 a --enter"]);
+  const named = replyWorld(THREE, "76 a、77 a、78 a");
+  assert.equal(run("console.mjs", ["reply", "--repo", app(), "--", "PROJ-102(question)", "a"], { dir: named, env: replyEnv() }).lines[0], "[PROJ-102(question)] 已送出");
+  assert.deepEqual(sentTo(named), ["terminal send --terminal term_b --text 76 a、77 a、78 a --enter"]);
+  const b = replyWorld(THREE, "b");
+  run("console.mjs", ["reply", "--repo", app(), "--", "b"], { dir: b, env: replyEnv() });
+  assert.deepEqual(sentTo(b), ["terminal send --terminal term_b --text b --enter"]);
+  const own = replyWorld(THREE, "76 b、77 a、78 c");
+  run("console.mjs", ["reply", "--repo", app(), "--", "76 b、77 a、78 c"], { dir: own, env: replyEnv() });
+  assert.deepEqual(sentTo(own), ["terminal send --terminal term_b --text 76 b、77 a、78 c --enter"]);
+});
+
+test("多題訊息有一題認不出建議：底下照樣每題一組但沒有整體選項，卡片與待決分頁不列選項，回單一字母不轉換", () => {
+  const report = reportLines(listRow("SARA-990"), asking(UNSURE));
+  assert.ok(report.includes("第 77 題"));
+  assert.ok(!report.includes("整體"));
+  assert.ok(!report.some((l) => l.includes("全照建議（")));
+  assert.equal(report.at(-1), "- c. 維持現在的做法");
+  const [item] = pendingItems([listRow("SARA-990", session(asking(UNSURE)))]);
+  assert.equal(item.entries[0].options, "—");
+  assert.deepEqual(item.choices, []);
+  assert.deepEqual(textOptionLabels(UNSURE), []);
+  assert.equal(childAnswer(item, "a"), "a");
+  const view = focusRun(replyWorld(UNSURE, "x"), { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) });
+  assert.deepEqual(view.sessions.find((s) => s.tag === "PROJ-102(question)").options, []);
+});
+
+test("批改單前面還有別的「第 N 題」帶選項：底下仍只列最後的 a、b、c，不分組、不加整體選項", () => {
+  const sheet = ["**第 3 題：先做哪個？**", "- a（建議）：先改 API", "- b：先改畫面", "", SPLIT_SHEET].join("\n");
+  const [item] = pendingItems([listRow("PROJ-102", session(asking(sheet)))]);
+  assert.deepEqual(item.choices, ["a", "b", "c"]);
+  assert.equal(item.entries[0].options, "a 全照建議並動工／b 全照建議先不動工／c 要改");
+  const report = reportLines(listRow("PROJ-102"), asking(sheet));
+  const tail = report.slice(report.findLastIndex((l) => l.startsWith(">")) + 1);
+  assert.deepEqual(tail, ["", "- a. 全照建議並動工（建議）", "- b. 全照建議先不動工", "- c. 要改"]);
 });
 
 test("批改單分已決定與待決定：中控台打「1 b；2 a」原文送到子 session、不轉成選項代號；只打「a」送最後那組的 a", () => {
