@@ -78,14 +78,15 @@ export const register: Register = on => {
           const body = group.map((b, i) => <Box marginTop={i > 0 && b.gap ? 1 : 0}>{draw(b)}</Box>)
           // A blank row of its own, not a margin: the Claude Code in a herdr tab drew the rail over the margin above the quote.
           const gap = group[0]!.gap ? <Text> </Text> : null
-          if (!group[0]!.quoted) return <Box flexDirection="column">{gap}{body}</Box>
-          // One rail row per source character is more rows than the text can wrap to; the overflow is cut at the box's height.
+          // One rail row per source character is more rows than the text can wrap to; the box cuts the rest only while the report fits the screen.
           const rows = group.reduce((n, b) => n + b.rows, 0)
+          // Past a report taller than the screen the rail runs on down, so lines outside the quote cover those two columns with spaces.
+          const left = group[0]!.quoted ? <Markdown dimColor text={Array(rows).fill('▎').join('  \n')} /> : <Text>{Array(rows).fill('  ').join('\n')}</Text>
           return (
             <Box flexDirection="column">
               {gap}
               <Box flexDirection="column" paddingLeft={2}>
-                <Box position="absolute" top={0} bottom={0} left={0} overflow="hidden"><Markdown dimColor text={Array(rows).fill('▎').join('  \n')} /></Box>
+                <Box position="absolute" top={0} bottom={0} left={0} overflow="hidden">{left}</Box>
                 {body}
               </Box>
             </Box>

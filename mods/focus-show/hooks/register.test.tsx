@@ -145,7 +145,7 @@ test('a report with no question line draws as markdown, only without the quote b
 // The quoted part of a report: a Box that leaves two columns on its left, its first child the rail drawn over them.
 async function quoted(row: any) {
   const boxes = await row.findAll({ type: 'Box' })
-  return boxes.filter((b: any) => b.props.paddingLeft === 2 && b.children[0]?.props?.position === 'absolute').map((b: any) => {
+  return boxes.filter((b: any) => b.props.paddingLeft === 2 && b.children[0]?.props?.position === 'absolute' && b.children[0].children[0]?.type === 'Markdown').map((b: any) => {
     const [rail, ...body] = b.children
     const text = (el: any): string => (typeof el === 'string' ? el : [el.props?.text ?? '', ...(el.children ?? []).map(text)].join(''))
     return { box: b, rail, body: body.map(text).join('\n') }
@@ -239,4 +239,51 @@ test('a menu question\'s option tables sit in the same column as its question an
   for (const t of ['警示用什麼顏色？', '| a | **深琥珀** | 比紅色暗 |', '兩個數字分開算嗎？', '| a | 分開 | 不重疊 |']) expect(quotes[0].body).toContain(t)
   expect((quotes[0].rail.children[0].props.text as string).split('  \n').length).toBeGreaterThanOrEqual(MENU.split('\n').length - 2)
   await row.unmount()
+})
+
+const PLAIN_MENU = [
+  '### 💬 import-v3 等你回應',
+  '',
+  `> 第 1 題：${LONG}`,
+  '> a) 不標',
+  '>',
+  '> 第 2 題：顯示哪一個？',
+  '',
+  '第 1 題',
+  '- a. 不標需提醒（建議）',
+  '- b. 照樣標需提醒',
+  '',
+  '第 2 題',
+  '- a. 顯示「上次上傳失敗」（建議）',
+  '- b. 顯示「有異常」',
+  '',
+  '整體',
+  '- a. 全照建議（1 a、2 a）',
+].join('\n')
+
+// A part outside the quote: the same two left columns, the absolute column over them blank instead of a rail.
+async function unquoted(row: any) {
+  const boxes = await row.findAll({ type: 'Box' })
+  return boxes.filter((b: any) => b.props.paddingLeft === 2 && b.children[0]?.props?.position === 'absolute' && b.children[0].children[0]?.type === 'Text').map((b: any) => {
+    const [cover, ...body] = b.children
+    const text = (el: any): string => (typeof el === 'string' ? el : [el.props?.text ?? '', ...(el.children ?? []).map(text)].join(''))
+    return { cover, body: body.map(text).join('\n') }
+  })
+}
+
+test('lines outside the quote start two columns in, in line with the quoted text, over a blank column that covers a rail run past a tall quote', async ($, on) => {
+  if (!(await start($, on, {}, { WORKTREE_CONSOLE_HOME: '/tmp/wtc' }))) return
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const row = await $.ui.mount({ plugin: 'focus-show', surface, component: 'CommandOutput', props: { command: 'focus-show', args: 'import-v3', text: PLAIN_MENU, isErrored: false } })
+    const quotes = await quoted(row)
+    expect(quotes).toHaveLength(1)
+    const outside = await unquoted(row)
+    expect(outside.map(o => o.body)).toEqual(['### 💬 import-v3 等你回應', '第 1 題\n- a. 不標需提醒（建議）\n- b. 照樣標需提醒\n\n第 2 題\n- a. 顯示「上次上傳失敗」（建議）\n- b. 顯示「有異常」\n\n整體\n- a. 全照建議（1 a、2 a）'])
+    const after = outside[1]
+    expect(after.cover.props).toMatchObject({ position: 'absolute', top: 0, bottom: 0, left: 0, overflow: 'hidden' })
+    const cover = (after.cover.children[0].children.join('') as string).split('\n')
+    expect(cover.every(r => r === '  ')).toBe(true)
+    expect(cover.length).toBeGreaterThanOrEqual(after.body.length)
+    await row.unmount()
+  }
 })

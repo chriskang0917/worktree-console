@@ -1,5 +1,9 @@
 # Changelog
 
+## focus-show 0.4.2
+
+- fix(focus-show): keep the quote rail off the blank lines between option groups and start lines outside the quote two columns in
+
 ## focus-show 0.4.1
 
 - fix(console): list each question's options in multi-question reports and align tables with the quote in /focus-show
