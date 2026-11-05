@@ -821,11 +821,6 @@ function toggleDetail($: EngineInterface, d: Decision) {
   togglePop($, 'decision', d.id)
 }
 
-const countsText = () => {
-  const count = (s: Status) => sessions().filter(x => !x.archived && x.status === s).length
-  return `工作中 ${count('執行中')} · 已回覆 ${count('回覆完畢')}`
-}
-
 const SUMMARY_POLL_MS = 3_000
 const SUMMARY_PANE = 'worktree-console-summary'
 const SUMMARY_LABEL = '摘要'
@@ -1312,12 +1307,6 @@ export const register: Register = on => {
         {recap.pending && <Box key="summary-pending"><Text color={theme.dim}>{`新的摘要${SUMMARY_PENDING}`}</Text></Box>}
       </Box>
     )
-  })
-
-  // The console's counts sit after 「auto mode on」 under the prompt box; any other session keeps the engine's hint.
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    if (!focus.active) return next(e)
-    return next({ ...e, props: { ...e.props, tail: countsText() } })
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

@@ -4,6 +4,10 @@
 
 - fix(focus-show): keep the quote rail off the blank lines between option groups and start lines outside the quote two columns in
 
+## 1.16.2
+
+- fix(focus): drop the 工作中 N · 已回覆 M counts from the console prompt hint
+
 ## focus-show 0.4.1
 
 - fix(console): list each question's options in multi-question reports and align tables with the quote in /focus-show
