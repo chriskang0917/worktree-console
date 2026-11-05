@@ -54,7 +54,7 @@ const STATS = '等待回應 3 | 等待授權 1 | 回覆完畢 1 | 執行中 1 | 
 const keyOf = (tag: string) => `${tag}@1`
 const idOf = (key: string) => `id-${key.replace('@', '-')}`
 
-type World = { focus: any; decideFails?: string[]; closes?: string[]; notes?: string[][]; afterAuto?: any; answer?: string; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: (string | undefined)[]; focused: string[] }
+type World = { focus: any; decideFails?: string[]; closes?: string[]; notes?: string[][]; afterAuto?: any; answer?: string; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: object[]; focused: string[] }
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
 const appearanceConfig = new WeakMap<World, AppearanceConfig | string>()
 
@@ -185,7 +185,7 @@ async function start($: any, on: On, world: World, env: Record<string, string> =
     return { text: world.writes[`${HOME}/show/${encodeURIComponent(tag)}${id ? `@${id}` : ''}.md`] ?? `[${tag}] 沒有可印的題目` }
   })
   on('ui.render', async ($, e) => {
-    if (e.component === 'PromptHint') world.hints.push((e.props as any).tail)
+    if (e.component === 'PromptHint') world.hints.push({ ...e.props })
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
@@ -570,23 +570,19 @@ test('漏印重送: 回完答案後 60 秒內同一 session 又出題 while the 
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')], ['focus-shown', next]])
 })
 
-test('the console\'s prompt hint ends with 「工作中 N · 已回覆 M」 after auto mode on: archived not counted, zeros written, kept fresh by the poll', async ($, on) => {
+test('the console\'s prompt hint is the engine\'s own: nothing is added after auto mode on, with sessions working, answered or none', async ($, on) => {
   const w = world(pending())
   const clock = await start($, on, w)
   for (const surface of ['terminal', 'desktop'] as const) {
     const h = await $.ui.mount({ ...hint, surface })
-    expect(w.hints.at(-1)).toBe('工作中 1 · 已回覆 1')
+    expect(w.hints.at(-1)).toEqual(hint.props)
+    expect(await h.find({ type: 'Text', text: 'engine' })).toBeDefined()
     await h.unmount()
   }
-  w.focus = { ...pending(), sessions: SESSIONS.map(s => (s.tag === 'logging' ? { ...s, status: '執行中', pending: false } : s)) }
-  await clock.advance(5_000)
-  const h = await $.ui.mount({ ...hint, surface: 'terminal' })
-  expect(w.hints.at(-1)).toBe('工作中 2 · 已回覆 1')
-  await h.unmount()
   w.focus = nothing()
   await clock.advance(5_000)
   const zero = await $.ui.mount({ ...hint, surface: 'terminal' })
-  expect(w.hints.at(-1)).toBe('工作中 0 · 已回覆 0')
+  expect(w.hints.at(-1)).toEqual(hint.props)
   await zero.unmount()
 })
 
@@ -1190,7 +1186,7 @@ test('outside Orca, or in a session that is not the console, nothing is drawn', 
   expect(await ui.find({ key: 'pane' })).toBeUndefined()
   await ui.unmount()
   const h = await $.ui.mount({ ...hint, surface: 'terminal' })
-  expect(w.hints.at(-1)).toBeUndefined()
+  expect(w.hints.at(-1)).toEqual(hint.props)
   await h.unmount()
 })
 
@@ -2225,13 +2221,10 @@ test('refined：焦點框待回覆分隔線、授權色左線、不重複階段�
   await ui.unmount()
 })
 
-test('refined：計數改用工作中與已回覆，選中問題不加粗', async ($, on) => {
+test('refined：選中問題不加粗', async ($, on) => {
   const w = world(pending())
   appearanceConfig.set(w, { motion: false })
   await start($, on, w)
-  const h = await $.ui.mount({ ...hint, surface: 'terminal' })
-  expect(w.hints.at(-1)).toBe('工作中 1 · 已回覆 1')
-  await h.unmount()
   await openPane($)
   const ui = await $.ui.mount({ ...pane(80), surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: 'Bash rm -rf build' }))?.props.bold).toBeFalsy()
