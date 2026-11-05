@@ -27,7 +27,7 @@ for (const name of [
   "the pane follows the band while it is open: a switch, a defer or a new question on the band reorders 待回覆 at once",
   "band 8 with text in the prompt: the text goes on as typed and nothing is deferred",
   "band: 8 only ever defers; nothing goes into the prompt box",
-  "the console's prompt hint ends with 「工作中 N · 已回覆 M」 after auto mode on: archived not counted, zeros written, kept fresh by the poll",
+  "the console's prompt hint is the engine's own: nothing is added after auto mode on, with sessions working, answered or none",
   "outside Orca, or in a session that is not the console, nothing is drawn",
   "pane footer on every tab, the empty frame too, is only the keys line, right under the last card with one blank row between and blank space below; no 執行中 or 回覆完畢",
   "cards past the pane height: the keys line scrolls with the cards, out of view until the end, then whole under the last card; every row above the end goes to cards",
