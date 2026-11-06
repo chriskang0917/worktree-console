@@ -20,6 +20,8 @@ const GOAL_SET = /Goal set/;
 const GOAL_EVIDENCE = "收工前須在本 session 重新執行並貼出 `/goal` 全部證據";
 const UNSUPPORTED = "自動交棒只支援 Orca、herdr 與 Herdr app：這個終端機三者都不是（沒有 HERDR_ENV=1、HC_TERMINAL_ID，也沒有 ORCA_TERMINAL_HANDLE），沒辦法自動開新 session。";
 const ENDED = new Set(["end_turn", "stop_sequence", "max_tokens", "refusal"]);
+const BACKGROUND_LAUNCHED = /^(?:Workflow launched in background\.|Async agent launched successfully\.)/;
+const TASK_ENDED = new Set(["completed", "failed", "killed", "stopped"]);
 const SELF = fileURLToPath(import.meta.url);
 export const CACHE_HANDOFF_TEXT = "（中控台自動交棒，不是使用者的新指令）你的 prompt 快取快到期了，接下來會換新 session 接手：先不要做任何事，直接結束這一輪。";
 export { KEEPALIVE_REPLY, KEEPALIVE_TEXT };
@@ -143,6 +145,25 @@ function textOf(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n");
+}
+
+// Background Bash is left out: dev servers and monitors never finish, so waiting on them would block every handoff.
+export function runningBackground(entries) {
+  const launched = new Set();
+  const ended = new Set();
+  for (const e of entries) {
+    const content = e.type === "user" ? e.message?.content : null;
+    if (Array.isArray(content)) {
+      for (const part of content) if (part.type === "tool_result" && BACKGROUND_LAUNCHED.test(textOf(part.content).trimStart())) launched.add(part.tool_use_id);
+    }
+    // A finished subagent's notice may be queued instead of sent as a user message.
+    const notice = e.type === "user" ? textOf(content) : e.type === "queue-operation" ? String(e.content ?? "") : e.attachment?.type === "queued_command" ? String(e.attachment.prompt ?? "") : "";
+    for (const m of notice.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)) {
+      const id = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(m[1])?.[1];
+      if (id && TASK_ENDED.has(/<status>([^<]+)<\/status>/.exec(m[1])?.[1])) ended.add(id);
+    }
+  }
+  return [...launched].filter((id) => !ended.has(id));
 }
 
 // The last `/handoff` the user typed (or the handoff skill the model loaded), by entry uuid.
@@ -341,6 +362,40 @@ function tellUser(message) {
   process.stdout.write(JSON.stringify({ systemMessage: message }));
 }
 
+const waitLimitMs = () => Number(process.env.AUTO_HANDOFF_WAIT_MS ?? 30 * 60 * 1000);
+
+// Closing the old tab kills its background work, so wait for it; past the limit hand off anyway and keep the old tab (st.keepOld).
+function waitForBackground(st, session, transcript) {
+  const running = runningBackground(readEntries(transcript)).length;
+  if (!running) {
+    delete st.waiting;
+    delete st.keepOld;
+    return false;
+  }
+  st.waiting ??= { since: Date.now() };
+  if (Date.now() - st.waiting.since >= waitLimitMs()) {
+    st.keepOld = running;
+    return false;
+  }
+  updateEvent(session, { status: "waiting", running });
+  if (!st.waiting.told) {
+    st.waiting.told = true;
+    tellUser(`自動交棒：背景還有 ${running} 個 workflow／subagent 在跑，跑完再自動交棒（最多等 ${Math.round(waitLimitMs() / 60000)} 分鐘）。`);
+  }
+  writeJson(stateFile(session), st);
+  return true;
+}
+
+function keepOldTab(ctx) {
+  updateEvent(ctx.session, { status: "done", keptOld: true });
+  tellUser(
+    [
+      `自動交棒完成：新分頁 ${ctx.newHandle} 已接手。`,
+      `背景還有 ${ctx.keepOld} 個 workflow／subagent 沒跑完（已等滿 ${Math.round(waitLimitMs() / 60000)} 分鐘），舊分頁保留，確認跑完後再自行關掉。`,
+    ].join("\n"),
+  );
+}
+
 // The tab this session runs in: herdr first, then the Herdr app, then Orca; null in any other terminal.
 export function terminalOf(env = process.env) {
   if (env.HERDR_ENV === "1") return { kind: "herdr", handle: env.HERDR_PANE_ID ?? null, paneKey: env.HERDR_PANE_ID ?? null };
@@ -487,6 +542,7 @@ async function orcaHandoff(ctx) {
   }
 
   if (isConsole) swapConsole(oldHandle, newTerm.handle);
+  if (ctx.keepOld) return keepOldTab(ctx);
   updateEvent(session, { status: "done" });
   const closer = spawn(orcaBin(), ["terminal", "close", "--terminal", oldHandle, "--tab", "--json"], { detached: true, stdio: "ignore" });
   closer.unref();
@@ -583,6 +639,7 @@ async function herdrHandoff(ctx) {
   }
 
   if (isConsole) swapConsole(oldHandle, pane);
+  if (ctx.keepOld) return keepOldTab(ctx);
   updateEvent(session, { status: "done" });
   const closer = spawn(herdrBin(), ["pane", "close", oldHandle], { detached: true, stdio: "ignore" });
   closer.unref();
@@ -681,6 +738,7 @@ async function herdrAppHandoff(ctx) {
   }
 
   if (isConsole) swapConsole(oldHandle, terminal);
+  if (ctx.keepOld) return keepOldTab(ctx);
   updateEvent(session, { status: "done" });
   const alone = (where.tab.terminals ?? []).length <= 1;
   const close = alone ? ["do", "tab.close", JSON.stringify({ id: where.tab.id, confirmed: true })] : ["do", "pane.close", JSON.stringify({ pane: where.tab.terminals.find((t) => t.terminal === oldHandle).pane })];
@@ -708,6 +766,7 @@ async function stop(input) {
       if (optedOut() || cfg.enabled !== true || !m || throwaway(input.cwd)) return;
       if (m.used < cfg.ratio * m.window) return;
     }
+    if (waitForBackground(st, session, input.transcript_path)) return;
     const last = input.last_assistant_message ?? lastAssistantText(entries);
     st.pending = {
       since: Date.now(),
@@ -752,6 +811,7 @@ async function stop(input) {
     fs.writeFileSync(note, fallbackNote(readEntries(input.transcript_path), input.cwd, p.goal));
     p.fallback = true;
   }
+  if (waitForBackground(st, session, input.transcript_path)) return;
   const reason = p.manual ? "使用者手動交棒" : p.cache ? "prompt 快取將到期" : `context 用量 ${p.percent}%（上限 ${p.window} tokens）`;
   if (!fs.readFileSync(note, "utf8").includes(APPENDIX)) {
     fs.appendFileSync(note, appendix({ reason, cwd: input.cwd, question: p.question, goal: p.goal }));
@@ -782,6 +842,7 @@ async function stop(input) {
     question: p.question,
     isConsole: isRegisteredConsole(oldHandle),
     cache: !!p.cache,
+    keepOld: st.keepOld ?? 0,
   });
 }
 
