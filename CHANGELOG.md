@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.3
+
+- fix(handoff): wait for background workflows and subagents before handing off
+
 ## focus-show 0.4.2
 
 - fix(focus-show): keep the quote rail off the blank lines between option groups and start lines outside the quote two columns in

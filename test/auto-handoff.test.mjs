@@ -388,3 +388,87 @@ test("Stop hook 記下這一輪結束的時間給中控台判斷；擋下要求�
   assert.equal(busy.run("stop").json?.decision, "block");
   assert.equal(fs.existsSync(ended(busy)), false, "擋下時這一輪還在跑，不記");
 });
+
+let toolSeq = 0;
+// A background tool call as it lands in the transcript: the assistant's tool_use, then the tool_result that says it was launched.
+const launch = (name, result) => {
+  const id = `toolu_bg${++toolSeq}`;
+  return [
+    { type: "assistant", uuid: `a${++uuid}`, entrypoint: "cli", message: { role: "assistant", model: HAIKU, content: [{ type: "tool_use", id, name, input: {} }] } },
+    { type: "user", uuid: `u${++uuid}`, entrypoint: "cli", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result }] } },
+  ];
+};
+const workflow = () => launch("Workflow", "Workflow launched in background. Task ID: wabc123\nSummary: plan-flow");
+const subagent = () => launch("Agent", [{ type: "text", text: "Async agent launched successfully. (This tool result is internal metadata)\nagentId: a1" }]);
+const shell = () => launch("Bash", "Command running in background with ID: b1. Output is being written to: /tmp/b1.output");
+const finished = ([, result], status = "completed") =>
+  user(`<task-notification> <task-id>wabc123</task-id> <tool-use-id>${result.message.content[0].tool_use_id}</tool-use-id> <status>${status}</status> <summary>done</summary></task-notification>`);
+
+test("背景 workflow 或背景 subagent 還在跑：用量過門檻先不交棒、提示一次並記 waiting；收到完成通知後才照常交棒", async () => {
+  for (const make of [workflow, subagent]) {
+    const bg = make();
+    const entries = [user("做事"), ...bg, reply(HAIKU, 90_000)];
+    const s = scenario(entries, { config: ON });
+    const wait = s.run("stop").json;
+    assert.match(wait?.systemMessage ?? "", /背景還有 1 個 workflow／subagent 在跑，跑完再自動交棒/);
+    assert.equal(s.event().status, "waiting");
+    assert.equal(s.run("stop").out, "", "同一次等待只提示一次");
+    assert.deepEqual(s.calls(), []);
+    s.write([...entries, finished(bg), reply(HAIKU, 91_000)]);
+    assert.equal(s.run("stop").json.decision, "block", "跑完後照常要求寫交棒說明");
+    writeNote(s);
+    s.run("stop");
+    assert.ok(await closed(s));
+  }
+});
+
+test("背景 subagent 的完成通知記成 queued_command attachment 或 queue-operation 時也算跑完", () => {
+  for (const wrap of [
+    (text) => ({ type: "attachment", uuid: `q${++uuid}`, attachment: { type: "queued_command", prompt: text, commandMode: "task-notification" } }),
+    (text) => ({ type: "queue-operation", operation: "enqueue", content: text }),
+  ]) {
+    const bg = subagent();
+    const s = scenario([user("做事"), ...bg, wrap(finished(bg).message.content), reply(HAIKU, 90_000)], { config: ON });
+    assert.equal(s.run("stop").json?.decision, "block");
+  }
+});
+
+test("寫完交棒說明時才啟動背景 workflow：關舊分頁前也先等它跑完", async () => {
+  const entries = [user("做事"), reply(HAIKU, 90_000)];
+  const s = scenario(entries, { config: ON });
+  assert.equal(s.run("stop").json.decision, "block");
+  const bg = workflow();
+  s.write([...entries, ...bg, reply(HAIKU, 91_000)]);
+  writeNote(s);
+  assert.match(s.run("stop").json?.systemMessage ?? "", /跑完再自動交棒/);
+  assert.deepEqual(s.calls(), []);
+  s.write([...entries, ...bg, finished(bg, "failed"), reply(HAIKU, 92_000)]);
+  s.run("stop");
+  assert.ok(await closed(s), "失敗也算結束");
+});
+
+test("手動交棒也等背景 workflow 跑完", async () => {
+  const bg = workflow();
+  const cmd = user("<command-name>/worktree-console:handoff</command-name>");
+  const entries = [user("做事"), ...bg, cmd, reply(HAIKU, 11_000, "收到。")];
+  const s = scenario(entries);
+  assert.match(s.run("stop").json?.systemMessage ?? "", /跑完再自動交棒/);
+  s.write([...entries, finished(bg), reply(HAIKU, 12_000)]);
+  assert.match(s.run("stop").json.reason, /使用者要求現在交棒/);
+});
+
+test("等超過上限仍沒跑完：照常交棒但舊分頁不關，並提示使用者", async () => {
+  const s = scenario([user("做事"), ...workflow(), reply(HAIKU, 90_000)], { config: ON, env: { AUTO_HANDOFF_WAIT_MS: "0" } });
+  assert.equal(s.run("stop").json.decision, "block");
+  writeNote(s);
+  const msg = s.run("stop").json?.systemMessage ?? "";
+  assert.match(msg, /舊分頁保留/);
+  assert.match(msg, /背景還有 1 個 workflow／subagent 沒跑完/);
+  assert.equal(await closed(s), false);
+  assert.ok(s.sends().length > 0, "新分頁照樣收到接手指令");
+});
+
+test("背景 Bash 指令（例如 dev server）不算，不擋交棒", async () => {
+  const s = scenario([user("做事"), ...shell(), reply(HAIKU, 90_000)], { config: ON });
+  assert.equal(s.run("stop").json.decision, "block");
+});
