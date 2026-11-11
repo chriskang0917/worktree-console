@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.4
+
+- fix(handoff): let follow-up instructions decide commit and push in the handoff /goal
+
 ## 1.16.3
 
 - fix(handoff): wait for background workflows and subagents before handing off
