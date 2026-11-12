@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.5
+
+- fix(template): make inferred non-goals and dropped decisions need confirmation on the batch sheet
+
 ## 1.16.3
 
 - fix(handoff): wait for background workflows and subagents before handing off
