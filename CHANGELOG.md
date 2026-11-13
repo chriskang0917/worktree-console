@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.17.0
+
+- feat(console): report how often each worktree asks you with console.mjs asks
+
 ## 1.16.5
 
 - fix(template): make inferred non-goals and dropped decisions need confirmation on the batch sheet
