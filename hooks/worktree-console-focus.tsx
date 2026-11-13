@@ -79,6 +79,9 @@ const REPO_MIN = 8
 const TAG_MIN = 4
 const SENT_MAX = 50
 const MISS_TOAST = 3
+const SHOW_LOG_MAX = 200
+// focus-show's answer when it cannot read focus.json's format; sending it again cannot help.
+const FORMAT_MISMATCH = '不認得這個檔案格式'
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
 const FOOTER = 'qwe 切分頁 · 1-9,0/↑↓ 選卡片'
 // Rows of the pane above the cards: the tab row and its underline.
@@ -542,8 +545,17 @@ function run($: EngineInterface, args: string[], timeoutMs = 60_000) {
   return $.process.run(['node', `${$.plugin.root}/skills/worktree-console/scripts/console.mjs`, ...args], { timeoutMs })
 }
 
+// TEMP: tells what an announced /focus-show got back when a print goes missing; remove once the cause is confirmed.
+async function logShow($: EngineInterface, entry: object) {
+  const file = `${focus.home}/focus-show-debug.jsonl`
+  let text = ''
+  try { text = await $.fs.read(file) } catch {}
+  const line = JSON.stringify({ at: await $.clock.now(), ...entry })
+  await $.fs.write(file, [...text.split('\n').filter(Boolean).slice(-SHOW_LOG_MAX + 1), line].join('\n') + '\n').catch(() => {})
+}
+
 // Prints one question's full report through the focus-show mod, never through the model. A stop counts as printed only when
-// /focus-show answered with its report; anything else is sent again on the next poll, with a toast after 3 misses in a row.
+// /focus-show answered with its report; anything else but the format line is sent again on the next poll, with a toast after 3 misses in a row.
 async function show($: EngineInterface, tag: string, key: string | null = null) {
   const s = sessions().find(x => x.tag === tag)
   if (!s || !focus.home) return
@@ -551,6 +563,7 @@ async function show($: EngineInterface, tag: string, key: string | null = null) 
   const id = key && s.id
   if (id) await $.fs.write(`${focus.home}/show/${encodeURIComponent(tag)}@${id}.md`, s.report)
   const res = await $.command.run({ command: 'focus-show', args: id ? `${tag} ${id}` : tag }).catch(() => null)
+  if (key) await logShow($, { key, tag, id, turning, answer: res ? (res.text === s.report ? 'report' : res.text ?? '') : null })
   if (!key) {
     if (!res) $.ui.toast('印不出題目：需要另外安裝 focus-show')
     return
@@ -560,11 +573,14 @@ async function show($: EngineInterface, tag: string, key: string | null = null) 
     await run($, ['focus-shown', key]).catch(() => {})
     return
   }
-  if (res?.text) return
-  const i = sent.indexOf(key)
-  if (i >= 0) sent.splice(i, 1)
+  if (res?.text?.includes(FORMAT_MISMATCH)) return
   const n = (misses.get(key) ?? 0) + 1
   misses.set(key, n)
+  // Each resent 略過 line lands in the conversation, so a stop answered with one 3 times is left to 9.
+  if (!res?.text || n < MISS_TOAST) {
+    const i = sent.indexOf(key)
+    if (i >= 0) sent.splice(i, 1)
+  }
   if (n !== MISS_TOAST) return
   const installed = res || (await $.command.list().catch(() => [])).some(c => c.name === 'focus-show')
   $.ui.toast(installed ? `[${tag}] 題目沒印出，按 9 印` : '印不出題目：需要另外安裝 focus-show')
