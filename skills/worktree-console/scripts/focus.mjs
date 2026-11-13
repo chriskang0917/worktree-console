@@ -35,7 +35,11 @@ export function saveFocus(state) {
     fs.mkdirSync(consoleHome(), { recursive: true });
     const currentId = state.current ? stopId(state.current) : null;
     const queuedIds = Object.keys(state.seen ?? {}).map(stopId).filter((id) => id !== currentId);
-    fs.writeFileSync(path.join(consoleHome(), FILE), JSON.stringify({ ...state, version: FOCUS_VERSION, currentId, queuedIds }));
+    // focus-show may read at any moment; a rename never shows it a half-written file.
+    const file = path.join(consoleHome(), FILE);
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ ...state, version: FOCUS_VERSION, currentId, queuedIds }));
+    fs.renameSync(tmp, file);
   } catch {}
 }
 

@@ -43,3 +43,34 @@ test("按 9 時橫條送出的編號就是卡片的 id，與 focus-show 0.1.2 �
   const { payload } = focusPayload([row], { current: null, queue: [], wait: null, state: { titles: {} } }, { home });
   assert.deepEqual(payload.sessions.map((s) => [s.key, s.id]), [["pane-a@100", OLD["pane-a@100"]]]);
 });
+
+// Answers as mods/focus-show does for an announced stop: a focus.json it cannot parse reads as the stop being off the band.
+function focusShowAnswer(tag, id) {
+  let state = null;
+  try {
+    state = JSON.parse(fs.readFileSync(path.join(home, "focus.json"), "utf8"));
+  } catch {}
+  if (!state) return `[${tag}] 這題已不在橫條上，略過`;
+  if (state.currentId === id) return "題目本身";
+  return state.queuedIds?.includes(id) ? `[${tag}] 這題已退回排隊，輪到時再印` : `[${tag}] 這題已回覆或已交棒，略過`;
+}
+
+test("題目還在橫條上時，/focus-show 剛好在 focus.json 寫到一半時讀，照樣印出題目而不是回略過", () => {
+  const state = { ...emptyFocus(), current: "pane-a@100", seen: { "pane-a@100": 1, "term_1@1760000000000": 2 } };
+  saveFocus(state);
+  const write = fs.writeFileSync;
+  let during = null;
+  fs.writeFileSync = (file, data, ...rest) => {
+    const text = String(data);
+    write(file, text.slice(0, Math.floor(text.length / 2)), ...rest);
+    during = focusShowAnswer("a", OLD["pane-a@100"]);
+    write(file, text, ...rest);
+  };
+  try {
+    saveFocus({ ...state, modsAt: 5 });
+  } finally {
+    fs.writeFileSync = write;
+  }
+  assert.equal(during, "題目本身");
+  assert.equal(focusShowAnswer("a", OLD["pane-a@100"]), "題目本身");
+});

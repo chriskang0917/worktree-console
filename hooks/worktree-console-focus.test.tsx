@@ -54,7 +54,7 @@ const STATS = '等待回應 3 | 等待授權 1 | 回覆完畢 1 | 執行中 1 | 
 const keyOf = (tag: string) => `${tag}@1`
 const idOf = (key: string) => `id-${key.replace('@', '-')}`
 
-type World = { focus: any; decideFails?: string[]; closes?: string[]; notes?: string[][]; afterAuto?: any; answer?: string; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: object[]; focused: string[] }
+type World = { focus: any; decideFails?: string[]; closes?: string[]; notes?: string[][]; afterAuto?: any; answer?: string; skips?: string[]; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: object[]; focused: string[] }
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
 const appearanceConfig = new WeakMap<World, AppearanceConfig | string>()
 
@@ -170,7 +170,8 @@ async function start($: any, on: On, world: World, env: Record<string, string> =
     world.writes[e.path] = e.text
     return { value: undefined }
   })
-  // Answers /focus-show as the focus-show mod does, with the saved report; `lost` drops that many as a busy console did, answering nothing.
+  // Answers /focus-show as the focus-show mod does, with the saved report; `lost` drops that many as a busy console did, answering nothing;
+  // `skips` answers its lines one per call before the report, as focus-show does when it finds the stop off the band.
   on('command.run', async (_$, e) => {
     if (world.showFails) throw new Error('no focus-show')
     if (e.command !== 'focus-show') return { text: '' }
@@ -180,6 +181,7 @@ async function start($: any, on: On, world: World, env: Record<string, string> =
       return {}
     }
     world.shown.push(e.args)
+    if (world.skips?.length) return { text: world.skips.shift() }
     if (world.answer) return { text: world.answer }
     const [tag, id] = e.args.split(' ')
     return { text: world.writes[`${HOME}/show/${encodeURIComponent(tag)}${id ? `@${id}` : ''}.md`] ?? `[${tag}] 沒有可印的題目` }
@@ -537,6 +539,62 @@ test('漏印重送: a rejected /focus-show is never reported as shown; it is tri
   await clock.advance(5_000)
   expect(w.toasts).toEqual(['印不出題目：需要另外安裝 focus-show'])
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
+})
+
+for (const skip of ['[perm] 這題已不在橫條上，略過', '[perm] 這題已回覆或已交棒，略過']) {
+  test(`漏印重送（回略過不重送）: a /focus-show answering 「${skip}」 is not reported as shown and goes again on the next poll; printed once, then focus-shown once`, async ($, on) => {
+    const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, skips: [skip] }
+    const clock = await start($, on, w)
+    const id = idOf(keyOf('perm'))
+    expect(w.shown).toEqual([`perm ${id}`])
+    expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
+    expect(JSON.parse(w.writes[`${HOME}/focus-show-debug.jsonl`]!.trim().split('\n').at(-1)!)).toMatchObject({ key: keyOf('perm'), id, turning: false, answer: skip })
+    await clock.advance(5_000)
+    expect(w.shown).toEqual([`perm ${id}`, `perm ${id}`])
+    expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
+    await clock.advance(5_000)
+    await clock.advance(5_000)
+    expect(w.shown).toHaveLength(2)
+    expect(w.toasts).toEqual([])
+  })
+}
+
+test('漏印重送: three 略過 answers in a row toast 「[perm] 題目沒印出，按 9 印」 once and stop sending it by itself; 9 still prints it and reports it shown', async ($, on) => {
+  const skip = '[perm] 這題已不在橫條上，略過'
+  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, skips: [skip, skip, skip] }
+  const clock = await start($, on, w)
+  const id = idOf(keyOf('perm'))
+  await clock.advance(5_000)
+  expect(w.toasts).toEqual([])
+  await clock.advance(5_000)
+  expect(w.toasts).toEqual(['[perm] 題目沒印出，按 9 印'])
+  for (let i = 0; i < 3; i++) await clock.advance(5_000)
+  expect(w.shown).toEqual(Array(3).fill(`perm ${id}`))
+  expect(w.toasts).toEqual(['[perm] 題目沒印出，按 9 印'])
+  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
+  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
+  await ui.press({ key: 'show' })
+  await ui.unmount()
+  expect(w.shown).toEqual(Array(4).fill(`perm ${id}`))
+  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
+})
+
+test('漏印重送: the report coming back between 略過 answers resets the count, so two more misses after it do not toast', async ($, on) => {
+  const skip = '[perm] 這題已不在橫條上，略過'
+  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, skips: [skip, skip] }
+  const clock = await start($, on, w)
+  const id = idOf(keyOf('perm'))
+  await clock.advance(5_000)
+  await clock.advance(5_000)
+  expect(w.shown).toEqual(Array(3).fill(`perm ${id}`))
+  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
+  w.skips = [skip, skip]
+  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
+  await ui.press({ key: 'show' })
+  await ui.press({ key: 'show' })
+  await ui.unmount()
+  expect(w.shown).toEqual(Array(5).fill(`perm ${id}`))
+  expect(w.toasts).toEqual([])
 })
 
 test('a /focus-show that cannot read focus.json\'s format answers one line: polls never send it again, and it is not reported as shown', async ($, on) => {
