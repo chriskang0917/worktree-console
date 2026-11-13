@@ -153,7 +153,7 @@ async function start($: any, on: On, world: World, env: Record<string, string> =
     world.toasts.push(e.text)
     return { value: undefined }
   })
-  on('ui.focus', async (_$, e) => {
+  on('ui.focus', { plugin: '*' }, async (_$, e) => {
     world.focused.push((e as any).element ?? (e as any).key)
     return {}
   })
@@ -184,8 +184,9 @@ async function start($: any, on: On, world: World, env: Record<string, string> =
     const [tag, id] = e.args.split(' ')
     return { text: world.writes[`${HOME}/show/${encodeURIComponent(tag)}${id ? `@${id}` : ''}.md`] ?? `[${tag}] 沒有可印的題目` }
   })
-  on('ui.render', async ($, e) => {
+  on('ui.render', async ($, e, next) => {
     if (e.component === 'PromptHint') world.hints.push({ ...e.props })
+    if (e.component === 'AbovePrompt' && e.plugin !== PLUGIN) return next(e)
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
