@@ -32,7 +32,7 @@ async function start($: any, on: On, world: World, env: Record<string, string> =
     world.opened.push(e)
     return { value: { isPlaced: true } }
   })
-  on('ui.render', async ($, e) => {
+  on('ui.render', { plugin: PLUGIN }, async ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })

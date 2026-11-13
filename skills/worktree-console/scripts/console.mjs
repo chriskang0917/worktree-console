@@ -64,6 +64,7 @@ import {
   STOPPED,
 } from "./lib.mjs";
 import { advisorHome, advisorState } from "./advice.mjs";
+import { asksReport } from "./asks.mjs";
 import { consoleSessionOk, focusCancel, focusOwnerOk, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
 import { approve, takeOver } from "./automation.mjs";
@@ -104,6 +105,7 @@ const { values, positionals } = parseArgs({
     from: { type: "string" },
     file: { type: "string" },
     since: { type: "string" },
+    days: { type: "string" },
     session: { type: "string" },
     owner: { type: "string" },
     claim: { type: "boolean", default: false },
@@ -1367,8 +1369,19 @@ function prune() {
   if (failed) process.exit(1);
 }
 
+function asks() {
+  let lines;
+  try {
+    lines = asksReport({ since: values.since ?? null, days: values.days === undefined ? null : Number(values.days) });
+  } catch (e) {
+    fail(e.message);
+  }
+  for (const l of lines) console.log(l);
+}
+
 const commands = {
   board,
+  asks,
   todo,
   "after-send": afterSend,
   detail,
@@ -1407,7 +1420,7 @@ const commands = {
   prune,
   stage: stageCommand,
 };
-const OFFLINE = new Set(["report", "distilled", "herdr-report", "focus", "prompt", "prune", "stage"]);
+const OFFLINE = new Set(["asks", "report", "distilled", "herdr-report", "focus", "prompt", "prune", "stage"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);
 if (!OFFLINE.has(command)) manager();
 await commands[command]();
