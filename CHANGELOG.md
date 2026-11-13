@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.18.1
+
+- fix(focus): resend a /focus-show that answers without the report and write focus.json atomically
+
 ## 1.18.0
 
 - feat(handoff): let the /goal opening skip ⚠️ human-judged criteria and list them for the user
