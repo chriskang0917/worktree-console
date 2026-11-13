@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.18.0
+
+- feat(handoff): let the /goal opening skip ⚠️ human-judged criteria and list them for the user
+
 ## 1.17.0
 
 - feat(console): report how often each worktree asks you with console.mjs asks
