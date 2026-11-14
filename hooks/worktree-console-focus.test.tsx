@@ -2716,6 +2716,26 @@ test('band countdown: 6 sends at once, and the countdown does not send it a seco
   expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
 })
 
+test('band countdown: a draft in the console prompt holds the countdown where it is; once the box is sent or cleared it counts on from there and sends at 0', async ($, on) => {
+  const w = world(withAdvice(AUTO))
+  w.afterAuto = focusOf('logging', [])
+  let draft = ''
+  on('prompt.read', async () => ({ value: { text: draft, cursor: draft.length } }))
+  const clock = await start($, on, w)
+  await clock.advance(5_000)
+  draft = 'focusui 先'
+  await clock.advance(30_000)
+  expect(autoCalls(w)).toEqual([])
+  const held = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
+  expect(await countdownText(held)).toBe('代回倒數 10 秒：b 橫條也改清單 | 6: 立即送出 · 7: 取消')
+  await held.unmount()
+  draft = ''
+  await clock.advance(10_000)
+  expect(autoCalls(w)).toEqual([])
+  await clock.advance(1_000)
+  expect(autoCalls(w)).toEqual([['focus-auto', keyOf('focusui')]])
+})
+
 test('band countdown: 7 cancels — focus-cancel, the row goes back to 建議, and nothing is sent when the time would have run out', async ($, on) => {
   const w = world(withAdvice(AUTO))
   const clock = await start($, on, w)

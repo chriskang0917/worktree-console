@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.19.2
+
+- fix(advisor): hold the countdown while you type and never count down a message with two or more questions
+
 ## 1.19.1
 
 - fix(summary): skip the turn a keepalive or cache handoff message starts and hide a recap that is not the card's stop

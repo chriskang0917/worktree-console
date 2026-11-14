@@ -2,10 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asksSeveral } from "./lib.mjs";
 
 export const ADVICE_PENDING = "建議產生中…";
 // Only these keep a question from auto-reply; older 範圍與目標／產品行為 labels go through the trial like any other.
-const PRINCIPLE_LABEL = { 不可逆: "不可逆或對外動作", 沒有前例: "沒有前例", 批改單: "批改單，你看過再回" };
+const PRINCIPLE_LABEL = { 不可逆: "不可逆或對外動作", 沒有前例: "沒有前例", 批改單: "批改單，你看過再回", 多題: "一則多題，你看過再回" };
 const COUNTDOWN_SECONDS = 15;
 // A stop and its prediction are written by different processes; the stop time can trail the prediction by this much.
 const STOP_SLACK_MS = 120_000;
@@ -77,7 +78,7 @@ export function latestFor(byPath, target, since) {
 export const isSheet = (p) => p?.principle === "批改單" || String(p?.question ?? "").split("\n")[0].includes("批改單");
 
 // An older label written over a missing precedent still means 沒有前例.
-const blocking = (p) => (isSheet(p) ? "批改單" : PRINCIPLE_LABEL[p.principle] ? p.principle : p.principle && !p.precedent ? "沒有前例" : null);
+const blocking = (p) => (isSheet(p) ? "批改單" : asksSeveral(p.question) ? "多題" : PRINCIPLE_LABEL[p.principle] ? p.principle : p.principle && !p.precedent ? "沒有前例" : null);
 
 // The words of the option an a／b／c answer picks, else the reason: what the countdown says it will send.
 export function answerMeaning(question, answer, reason) {
