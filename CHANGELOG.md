@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.19.1
+
+- fix(summary): skip the turn a keepalive or cache handoff message starts and hide a recap that is not the card's stop
+
 ## 1.19.0
 
 - feat(asks): show how long each worktree's questions waited for you

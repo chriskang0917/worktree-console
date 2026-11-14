@@ -14,6 +14,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const PENDING_SLACK_MS = 60_000;
 const INPUT_MAX = 40_000;
 const TAIL_BYTES = 2 * 1024 * 1024;
+const REPLY_WAIT_MS = 5_000;
+const REPLY_POLL_MS = 100;
 const TERMINAL_ENV = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HC_TERMINAL_ID", "HC_SCOPE", "ORCA_TERMINAL_HANDLE", "ORCA_PANE_KEY"];
 
 export const SYSTEM_PROMPT = [
@@ -85,7 +87,7 @@ export function readSummary(home, handle, now = Date.now()) {
   const saved = readJson(summaryFile(home, handle));
   const marker = readJson(pendingFile(home, handle));
   const pending = !!marker && now - (marker.since ?? 0) < (marker.timeoutMs ?? timeoutMs()) + PENDING_SLACK_MS;
-  return { text: saved?.text ?? null, at: saved?.at ?? null, sessionId: saved?.sessionId ?? null, pending };
+  return { text: saved?.text ?? null, at: saved?.at ?? null, sessionId: saved?.sessionId ?? null, replyAt: saved?.replyAt ?? null, pending };
 }
 
 function textOf(content) {
@@ -94,7 +96,7 @@ function textOf(content) {
   return content.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n");
 }
 
-function lastReply(transcript) {
+function transcriptTail(transcript) {
   let text = "";
   try {
     const fd = fs.openSync(transcript, "r");
@@ -108,17 +110,39 @@ function lastReply(transcript) {
       fs.closeSync(fd);
     }
   } catch {
-    return "";
+    return [];
   }
-  const lines = text.split("\n").reverse();
-  for (const line of lines) {
+  const entries = [];
+  for (const line of text.split("\n")) {
     try {
       const e = JSON.parse(line);
-      const t = e.type === "assistant" && !e.isSidechain ? textOf(e.message?.content).trim() : "";
-      if (t) return t;
+      if (e && !e.isSidechain) entries.push(e);
     } catch {}
   }
+  return entries;
+}
+
+function lastReply(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const t = entries[i].type === "assistant" ? textOf(entries[i].message?.content).trim() : "";
+    if (t) return t;
+  }
   return "";
+}
+
+// The entry herdr's stateStartedAt is read from, once the transcript has it: the newest user or assistant entry of the main
+// conversation, when that is the reply itself. The Stop hook runs before the reply is written, so this waits for it.
+function replyTime(transcript, reply, waitMs = REPLY_WAIT_MS) {
+  if (!transcript) return null;
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const entries = transcriptTail(transcript);
+    const e = entries.findLast((x) => x.type === "user" || x.type === "assistant");
+    const t = e?.type === "assistant" && textOf(e.message?.content).trim() === reply ? Date.parse(e.timestamp ?? "") : NaN;
+    if (!Number.isNaN(t)) return t;
+    if (Date.now() >= deadline) return null;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, REPLY_POLL_MS);
+  }
 }
 
 function clipInput(text) {
@@ -156,6 +180,7 @@ export function runSummary({ home = summaryHome(), handle, sessionId, since }) {
   const marker = readJson(pendingFile(home, handle));
   if (!marker || marker.since !== since) return { ok: false, reason: "superseded" };
   const model = marker.model ?? summaryModel(home);
+  const replyAt = replyTime(marker.transcript, marker.reply ?? "");
   const { cmd, args } = modelCommand(model);
   const env = { ...process.env, WORKTREE_CONSOLE_SUMMARY_MODEL: model, WORKTREE_CONSOLE_SUMMARY_CHILD: "1" };
   for (const k of TERMINAL_ENV) delete env[k];
@@ -173,7 +198,7 @@ export function runSummary({ home = summaryHome(), handle, sessionId, since }) {
     } catch {}
   }
   const saved = readJson(summaryFile(home, handle));
-  if (ok && !(saved?.since > since)) writeJson(summaryFile(home, handle), { text, at: Date.now(), since, sessionId, handle, model });
+  if (ok && !(saved?.since > since)) writeJson(summaryFile(home, handle), { text, at: Date.now(), since, sessionId, handle, model, replyAt });
   if (readJson(pendingFile(home, handle))?.since === since) fs.rmSync(pendingFile(home, handle), { force: true });
   return { ok, reason, text };
 }
@@ -210,7 +235,8 @@ function consoleTakeover(handle) {
   }
 }
 
-// Stop hook: only a child session the console manages, never the console; writes the marker, starts the worker, prints nothing.
+// Stop hook: only a child session the console manages, never the console, and not a turn the watcher's keepalive or cache handoff
+// message started, so the recap of the question it kept alive stays; writes the marker, starts the worker, prints nothing.
 export async function stopHook(input, { home = summaryHome(), now = Date.now() } = {}) {
   if (process.env.WORKTREE_CONSOLE_SUMMARY_CHILD === "1") return null;
   const handle = terminalHandle();
@@ -218,10 +244,13 @@ export async function stopHook(input, { home = summaryHome(), now = Date.now() }
   if (consoleHandles(home).includes(handle) || consoleTakeover(handle)) return null;
   const { managedTarget } = await import("./log.mjs");
   if (!managedTarget(realpath(input.cwd), handle)) return null;
-  const reply = String(input.last_assistant_message ?? "").trim() || (input.transcript_path ? lastReply(input.transcript_path) : "");
+  const entries = input.transcript_path ? transcriptTail(input.transcript_path) : [];
+  const { lastInstruction, watcherPrompt } = await import("./lib.mjs");
+  if (watcherPrompt(lastInstruction(entries))) return null;
+  const reply = String(input.last_assistant_message ?? "").trim() || lastReply(entries);
   if (!reply) return null;
   const since = now;
-  writeJson(pendingFile(home, handle), { since, sessionId: input.session_id, model: summaryModel(home), timeoutMs: timeoutMs(), reply });
+  writeJson(pendingFile(home, handle), { since, sessionId: input.session_id, model: summaryModel(home), timeoutMs: timeoutMs(), reply, transcript: input.transcript_path ?? null });
   const child = spawn(process.execPath, [SELF, "run", "--handle", handle, "--session", input.session_id, "--since", String(since)], {
     detached: true,
     stdio: "ignore",
