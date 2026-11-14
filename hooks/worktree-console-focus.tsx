@@ -379,7 +379,7 @@ let bandKey: string | null = null
 const warned = new Set<string>()
 let inHerdr = false
 // One question counts down at a time, the one on the band; a question counted once is never counted again (sent, cancelled or refused).
-let countdown: { key: string; tag: string; answer: string; meaning: string; until: number; left: number } | null = null
+let countdown: { key: string; tag: string; answer: string; meaning: string; until: number; left: number; held?: boolean } | null = null
 let countdownTick: { cancel(): void } | null = null
 const counted = new Set<string>()
 let sending = false
@@ -622,9 +622,18 @@ async function syncCountdown($: EngineInterface) {
 }
 
 // Each second: the row's number goes down; at 0 the answer goes, but not while the console's own turn runs (the user may be answering it).
+// A draft in the console's prompt holds the number where it is; once the box is sent or cleared it counts on from there.
 async function tickCountdown($: EngineInterface) {
   if (!countdown) return
-  countdown.left = Math.max(0, Math.ceil((countdown.until - (await $.clock.now())) / 1000))
+  const typing = !!(await $.prompt.read().catch(() => null))?.text?.trim()
+  const now = await $.clock.now()
+  if (!countdown) return
+  if (typing || countdown.held) {
+    countdown.until = now + countdown.left * 1000
+    countdown.held = typing
+    return
+  }
+  countdown.left = Math.max(0, Math.ceil((countdown.until - now) / 1000))
   $.ui.invalidate('ui.render')
   if (countdown.left === 0 && !turning) await sendAuto($, 'tick')
 }

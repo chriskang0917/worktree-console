@@ -1549,6 +1549,12 @@ function optionLists(prose) {
   return lists;
 }
 
+// Two or more「第 N 題」, or two or more lettered option lists (a numbered background list is not a question).
+export function asksSeveral(text) {
+  const prose = proseLines(text);
+  return prose.filter((l) => TOPIC.test(l)).length >= 2 || optionLists(prose).filter((g) => family(g[0].code) !== "digit").length >= 2;
+}
+
 // The option list of a text reply and which one the child suggested: { list, at, code, said, groups }, `at` -1 when none is listed.
 // Several「第 N 題」each listing options (a batch sheet aside) make `groups`, one per question; `list` is then 全照建議 and 要改, or nothing when a question has no suggestion.
 function textChoices(text) {

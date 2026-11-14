@@ -71,6 +71,24 @@ test("代回倒數：題型已開放、不是原則性的題目帶 auto（答案
   assert.equal(sessionOf().advice.auto, undefined, "沒有 state.json（舊版 advisor）不倒數");
 });
 
+test("代回倒數：一則訊息兩題以上（兩個「第 N 題」或選單兩組 a、b）不倒數、不代回，建議行註明原則性；只有一題照舊倒數", () => {
+  const twoTopics = "**第 2 題：要不要先跑測試？**\n\n- **a.** 先跑測試：比較穩\n- **b.** 直接繼續\n\n建議：a\n\n**第 3 題：要不要補文件？**\n\n- **a.** 補：README 一起改\n- **b.** 不補\n\n建議：a";
+  const twoMenus = "要不要先跑測試？\na. 先跑測試：比較穩\nb. 直接繼續\n\n要不要補文件？\na. 補：README 一起改\nb. 不補";
+  for (const [kind, question] of [["text", twoTopics], ["menu", twoMenus]]) {
+    write([{ ...start("p1"), kind, question }, done("p1", { answer: "全照建議" })], [], { types: { 流程關卡: "open" } });
+    const advice = sessionOf().advice;
+    assert.equal(advice.auto, undefined, `${kind} 兩題不倒數`);
+    assert.equal(advice.principle, "一則多題，你看過再回");
+    assert.equal(advice.text, "建議：全照建議，改動小，先跑最快（原則性：一則多題，你看過再回）");
+  }
+  const oneMenu = "要不要先跑測試？\na. 先跑測試：比較穩\nb. 直接繼續";
+  write([{ ...start("p1"), kind: "menu", question: oneMenu }, done("p1")], [], { types: { 流程關卡: "open" } });
+  assert.deepEqual(sessionOf().advice.auto, { answer: "a", meaning: "先跑測試", seconds: 15 }, "選單一題照舊倒數");
+  const oneWithBackground = "**第 2 題：要不要先跑測試？**\n\n1. 改了兩個檔\n2. 都有測試\n\n- **a.** 先跑測試：比較穩\n- **b.** 直接繼續\n\n建議：a";
+  write([{ ...start("p1"), question: oneWithBackground }, done("p1")], [], { types: { 流程關卡: "open" } });
+  assert.deepEqual(sessionOf().advice.auto, { answer: "a", meaning: "先跑測試", seconds: 15 }, "背景用 1. 2. 條列的單題照舊倒數");
+});
+
 test("橫條建議：預測失敗、背景沒回報逾時、🔐 等你授權、⏸ 回覆完畢都不顯示建議行", () => {
   write([start("p1"), { event: "fail", ref: "p1", at: iso(1), error: "timeout" }]);
   assert.equal(sessionOf().advice, null);
