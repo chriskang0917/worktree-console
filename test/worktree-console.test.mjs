@@ -1,7 +1,7 @@
 import "./fixtures/isolate-env.mjs";
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -403,6 +403,43 @@ test("UX5 狀態改變：先貼該次變動的回報，接著貼包含全部 ses
   assert.equal(t.by["PROJ-101"][0], "⏸ 回覆完畢");
   assert.equal(t.by["PROJ-102(perm)"][0], "🔐 等待授權");
   assert.match(lines.at(-1), /^baseline: /);
+});
+
+const WATCH_DIGEST = "在做什麼：做登入頁\n做了什麼：登入頁做好了\n下一步：接著做註冊頁";
+const WATCH_DIGEST_MD = ["", "── 摘要 ──", "", "**在做什麼**\u3000\u3000做登入頁  ", "**做了什麼**\u3000\u3000登入頁做好了  ", "**下一步**\u3000\u3000\u3000接著做註冊頁"];
+const doneLogin = () => fake({ sequence: [() => {}, (ps) => Object.assign(agentIn(ps, "proj-101-login")[0], { state: "done", lastAssistantMessage: "登入頁做好了。" })] });
+function digestHome(text, { pending = false } = {}) {
+  const home = fs.mkdtempSync(path.join(tmp, "digest-home-"));
+  fs.mkdirSync(path.join(home, "summaries"));
+  if (text) fs.writeFileSync(path.join(home, "summaries", "term_a.json"), JSON.stringify({ text, at: 1, since: 1, sessionId: "s", handle: "term_a" }));
+  if (pending) fs.writeFileSync(path.join(home, "summaries", "term_a.pending.json"), JSON.stringify({ since: Date.now(), timeoutMs: 120_000 }));
+  return home;
+}
+
+test("watcher 回報附摘要（沒有 mods）：同一題原文在上、跟原本一字不差，最下面接四層摘要；沒有摘要時跟原本一樣", () => {
+  const dir = doneLogin();
+  const [plainReport] = blocks(run("watch.mjs", ["--baseline", baselineWith()], { dir }).out).reports;
+  const withDigest = blocks(run("watch.mjs", ["--baseline", baselineWith()], { dir, env: { WORKTREE_CONSOLE_HOME: digestHome(WATCH_DIGEST) } }).out).reports[0];
+  assert.equal(plainReport[0], "### ⏸ PROJ-101 回覆完畢");
+  assert.deepEqual(withDigest.slice(0, plainReport.length), plainReport);
+  assert.deepEqual(withDigest.slice(plainReport.length), WATCH_DIGEST_MD);
+});
+
+test("watcher 回報附摘要：這次的摘要還在產生時先等它（最多 15 秒），好了才回報，原文下面接摘要", async () => {
+  const dir = doneLogin();
+  const home = digestHome(null, { pending: true });
+  const child = spawn(process.execPath, [path.join(scripts, "watch.mjs"), "--baseline", baselineWith()], { cwd: os.tmpdir(), env: { ...process.env, ...runEnv(dir), WORKTREE_CONSOLE_HOME: home } });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  const done = new Promise((resolve) => child.on("close", resolve));
+  await new Promise((r) => setTimeout(r, 1_500));
+  assert.equal(out, "", "摘要產生中時還沒回報");
+  fs.writeFileSync(path.join(home, "summaries", "term_a.json"), JSON.stringify({ text: WATCH_DIGEST, since: 1, sessionId: "s", handle: "term_a" }));
+  fs.rmSync(path.join(home, "summaries", "term_a.pending.json"));
+  await done;
+  const [report] = blocks(out.trim()).reports;
+  assert.equal(report[0], "### ⏸ PROJ-101 回覆完畢");
+  assert.deepEqual(report.slice(-WATCH_DIGEST_MD.length), WATCH_DIGEST_MD);
 });
 
 test("UX5 baseline：狀態沒變不觸發，之後的轉換才觸發；轉成執行中或閒置不吵你", () => {

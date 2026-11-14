@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 import { writeManaged } from "../skills/worktree-console/scripts/log.mjs";
 import { CACHE_HANDOFF_TEXT, KEEPALIVE_REPLY, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../hooks/auto-handoff.mjs";
 import { modelCommand, pendingFile, readSummary, summaryFile, summaryModel, usageFile } from "../skills/worktree-console/scripts/summary.mjs";
-import { focusPayload } from "../skills/worktree-console/scripts/focus.mjs";
+import { DIGEST_WAIT_MS, focusPayload, holdForDigest } from "../skills/worktree-console/scripts/focus.mjs";
+import { reportLines } from "../skills/worktree-console/scripts/lib.mjs";
+import { decisionCards } from "../skills/worktree-console/scripts/automation.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const script = path.join(root, "skills", "worktree-console", "scripts", "summary.mjs");
@@ -176,7 +178,8 @@ test("背景呼叫：claude -p 帶設定的模型、JSON 輸出、不載工具�
     assert.equal(at("--settings"), '{"disableAllHooks":true}');
     for (const flag of ["--disable-slash-commands", "--strict-mcp-config", "--no-session-persistence"]) assert.ok(args.includes(flag), flag);
     const system = at("--system-prompt");
-    for (const rule of ["前提：", "問題：", "沒有就整行省略", "解法：", "建議：", "每行只講一件事", "不超過 30 個中文字", "主動語態", "不要自己替開發者選"]) assert.ok(system.includes(rule), rule);
+    for (const rule of ["在做什麼：", "卡在哪：", "沒有卡住就整層省略", "做了什麼：", "要你決定：", "最多 2 行", "接在同一行，寫成「建議：", "下一步：", "一行只講一件事", "不用「；」串兩件事", "不寫 a、b、c", "不超過 30 個中文字", "主動語態", "不要自己替開發者選"]) assert.ok(system.includes(rule), rule);
+    for (const old of ["前提：", "問題：", "解法："]) assert.ok(!system.includes(old), old);
   } finally {
     if (prev !== undefined) process.env.WORKTREE_CONSOLE_SUMMARY_CMD = prev;
   }
@@ -317,4 +320,132 @@ test("小視窗摘要：replyAt 跟卡片停下時間對不上、也沒在產生
   fs.rmSync(pendingFile(home, "term_a"));
   fs.writeFileSync(summaryFile(home, "term_a"), JSON.stringify({ text: "舊格式的摘要。", sessionId: "s" }));
   assert.deepEqual(brief(session(T0 + 120_000)), { text: "舊格式的摘要。", pending: false });
+});
+
+const LAYERED = ["在做什麼：改登入頁的表單驗證", "卡在哪：註冊頁共用同一個驗證元件", "做了什麼：改好登入頁，單元測試全過", "要你決定：要不要一起改註冊頁", "建議：另開一張票"].join("\n");
+const DIGEST_MD = [
+  "",
+  "── 摘要 ──",
+  "",
+  "**在做什麼**\u3000\u3000改登入頁的表單驗證  ",
+  "**卡在哪**\u3000\u3000\u3000註冊頁共用同一個驗證元件  ",
+  "**做了什麼**\u3000\u3000改好登入頁，單元測試全過",
+  "",
+  "**▶ 要你決定**\u3000要不要一起改註冊頁，建議：另開一張票",
+];
+const ASK = "登入頁改好了。\n\n要不要也改註冊頁？";
+const askSession = (since, { herdr = true, status = { kind: "waiting", text: ASK }, agent = {} } = {}) => ({ n: null, handle: "term_a", paneKey: "pane-a", since, agent: { state: "done", stateStartedAt: since, ...(herdr ? { herdr: { raw: "done" } } : {}), ...agent }, status });
+const askRow = (s) => ({ path: "/wt/a", repo: "app", label: "PROJ-2", ticket: "PROJ-2", branch: "proj-2", title: "x", stage: "實作中", sessions: [s] });
+const plainView = { current: null, queue: [], wait: null, state: { titles: {} } };
+const reportOf = (home, s) => focusPayload([askRow(s)], plainView, { home }).payload.sessions[0].report;
+const original = (s) => reportLines(askRow(s), s.status, s).join("\n");
+function saveRecap(home, text, extra = {}) {
+  fs.mkdirSync(path.join(home, "summaries"), { recursive: true });
+  fs.writeFileSync(summaryFile(home, "term_a"), JSON.stringify({ text, since: T0 + 9_500, replyAt: T0 + 9_000, sessionId: "s", ...extra }));
+}
+
+test("回報附摘要：/focus-show 印的回報上面是原文（跟原本一字不差），最下面接「── 摘要 ──」與四層，標籤粗體、▶ 要你決定前空一行、建議接在同一行", () => {
+  const home = freshHome();
+  const s = askSession(T0 + 9_000);
+  const before = original(s);
+  assert.equal(reportOf(home, s), before, "還沒有摘要時跟原本一樣");
+  saveRecap(home, LAYERED);
+  const report = reportOf(home, s);
+  assert.ok(report.startsWith(`${before}\n`), report);
+  assert.deepEqual(report.slice(before.length + 1).split("\n"), DIGEST_MD);
+});
+
+test("回報附摘要：沒有卡住就省略「卡在哪」；不用回答時第四層是「下一步」，不加 ▶ 也不空行；舊標籤（前提、問題、解法、建議）照新標籤印", () => {
+  const home = freshHome();
+  const s = askSession(T0 + 9_000);
+  saveRecap(home, "在做什麼：改登入頁\n卡在哪：無\n做了什麼：改好了\n下一步：接著改註冊頁");
+  assert.deepEqual(reportOf(home, s).slice(original(s).length + 1).split("\n"), ["", "── 摘要 ──", "", "**在做什麼**\u3000\u3000改登入頁  ", "**做了什麼**\u3000\u3000改好了  ", "**下一步**\u3000\u3000\u3000接著改註冊頁"]);
+  saveRecap(home, "前提：改登入頁\n問題：註冊頁共用元件\n解法：改好了\n建議：要你決定：要不要改註冊頁");
+  assert.deepEqual(reportOf(home, s).slice(original(s).length + 1).split("\n").slice(3), ["**在做什麼**\u3000\u3000改登入頁  ", "**卡在哪**\u3000\u3000\u3000註冊頁共用元件  ", "**做了什麼**\u3000\u3000改好了", "", "**▶ 要你決定**\u3000要不要改註冊頁"]);
+});
+
+test("回報附摘要：replyAt 對不上這次停下（舊摘要）、這次的摘要還在產生、摘要沒有標籤或是空的，回報都跟原本一模一樣，不顯示錯誤", () => {
+  const home = freshHome();
+  saveRecap(home, LAYERED);
+  const later = askSession(T0 + 120_000);
+  assert.equal(reportOf(home, later), original(later), "replyAt 對不上：舊摘要不印");
+  const now = askSession(T0 + 9_000);
+  fs.writeFileSync(pendingFile(home, "term_a"), JSON.stringify({ since: Date.now(), timeoutMs: 120_000 }));
+  assert.equal(reportOf(home, askSession(T0 + 120_000)), original(askSession(T0 + 120_000)), "新的還在產生：不印舊的");
+  assert.equal(reportOf(home, askSession(T0 + 120_000, { herdr: false })), original(askSession(T0 + 120_000, { herdr: false })), "Orca 產生中：不印舊的");
+  fs.rmSync(pendingFile(home, "term_a"));
+  for (const text of ["沒有標籤的一段摘要。", ""]) {
+    saveRecap(home, text);
+    assert.equal(reportOf(home, now), original(now), JSON.stringify(text));
+  }
+});
+
+test("回報附摘要：🔐 授權、選單題、⚠️ 異常的回報不變，就算有對得上的摘要也不附", () => {
+  const home = freshHome();
+  saveRecap(home, LAYERED);
+  const cases = [
+    { kind: "permission", tool: "Bash", input: "rm -rf build" },
+    { kind: "waiting", text: "", menu: [{ question: "放哪裡？", header: "位置", options: [{ label: "主檔" }, { label: "reference" }] }] },
+    { kind: "anomaly", raw: "blocked", screen: ["?"] },
+  ];
+  for (const status of cases) {
+    const s = askSession(T0 + 9_000, { status });
+    assert.equal(reportOf(home, s), original(s), status.kind);
+    assert.doesNotMatch(reportOf(home, s), /摘要/);
+  }
+  const menu = askSession(T0 + 9_000, { agent: { toolName: "AskUserQuestion", state: "blocked" } });
+  assert.doesNotMatch(reportOf(home, menu), /── 摘要 ──/);
+});
+
+test("橫條換題等摘要：這次的摘要還在產生時，換上橫條 15 秒內不印；好了就印（附摘要），逾時只印原文；沒在產生就馬上印", () => {
+  const home = freshHome();
+  const s = askSession(T0 + 9_000);
+  const view = (currentAt) => ({ current: { key: "pane-a@x", item: { session: s, row: askRow(s) } }, queue: [], state: { currentAt } });
+  const prev = process.env.WORKTREE_CONSOLE_HOME;
+  process.env.WORKTREE_CONSOLE_HOME = home;
+  try {
+    const now = Date.now();
+    assert.equal(holdForDigest(view(now), { home, now }), false, "沒有在產生");
+    fs.mkdirSync(path.join(home, "summaries"), { recursive: true });
+    fs.writeFileSync(pendingFile(home, "term_a"), JSON.stringify({ since: now, timeoutMs: 120_000 }));
+    assert.equal(holdForDigest(view(now - 1_000), { home, now }), true, "產生中、換上來 1 秒");
+    assert.equal(holdForDigest(view(now - DIGEST_WAIT_MS), { home, now }), false, "等滿 15 秒就印原文");
+    assert.equal(DIGEST_WAIT_MS, 15_000);
+    saveRecap(home, LAYERED);
+    assert.equal(holdForDigest(view(now - 1_000), { home, now }), false, "這次的摘要好了（replyAt 對上）就印");
+  } finally {
+    if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
+    else process.env.WORKTREE_CONSOLE_HOME = prev;
+  }
+});
+
+test("待決詳情：卡片帶這次停下的摘要（digest）給詳情最下面畫；replyAt 對不上或沒有摘要時是 null", () => {
+  const home = freshHome();
+  const card = (s) => {
+    const entry = { key: "pane-a@x", paneKey: "pane-a", tag: "PROJ-2", item: { row: askRow(s), session: s, entries: [{ question: "要不要也改註冊頁？" }] } };
+    return decisionCards([{ entry, prediction: { id: "p1", verb: "push", question: "要 push 嗎？", answer: "a", reason: "r", tier: 2 } }], () => [], home)[0];
+  };
+  assert.equal(card(askSession(T0 + 9_000)).digest, null);
+  saveRecap(home, LAYERED);
+  assert.equal(card(askSession(T0 + 9_000)).digest, LAYERED);
+  assert.ok(card(askSession(T0 + 9_000)).context.includes("要不要也改註冊頁？"), "子 session 的回覆照舊");
+  assert.equal(card(askSession(T0 + 120_000)).digest, null);
+});
+
+test("假模型端到端：子 session 停下、背景用 WORKTREE_CONSOLE_SUMMARY_CMD 寫出四層摘要後，這次停下的回報最下面接摘要；摘要逾時或沒有輸出時回報跟原本一模一樣", async () => {
+  const home = freshHome();
+  const transcript = path.join(home, "t.jsonl");
+  const child = (since) => ({ ...askSession(since), handle: "term_child" });
+  const stopped = child(T0 + 9_000);
+  await stopTurn(home, transcript, askedTurn, ASKED, fakeModel(home, { out: JSON.stringify({ ...OK_JSON, result: LAYERED }) }));
+  assert.equal(JSON.parse(savedSummary(home)).replyAt, T0 + 9_000);
+  assert.deepEqual(reportOf(home, stopped).slice(original(stopped).length + 1).split("\n"), DIGEST_MD);
+  const later = [...askedTurn, ["user", "改註冊頁", T0 + 60_000], ["assistant", ASKED, T0 + 70_000]];
+  const next = child(T0 + 70_000);
+  for (const [extra, out] of [[{ WORKTREE_CONSOLE_SUMMARY_TIMEOUT_MS: "300" }, { sleep: 3 }], [{}, { out: "" }]]) {
+    writeTranscript(transcript, later);
+    stopHook(home, { env: { WORKTREE_CONSOLE_SUMMARY_CMD: fakeModel(home, out), ...extra }, input: { transcript_path: transcript, last_assistant_message: ASKED } });
+    await settle(home);
+    assert.equal(reportOf(home, next), original(next), JSON.stringify(extra));
+  }
 });

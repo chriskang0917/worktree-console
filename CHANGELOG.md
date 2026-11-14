@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.20.0
+
+- feat(focus): print the original question with a four-layer digest below it and switch a card's Enter to its question
+
 ## 1.19.2
 
 - fix(advisor): hold the countdown while you type and never count down a message with two or more questions

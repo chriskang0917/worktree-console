@@ -126,16 +126,23 @@ const pane = (bodyColumns = 70, bodyRows = 200) => ({
   props: { title: '中控台', isFocused: true, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows }, view: {} } as any,
 })
 
-// Enter on a card opens its recap popover; p there prints what Enter used to.
-async function printFromBrief(_$: any, ui: any, key: string) {
-  await ui.press({ key: `name:${key}` })
+// ↑↓ onto a card, d opens its recap popover, p there prints the card's whole report.
+async function printFromBrief($: any, ui: any, key: string) {
+  await $.ui.focus({ component: 'Pane', requestId: PANE, plugin: PLUGIN, element: `name:${key}`, origin: { kind: 'person' } } as any)
+  await ui.press({ key: 'brief-key' })
   await ui.press({ key: 'popover-print' })
 }
 
-// The popover's rows as drawn, each row's text: title rule, text rows, bottom rule.
+// The popover's rows as drawn, each row's text: title rule, text rows, bottom rule; the keys row under it is popFooter's.
 const popRows = async (ui: any) => {
   const box = findKey(await ui.drawn(), 'popover')
-  return box ? box.children.filter((c: any) => c?.props?.key !== 'popover-keys').map(textOf) : null
+  return box ? box.children.filter((c: any) => c?.props?.key !== 'popover-keys' && c?.props?.key !== 'popover-footer').map(textOf) : null
+}
+
+// ↑↓ onto a card, then d: its recap popover.
+async function openBrief($: any, ui: any, tag: string) {
+  await $.ui.focus({ component: 'Pane', requestId: PANE, plugin: PLUGIN, element: `name:${keyOf(tag)}`, origin: { kind: 'person' } } as any)
+  await ui.press({ key: 'brief-key' })
 }
 
 const hint = { plugin: PLUGIN, component: 'PromptHint' as const, props: { isDraft: false, isWorking: false, hint: 'auto mode on' } }
@@ -512,7 +519,7 @@ test('漏印重送: three misses in a row toast 「[perm] 題目沒印出，按 
   expect(w.shown).toEqual([`perm ${id}`])
 })
 
-test('漏印重送: after the toast, Enter on the card and 印出完整回報 print the question and reports it shown, so the next poll does not print it again', async ($, on) => {
+test('漏印重送: after the toast, d on the card and 印出完整回報 print the question and reports it shown, so the next poll does not print it again', async ($, on) => {
   const lone = { ...world({ ...focusOf('perm', []), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, lost: 3 }
   const clock = await start($, on, lone)
   const id = idOf(keyOf('perm'))
@@ -1121,7 +1128,7 @@ test('more than 10 cards on 待回覆: all drawn, the question on screen unnumbe
   await ui.unmount()
 })
 
-test('on 待回覆 a number switches the band to that card and the pane reorders with it; the card then has no number; Enter or the nickname, then 印出完整回報, prints', async ($, on) => {
+test('on 待回覆 a number switches the band to that card and the pane reorders with it; the card then has no number; d, then 印出完整回報, prints it again', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   await openPane($)
@@ -1161,7 +1168,7 @@ test('the pane follows the band while it is open: a switch, a defer or a new que
   await ui.unmount()
 })
 
-test('arrow keys land on the nickname, so Enter always opens the recap that prints; the chosen card follows the arrows without switching', async ($, on) => {
+test('arrow keys land on the nickname and the chosen card follows them without switching; d opens its recap, whose 印出完整回報 prints', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   await openPane($)
@@ -1176,7 +1183,7 @@ test('arrow keys land on the nickname, so Enter always opens the recap that prin
   await ui.unmount()
 })
 
-test('on the other tabs a number only chooses the card, Enter or the nickname then 印出完整回報 prints it; a card that also waits on you switches the band', async ($, on) => {
+test('on the other tabs a number only chooses the card, d then 印出完整回報 prints it; a card that also waits on you switches the band', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   await openPane($)
@@ -2305,7 +2312,7 @@ test('refined：編號與焦點框一致，選排隊卡後目前題不編號', a
   await ui.unmount()
 })
 
-test('refined：上下選卡不切換問題，Enter 開摘要小面板、按印出完整回報才顯示選中的題目', async ($, on) => {
+test('refined：上下選卡不切換問題；Enter 或點暱稱等於按那張卡的數字鍵，在等回答的卡換上橫條並印出，沒在等回答的卡只選中；d 才開摘要小視窗', async ($, on) => {
   const w = world(pending())
   appearanceConfig.set(w, { motion: false })
   await start($, on, w)
@@ -2315,8 +2322,18 @@ test('refined：上下選卡不切換問題，Enter 開摘要小面板、按印�
   await arrow(1)
   expect(await chosenTag(ui)).toBe('focusui')
   expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
-  await printFromBrief($, ui, 'focusui@1')
-  expect(w.shown.at(-1)).toBe('focusui')
+  await ui.press({ key: 'name:focusui@1' })
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([['focus-pick', 'focusui@1']])
+  expect(w.shown).toEqual(['focusui'])
+  expect(findKey(await ui.drawn(), 'popover')).toBeUndefined()
+  await ui.press({ key: 'tab:all' })
+  await ui.press({ key: `name:${keyOf('tune')}` })
+  expect(await chosenTag(ui)).toBe('tune')
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toHaveLength(1)
+  expect(w.shown).toEqual(['focusui'])
+  await ui.press({ key: `name:${keyOf('logging')}` })
+  expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('logging')])
+  expect(w.shown.at(-1)).toBe('logging')
   await ui.unmount()
 })
 
@@ -2830,7 +2847,7 @@ test('卡片 ✓ 建議: no mark while the suggestion is being written, when it 
   await ui.unmount()
 })
 
-test('摘要浮層: Enter on a card (or a click on its nickname) opens its recap in a popover right under the card, drawn over the cards below without moving them; nothing opens, prints or reaches the conversation; Enter again closes it', async ($, on) => {
+test('摘要浮層: d opens the chosen card\'s recap in a popover right under the card, drawn over the cards below without moving them; nothing opens, switches, prints or reaches the conversation; d again closes it', async ($, on) => {
   const text = '登入頁改好了，測試都過。等你決定要不要也改註冊頁。'
   const w = { ...world(withCards({ logging: { brief: { text, pending: false } } })), submits: [] as string[] }
   await start($, on, w)
@@ -2839,7 +2856,7 @@ test('摘要浮層: Enter on a card (or a click on its nickname) opens its recap
   const opened = w.opened.length
   const before = w.calls.length
   const tags = await drawnTags(ui)
-  await ui.press({ key: `name:${keyOf('logging')}` })
+  await openBrief($, ui, 'logging')
   expect(w.opened.length).toBe(opened)
   expect(w.shown).toEqual([])
   expect(w.submits).toEqual([])
@@ -2852,35 +2869,35 @@ test('摘要浮層: Enter on a card (or a click on its nickname) opens its recap
   expect(await drawnTags(ui)).toEqual(tags)
   const rows = (await popRows(ui))!
   expect(rows[0]).toContain('logging 摘要')
-  expect(rows[0]).toContain('p 印出完整回報')
+  expect(rows[0]).not.toContain('p 印出完整回報')
   // The recap starts on the first text row: no repo, stage or summary line above it.
   expect(rows[1]).toContain(text)
   expect(rows.join('\n')).not.toMatch(/agent-skills|實作中|feat\/logging/)
   expect(paintOf(box, text)?.color).toBe(THEMES.neutral.fg)
   for (const row of rows) expect(cells(row)).toBeLessThanOrEqual(70)
-  await ui.press({ key: `name:${keyOf('logging')}` })
+  await ui.press({ key: 'brief-key' })
   expect(await popRows(ui)).toBeNull()
   await ui.unmount()
 })
 
-test('摘要浮層: one popover at a time; ↑↓ onto another card, Esc handing the keys back to the prompt, or a tab switch closes it', async ($, on) => {
+test('摘要浮層: one popover at a time; ↑↓ onto another card, Esc handing the keys back to the prompt, or a tab switch closes it; d then opens the newly chosen card\'s', async ($, on) => {
   const w = world(withCards({ logging: { brief: { text: '甲摘要', pending: false } }, 'PROJ-6668': { brief: { text: '乙摘要', pending: false } } }))
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(70, 30), surface: 'terminal' })
-  await ui.press({ key: `name:${keyOf('logging')}` })
-  await ui.press({ key: `name:${keyOf('PROJ-6668')}` })
+  await openBrief($, ui, 'logging')
+  await openBrief($, ui, 'PROJ-6668')
   expect((await ui.findAll({ type: 'Box' })).filter((b: any) => b.key === 'popover')).toHaveLength(1)
   expect((await popRows(ui))!.join('\n')).toContain('乙摘要')
   await arrowTo($, 'logging')
   expect(await chosenTag(ui)).toBe('logging')
   expect(await popRows(ui)).toBeNull()
-  await ui.press({ key: `name:${keyOf('logging')}` })
+  await ui.press({ key: 'brief-key' })
   expect(await popRows(ui)).not.toBeNull()
   await ui.press({ key: 'tab:all' })
   expect(await popRows(ui)).toBeNull()
   await ui.press({ key: 'tab:pending' })
-  await ui.press({ key: `name:${keyOf('logging')}` })
+  await openBrief($, ui, 'logging')
   expect(await popRows(ui)).not.toBeNull()
   await ui.unmount()
   const away = await $.ui.mount({ ...pane(70, 30), props: { ...pane(70, 30).props, isFocused: false }, surface: 'terminal' })
@@ -2897,9 +2914,9 @@ test('摘要浮層: a session with no recap yet says 還沒有摘要; one being 
   await openPane($)
   const ui = await $.ui.mount({ ...pane(70, 40), surface: 'terminal' })
   const read = async (tag: string) => {
-    await ui.press({ key: `name:${keyOf(tag)}` })
+    await openBrief($, ui, tag)
     const rows = (await popRows(ui))!
-    await ui.press({ key: `name:${keyOf(tag)}` })
+    await ui.press({ key: 'brief-key' })
     return rows.slice(1, -1).map(r => r.replace(/^┃ /, '').trim())
   }
   expect(await read('perm')).toEqual(['還沒有摘要'])
@@ -2908,13 +2925,13 @@ test('摘要浮層: a session with no recap yet says 還沒有摘要; one being 
   await ui.unmount()
 })
 
-test('摘要浮層: p prints exactly the report Enter used to print, through /focus-show, for the band question and a queued one, and closes the popover', async ($, on) => {
+test('摘要浮層: p prints the card\'s whole report, through /focus-show, for the band question and a queued one, and closes the popover', async ($, on) => {
   const w = world(withCards({}, 'perm', ['focusui', 'logging']))
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
   const report = (tag: string) => SESSIONS.find(s => s.tag === tag)!.report
-  await ui.press({ key: `name:${keyOf('perm')}` })
+  await openBrief($, ui, 'perm')
   expect((await ui.find({ key: 'popover-print' }))?.props).toMatchObject({ hotkey: 'p' })
   await ui.press({ key: 'popover-print' })
   expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
@@ -2942,11 +2959,11 @@ test('摘要浮層捲動: the popover stops at the pane rows in view; past that 
   const ui = await $.ui.mount({ ...pane(70, view), surface: 'terminal' })
   const scroll = (by: number, pointer?: object) => $.ui.scroll({ component: 'Pane', requestId: PANE, offset: 0, by, bodyRows: view, contentRows: view, origin: { kind: 'person' }, ...(pointer && { pointer }) } as any)
   const tags = await drawnTags(ui)
-  await ui.press({ key: `name:${keyOf('focusui')}` })
+  await openBrief($, ui, 'focusui')
   const box = findKey(await ui.drawn(), 'popover')
   // focusui heads the pane: its rows are 3 and 4, so the popover takes rows 5 to the bottom of the view.
   expect([box.props.top, box.props.height]).toEqual([5, view - 5])
-  const body = view - 5 - 2
+  const body = view - 5 - 3
   const total = 30
   const bottom = async () => (await popRows(ui))!.at(-1)!
   expect(await bottom()).toContain(`j/k 捲動 · 第 1–${body} 行／共 ${total} 行`)
@@ -2979,16 +2996,64 @@ test('摘要浮層位置: a card in the pane\'s lower half opens its popover abo
   const view = 20
   const ui = await $.ui.mount({ ...pane(70, view), surface: 'terminal' })
   expect(await drawnTags(ui)).toEqual(['focusui', 'logging', 'PROJ-6668', 'perm'])
-  await ui.press({ key: `name:${keyOf('perm')}` })
+  await openBrief($, ui, 'perm')
   // perm is the fourth card: its header sits on row 2 + 3 * 3 + 1 = 12, past the middle; above it are rows 2..11.
   let box = findKey(await ui.drawn(), 'popover')
   expect([box.props.top, box.props.height]).toEqual([2, 12 - 2])
-  expect((await popRows(ui))!.at(-1)).toContain('j/k 捲動 · 第 1–8 行／共 30 行')
-  await ui.press({ key: `name:${keyOf('logging')}` })
+  expect((await popRows(ui))!.at(-1)).toContain('j/k 捲動 · 第 1–7 行／共 30 行')
+  await openBrief($, ui, 'logging')
   // logging's header is row 6, in the upper half: the popover starts under its two rows.
   box = findKey(await ui.drawn(), 'popover')
-  expect([box.props.top, box.props.height]).toEqual([8, 2 + 1])
+  expect([box.props.top, box.props.height]).toEqual([8, 3 + 1])
   expect((await popRows(ui))!.at(-1)).not.toContain('j/k')
+  await ui.unmount()
+})
+
+const DIGEST = ['在做什麼：改登入頁的表單驗證', '卡在哪：註冊頁共用同一個驗證元件', '做了什麼：改好登入頁，單元測試全過', '順手清掉兩個舊的 lint 警告', '要你決定：要不要一起改註冊頁，建議：另開一張票'].join('\n')
+const OLD_DIGEST = ['前提：改登入頁的表單驗證', '問題：註冊頁共用同一個驗證元件', '解法：改好登入頁，單元測試全過', '建議：要你決定：要不要一起改註冊頁'].join('\n')
+const popText = (rows: string[]) => rows.slice(1, -1).map(r => r.replace(/^┃ /, '').trimEnd())
+
+test('摘要小視窗排版：標籤是固定左欄、換行對齊內容欄；▶ 要你決定前空一行、整行強調色加粗；其他標籤淡色、內容前景色；底部分隔線下寫「d 收起 · p 印出完整回報」', async ($, on) => {
+  const w = world(withCards({ logging: { brief: { text: DIGEST, pending: false } } }))
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(40, 40), surface: 'terminal' })
+  await openBrief($, ui, 'logging')
+  const rows = (await popRows(ui))!
+  const body = popText(rows)
+  expect(body[0]).toBe('在做什麼    改登入頁的表單驗證')
+  expect(body[1]).toBe('卡在哪      註冊頁共用同一個驗證元件')
+  expect(body[2]).toBe('做了什麼    改好登入頁，單元測試全過')
+  expect(body[3]).toBe('            順手清掉兩個舊的 lint 警告')
+  expect(body[4]).toBe('')
+  expect(body[5]).toBe('▶ 要你決定  要不要一起改註冊頁，建議：')
+  expect(body[6]).toBe('            另開一張票')
+  expect(rows.at(-1)).toMatch(/^─+$/)
+  const box = findKey(await ui.drawn(), 'popover')
+  expect(textOf(findKey(box, 'popover-footer')).trim()).toBe('d 收起 · p 印出完整回報')
+  expect(paintOf(box, '在做什麼    ')).toEqual({ color: THEMES.neutral.dim, bold: undefined })
+  expect(paintOf(box, '改登入頁的表單驗證')?.color).toBe(THEMES.neutral.fg)
+  expect(paintOf(box, '▶ 要你決定  ')).toEqual({ color: THEMES.neutral.accent, bold: true })
+  expect(paintOf(box, '要不要一起改註冊頁，建議：')).toEqual({ color: THEMES.neutral.accent, bold: true })
+  for (const row of rows) expect(cells(row)).toBeLessThanOrEqual(40)
+  await ui.unmount()
+})
+
+test('摘要小視窗：「下一步」用一般字色、不加 ▶、前面不空行；舊摘要檔的舊標籤（前提、問題、解法、建議）畫成同一種排版；沒有標籤的摘要照原文換行', async ($, on) => {
+  const next = '在做什麼：改登入頁\n做了什麼：改好了\n下一步：接著改註冊頁'
+  const w = world(withCards({ logging: { brief: { text: next, pending: false } }, 'PROJ-6668': { brief: { text: OLD_DIGEST, pending: false } }, perm: { brief: { text: '沒有標籤的一段摘要。', pending: false } } }))
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(70, 40), surface: 'terminal' })
+  await openBrief($, ui, 'logging')
+  expect(popText((await popRows(ui))!)).toEqual(['在做什麼    改登入頁', '做了什麼    改好了', '下一步      接著改註冊頁'])
+  const box = findKey(await ui.drawn(), 'popover')
+  expect(paintOf(box, '下一步      ')).toEqual({ color: THEMES.neutral.dim, bold: undefined })
+  expect(paintOf(box, '接著改註冊頁')).toEqual({ color: THEMES.neutral.fg, bold: undefined })
+  await openBrief($, ui, 'PROJ-6668')
+  expect(popText((await popRows(ui))!)).toEqual(['在做什麼    改登入頁的表單驗證', '卡在哪      註冊頁共用同一個驗證元件', '做了什麼    改好登入頁，單元測試全過', '', '▶ 要你決定  要不要一起改註冊頁'])
+  await openBrief($, ui, 'perm')
+  expect(popText((await popRows(ui))!)).toEqual(['沒有標籤的一段摘要。'])
   await ui.unmount()
 })
 
@@ -3214,6 +3279,25 @@ test('待決浮層內容：沒有前例時不畫前例；送出失敗的題寫�
   expect(text).not.toContain('選項')
   expect(text).toContain('上次核可沒送進子 session')
   expect(text).toContain('草案確認了，要寫進 Linear 嗎？')
+  await ui.unmount()
+})
+
+test('待決浮層摘要：「子 session 的回覆」照舊，最下面多一段「摘要」與四層，▶ 要你決定前空一行、強調色加粗；沒有這次停下的摘要時不畫', async ($, on) => {
+  const w = world(withDecisions(DECISIONS.map(d => (d.id === 'p1' ? { ...d, context: '舊 branch 已合併進 dev。', digest: DIGEST } : d))))
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(70, 60), surface: 'terminal' })
+  await ui.press({ key: 'tab:decisions' })
+  await ui.press({ key: 'detail:p1' })
+  const body = popText((await popRows(ui))!)
+  expect(body).toContain('舊 branch 已合併進 dev。')
+  const at = body.indexOf('摘要')
+  expect(at).toBeGreaterThan(body.indexOf('舊 branch 已合併進 dev。'))
+  expect(body.slice(at - 1)).toEqual(['', '摘要', '在做什麼    改登入頁的表單驗證', '卡在哪      註冊頁共用同一個驗證元件', '做了什麼    改好登入頁，單元測試全過', '            順手清掉兩個舊的 lint 警告', '', '▶ 要你決定  要不要一起改註冊頁，建議：另開一張票'])
+  expect(paintOf(findKey(await ui.drawn(), 'popover'), '▶ 要你決定  ')).toEqual({ color: THEMES.neutral.accent, bold: true })
+  await ui.press({ key: 'detail:p1' })
+  await ui.press({ key: 'detail:p2' })
+  expect(popText((await popRows(ui))!)).not.toContain('摘要')
   await ui.unmount()
 })
 

@@ -65,7 +65,7 @@ import {
 } from "./lib.mjs";
 import { advisorHome, advisorState } from "./advice.mjs";
 import { asksReport } from "./asks.mjs";
-import { consoleSessionOk, focusCancel, focusOwnerOk, focusPayload, focusPick, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
+import { consoleSessionOk, focusCancel, focusOwnerOk, focusPayload, focusPick, focusReplied, focusSkip, holdForDigest, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
 import { approve, takeOver } from "./automation.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
@@ -289,7 +289,7 @@ function focusOut({ rows, keys }, { change = null, show = false, notice = null }
   const now = Date.now();
   const view = syncFocus(rows, { now, change, heartbeat: true });
   const fresh = view.current && !view.state.reported.includes(view.current.key);
-  const announced = view.current && (show || fresh) ? view.current : null;
+  const announced = view.current && (show || fresh) && !holdForDigest(view, { now }) ? view.current : null;
   const { payload, titles, firsts } = focusPayload(rows, view, { now, keys, notice, announce: announced?.item.tag ?? null, announceKey: announced?.key ?? null });
   saveTitles(titles, firsts);
   console.log(JSON.stringify(payload));

@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { consoleHome, reportLines } from "./lib.mjs";
+import { consoleHome, reportLines, textStop } from "./lib.mjs";
+import { stopDigest } from "./summary.mjs";
 import { advisorHome, advisorState, isSheet, latestFor, loadAdvice } from "./advice.mjs";
 
 const AUTOMATION = "automation.json";
@@ -176,7 +177,7 @@ export function decisionCards(batch, optionsOf, home = consoleHome()) {
   // A card that cannot be built in full still lists, with the prediction's own text, so its question never goes missing.
   return batch.map((b) => {
     try {
-      return fullCard(b, optionsOf, last, precedents);
+      return fullCard(b, optionsOf, last, precedents, home);
     } catch {
       return plainCard(b, last);
     }
@@ -209,7 +210,12 @@ function plainCard({ entry, prediction: p }, last) {
   };
 }
 
-function fullCard({ entry, prediction: p }, optionsOf, last, precedents) {
+// The recap of the stop the card waits on, for the bottom of its detail; null when there is none for that stop.
+function digestOf(session, home) {
+  return textStop(session.status, session) ? stopDigest(home, session).text : null;
+}
+
+function fullCard({ entry, prediction: p }, optionsOf, last, precedents, home) {
   return {
     id: p.id,
     key: entry.key,
@@ -226,6 +232,7 @@ function fullCard({ entry, prediction: p }, optionsOf, last, precedents) {
     question: oneLine(entry.item.entries.map((x) => x.question).join(" / ")),
     fullQuestion: String(p.question ?? ""),
     context: contextOf(entry) || String(p.question ?? ""),
+    digest: digestOf(entry.item.session, home),
     precedent: precedents.get(p.precedent) ?? null,
     suggestion: `建議：${oneLine(p.answer)}${p.reason ? `，${oneLine(p.reason)}` : ""}`,
     options: p.kind === "free" ? [] : optionsOf(entry.item),
