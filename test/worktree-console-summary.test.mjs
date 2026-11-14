@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeManaged } from "../skills/worktree-console/scripts/log.mjs";
+import { CACHE_HANDOFF_TEXT, KEEPALIVE_REPLY, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../hooks/auto-handoff.mjs";
 import { modelCommand, pendingFile, readSummary, summaryFile, summaryModel, usageFile } from "../skills/worktree-console/scripts/summary.mjs";
 import { focusPayload } from "../skills/worktree-console/scripts/focus.mjs";
 
@@ -80,7 +81,7 @@ test("摘要產生：受管子 session 停下時 hook 立刻結束、不輸出�
   const saved = JSON.parse(fs.readFileSync(summaryFile(home, "term_child"), "utf8"));
   assert.equal(saved.text, OK_JSON.result);
   assert.equal(saved.sessionId, "sid-child");
-  assert.deepEqual(readSummary(home, "term_child"), { text: OK_JSON.result, at: saved.at, sessionId: "sid-child", pending: false });
+  assert.deepEqual(readSummary(home, "term_child"), { text: OK_JSON.result, at: saved.at, sessionId: "sid-child", replyAt: null, pending: false });
   const [call] = calls(home);
   const [model, handle, stdin] = call.split("|");
   assert.equal(model, "sonnet");
@@ -217,4 +218,103 @@ test("中控台卡片資料帶這個分頁的摘要：有摘要給全文，產�
   fs.writeFileSync(summaryFile(home, "term_a"), JSON.stringify({ text: "做完了登入頁。", sessionId: "s" }));
   fs.writeFileSync(pendingFile(home, "term_a"), JSON.stringify({ since: Date.now(), timeoutMs: 120_000 }));
   assert.deepEqual(focusPayload([row], view, { home }).payload.sessions[0].brief, { text: "做完了登入頁。", pending: true });
+});
+
+// A main-conversation transcript: [type, text, ms] rows; the newest row is what the Stop hook can already read.
+function writeTranscript(file, rows) {
+  const line = ([type, text, ms]) => JSON.stringify({ type, isSidechain: false, uuid: `u-${ms}`, timestamp: new Date(ms).toISOString(), message: { role: type, content: type === "user" ? text : [{ type: "text", text }] } });
+  fs.writeFileSync(file, rows.map(line).join("\n") + "\n");
+}
+
+const T0 = Date.parse("2026-11-14T08:00:00.000Z");
+const ASKED = "登入頁改好了，要不要也改註冊頁？";
+const askedTurn = [["user", "改登入頁", T0], ["assistant", ASKED, T0 + 9_000]];
+const savedSummary = (home) => fs.readFileSync(summaryFile(home, "term_child"), "utf8");
+
+async function stopTurn(home, transcript, rows, reply, cmd) {
+  writeTranscript(transcript, rows);
+  stopHook(home, { env: { WORKTREE_CONSOLE_SUMMARY_CMD: cmd }, input: { transcript_path: transcript, last_assistant_message: reply } });
+  await settle(home);
+}
+
+test("續命與快取交棒：中控台送的續命或快取交棒訊息觸發的那一輪不摘要、保留上一份，照不照指示回都一樣", async () => {
+  const home = freshHome();
+  const transcript = path.join(home, "t.jsonl");
+  await stopTurn(home, transcript, askedTurn, ASKED, fakeModel(home, { out: JSON.stringify({ ...OK_JSON, result: "原題的摘要。" }) }));
+  const before = savedSummary(home);
+  assert.equal(JSON.parse(before).text, "原題的摘要。");
+  const cmd = fakeModel(home, { out: JSON.stringify({ ...OK_JSON, result: "這一輪回覆只有「收到」。" }) });
+  for (const [prompt, reply] of [
+    [KEEPALIVE_TEXT, KEEPALIVE_REPLY],
+    [CACHE_HANDOFF_TEXT, "好，先結束這一輪。"],
+    [KEEPALIVE_TEXT, "我順便把註冊頁也看了一下，還有兩個地方要改。"],
+  ]) {
+    const rows = [...askedTurn, ["user", prompt, T0 + 60_000], ["assistant", reply, T0 + 61_000]];
+    writeTranscript(transcript, rows);
+    const res = stopHook(home, { env: { WORKTREE_CONSOLE_SUMMARY_CMD: cmd }, input: { transcript_path: transcript, last_assistant_message: reply } });
+    assert.deepEqual([res.code, res.out], [0, ""]);
+    assert.equal(fs.existsSync(pendingFile(home, "term_child")), false, `${prompt.slice(0, 12)} 那一輪不寫產生中標記`);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(savedSummary(home), before, "上一份摘要原封不動");
+  }
+  assert.equal(calls(home).length, 1, "只有原題那一輪呼叫摘要模型");
+  assert.equal(usage(home).length, 1, "summary-usage.jsonl 沒有多一行");
+});
+
+test("續命與快取交棒：使用者自己打的一輪照常摘要，包括自己只打「收到」、子 session 也只回「收到」，以及接手交棒那一輪", async () => {
+  const home = freshHome();
+  const transcript = path.join(home, "t.jsonl");
+  const cmd = fakeModel(home);
+  const turns = [
+    ["收到", KEEPALIVE_REPLY],
+    [`${TAKEOVER_HEAD}請讀交棒說明後接手。`, "讀完交棒說明，接著改註冊頁。"],
+  ];
+  for (const [i, [prompt, reply]] of turns.entries()) {
+    await stopTurn(home, transcript, [...askedTurn, ["user", prompt, T0 + 60_000], ["assistant", reply, T0 + 61_000]], reply, cmd);
+    assert.equal(calls(home).length, i + 1, prompt);
+    assert.ok(calls(home)[i].includes(reply));
+  }
+  assert.equal(usage(home).length, 2);
+});
+
+test("replyAt：摘要檔記下被摘要那則回覆在 transcript 的 timestamp（毫秒），就是卡片停下時間取的那一筆；since 等既有欄位不變", async () => {
+  const home = freshHome();
+  const transcript = path.join(home, "t.jsonl");
+  await stopTurn(home, transcript, askedTurn, ASKED, fakeModel(home));
+  const saved = JSON.parse(savedSummary(home));
+  assert.equal(saved.replyAt, T0 + 9_000);
+  const { readTranscript, transcriptState } = await import("../skills/worktree-console/scripts/herdr.mjs");
+  assert.equal(transcriptState(readTranscript(transcript).entries).at, saved.replyAt, "跟 herdr 的 stateStartedAt 同一筆");
+  assert.deepEqual(Object.keys(saved).sort(), ["at", "handle", "model", "replyAt", "sessionId", "since", "text"]);
+  assert.equal(typeof saved.since, "number");
+});
+
+test("replyAt：Stop hook 觸發時回覆還沒寫進 transcript，背景等它寫進來再取那一筆的時間", async () => {
+  const home = freshHome();
+  const transcript = path.join(home, "t.jsonl");
+  writeTranscript(transcript, askedTurn.slice(0, 1));
+  stopHook(home, { env: { WORKTREE_CONSOLE_SUMMARY_CMD: fakeModel(home) }, input: { transcript_path: transcript, last_assistant_message: ASKED } });
+  await new Promise((r) => setTimeout(r, 400));
+  writeTranscript(transcript, askedTurn);
+  await settle(home);
+  assert.equal(JSON.parse(savedSummary(home)).replyAt, T0 + 9_000);
+});
+
+test("小視窗摘要：replyAt 跟卡片停下時間對不上、也沒在產生新摘要時顯示「還沒有摘要」；對得上、舊摘要檔沒有 replyAt 或在 Orca 照常顯示", () => {
+  const home = freshHome();
+  const session = (since, herdr = { raw: "done" }) => ({ n: null, handle: "term_a", paneKey: "pane-a", agent: { state: "done", stateStartedAt: since, ...(herdr ? { herdr } : {}) }, status: { kind: "done", text: "做完了" } });
+  const row = (s) => ({ path: "/wt/a", repo: "app", label: "PROJ-2", ticket: "PROJ-2", branch: "proj-2", title: "x", stage: "實作中", sessions: [s] });
+  const view = { current: null, queue: [], wait: null, state: { titles: {} } };
+  const brief = (s) => focusPayload([row(s)], view, { home }).payload.sessions[0].brief;
+  fs.mkdirSync(path.join(home, "summaries"), { recursive: true });
+  fs.writeFileSync(summaryFile(home, "term_a"), JSON.stringify({ text: "原題的摘要。", since: T0 + 9_500, replyAt: T0 + 9_000 }));
+  assert.deepEqual(brief(session(T0 + 9_000)), { text: "原題的摘要。", pending: false });
+  assert.deepEqual(brief({ ...session(T0 + 61_000), since: T0 + 9_000 }), { text: "原題的摘要。", pending: false }, "續命後卡片仍算原本那次停下");
+  assert.deepEqual(brief(session(T0 + 120_000)), { text: null, pending: false });
+  assert.deepEqual(brief(session(T0 + 120_000, null)), { text: "原題的摘要。", pending: false }, "Orca 的停下時間不是從 transcript 讀，不比對");
+  fs.writeFileSync(pendingFile(home, "term_a"), JSON.stringify({ since: Date.now(), timeoutMs: 120_000 }));
+  assert.deepEqual(brief(session(T0 + 120_000)), { text: "原題的摘要。", pending: true }, "新的在產生中時照舊顯示舊摘要與產生中");
+  fs.rmSync(pendingFile(home, "term_a"));
+  fs.writeFileSync(summaryFile(home, "term_a"), JSON.stringify({ text: "舊格式的摘要。", sessionId: "s" }));
+  assert.deepEqual(brief(session(T0 + 120_000)), { text: "舊格式的摘要。", pending: false });
 });

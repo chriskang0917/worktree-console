@@ -247,10 +247,13 @@ function cardSummary(row, session, title, firsts) {
   return sessionCaption(session, firsts[session.paneKey]) ?? plain;
 }
 
-// The tab's newest plain-language recap for the pane's recap dialog.
-function briefOf(home, handle, now) {
-  const { text, pending } = readSummary(home, handle, now);
-  return { text, pending };
+// The tab's newest plain-language recap for the pane's recap dialog, only when it recaps the reply the card stopped at.
+// Only herdr and the Herdr app read the stop time from the transcript entry replyAt comes from; Orca's own clock is not compared.
+function briefOf(home, session, now) {
+  const { text, pending, replyAt } = readSummary(home, session.handle, now);
+  const since = session.since ?? session.agent?.stateStartedAt ?? null;
+  const stale = !!session.agent?.herdr && typeof replyAt === "number" && typeof since === "number" && replyAt !== since;
+  return { text: stale && !pending ? null : text, pending };
 }
 
 function plainReport(tag, status) {
@@ -294,7 +297,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         question,
         options: item ? optionsOf(item) : [],
         advice: item ? adviceFor(advice, { path: row.path, status, since: session.since ?? session.agent?.stateStartedAt, now, advisor, cancelled: !!view.state.cancelled?.[key] }) : null,
-        brief: briefOf(home, session.handle, now),
+        brief: briefOf(home, session, now),
         archived: !!session.archived,
         pending: !!item,
         report: report.join("\n"),
