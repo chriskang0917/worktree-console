@@ -2,7 +2,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import { loadAppearance, THEMES, type Appearance, type ConsoleTheme } from './console-theme.ts'
 import { statusCell, columns, truncateColumns, wrapRanges } from './status-view.ts'
 import { registerKeepaliveView } from './keepalive-view.tsx'
-import { SUMMARY_MAX_LINES, summaryLines } from './session-summary-view.tsx'
+import { DIGEST_RULE } from './digest.mjs'
+import { SUMMARY_MAX_LINES, bandDigestRows, digestRows, parseDigest, summaryLines, type DigestPart } from './session-summary-view.tsx'
 
 type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
 
@@ -42,6 +43,8 @@ type Decision = {
   action: string
   question: string
   context?: string
+  // The recap of the stop it waits on, drawn at the bottom of its detail.
+  digest?: string | null
   options: string[]
   answer: string
   reason: string
@@ -70,6 +73,7 @@ const PANE = 'worktree-console-pending'
 const PANE_TITLE = '中控台'
 const BRIEF_EMPTY = '還沒有摘要'
 const BRIEF_PENDING = '摘要產生中…'
+const BRIEF_KEYS = 'd 收起 · p 印出完整回報'
 const QUEUE_MAX = 5
 const TOAST_MAX = 30
 const SUMMARY_MAX = 20
@@ -236,15 +240,22 @@ function wrapRuns(runs: Run[], width: number): Run[][] {
   )
 }
 
-type Popover = { title: Run; keys: string; lines: Run[][]; print?: () => void }
+// `footer`: a row of its own under the bottom rule, for keys that belong under the text.
+type Popover = { title: Run; keys: string; lines: Run[][]; footer?: string; print?: () => void }
+
+// The four layers as runs: labels dim in their column, text in the foreground, the ▶ 要你決定 row bold in the accent.
+function digestRuns(rows: DigestPart[][], theme: ConsoleTheme): Run[][] {
+  return rows.map(row => row.map(p => (p.decide ? { text: p.text, color: theme.accent, bold: true } : { text: p.text, color: p.role === 'label' ? theme.dim : theme.fg })))
+}
 
 function briefPopover(s: Session, width: number, theme: ConsoleTheme): Popover {
   const brief = s.brief ?? null
-  const runs: Run[] = [
-    brief?.text ? { text: brief.text, color: theme.fg } : { text: brief?.pending ? BRIEF_PENDING : BRIEF_EMPTY, color: theme.dim },
-    ...(brief?.text && brief.pending ? [{ text: `\n新的${BRIEF_PENDING}`, color: theme.dim }] : []),
-  ]
-  return { title: { text: `${s.tag} 摘要`, color: theme.accent, bold: true }, keys: 'p 印出完整回報', lines: wrapRuns(runs, width) }
+  const layers = parseDigest(brief?.text)
+  const note: Run[] = brief?.text && brief.pending ? [{ text: `新的${BRIEF_PENDING}`, color: theme.dim }] : []
+  const lines = layers
+    ? [...digestRuns(digestRows(layers, width), theme), ...(note.length ? [[], note] : [])]
+    : wrapRuns([brief?.text ? { text: brief.text, color: theme.fg } : { text: brief?.pending ? BRIEF_PENDING : BRIEF_EMPTY, color: theme.dim }, ...note.map(r => ({ ...r, text: `\n${r.text}` }))], width)
+  return { title: { text: `${s.tag} 摘要`, color: theme.accent, bold: true }, keys: '', lines, footer: BRIEF_KEYS }
 }
 
 // A 待決 popover: the whole question, then the child's whole reply, the options, the advisor's suggestion and the precedent it leaned on.
@@ -273,7 +284,9 @@ function decisionPopover(d: Decision, width: number, theme: ConsoleTheme): Popov
     ...(d.precedent ? [...label('參考的前例'), { text: `題目：${flat(d.precedent.question)}\n你當時回：${flat(d.precedent.answer)}`, color: quiet }] : []),
   ]
   const keys = deciding.has(d.id) ? '送出中…' : `y ${APPROVE} · m ${MANUAL}`
-  return { title: { text: d.action, color: theme.waiting, bold: true }, keys, lines: wrapRuns(runs, width) }
+  const layers = parseDigest(d.digest)
+  const digest = layers ? [[], [{ text: DIGEST_RULE, color: theme.accent, bold: true }], ...digestRuns(digestRows(layers, width), theme)] : []
+  return { title: { text: d.action, color: theme.waiting, bold: true }, keys, lines: [...wrapRuns(runs, width), ...digest] }
 }
 
 // Draws the popover over the cards, under the card whose rows are `start`..`end` (rows of the drawing), or over it when the card sits in
@@ -284,14 +297,17 @@ function popoverBox($: EngineInterface, e: any, p: Popover, at: { start: number;
   const shown = at.start - at.offset
   const above = shown > view / 2
   const room = above ? shown - CHROME : view - (at.end - at.offset)
-  const height = Math.min(p.lines.length + POP_CHROME, Math.max(POP_CHROME + 1, room))
-  const rows = height - POP_CHROME
+  const chrome = POP_CHROME + (p.footer ? 1 : 0)
+  const height = Math.min(p.lines.length + chrome, Math.max(chrome + 1, room))
+  const rows = height - chrome
   popView = { rows, total: p.lines.length }
   pop!.at = Math.max(0, Math.min(pop!.at, p.lines.length - rows))
   const from = pop!.at
   const inner = Math.max(1, cols - 2)
   const keys = truncateColumns(p.keys, Math.max(0, cols - 8))
-  const title = truncateColumns(p.title.text, Math.max(1, cols - columns(keys) - 7))
+  const keysCols = keys ? columns(keys) + 1 : 0
+  const title = truncateColumns(p.title.text, Math.max(1, cols - keysCols - 6))
+  const footer = p.footer ? truncateColumns(p.footer, Math.max(1, cols - 2)) : ''
   const scroll = p.lines.length > rows ? ` j/k 捲動 · 第 ${from + 1}–${from + rows} 行／共 ${p.lines.length} 行 ` : ''
   const fill = (n: number) => '─'.repeat(Math.max(0, n))
   return (
@@ -299,9 +315,9 @@ function popoverBox($: EngineInterface, e: any, p: Popover, at: { start: number;
       <Box key="popover-title" flexDirection="row" height={1} flexShrink={0}>
         <Text color={theme.accent}>{'── '}</Text>
         <Text color={p.title.color} bold={p.title.bold}>{title}</Text>
-        <Text color={theme.accent}>{` ${fill(cols - columns(title) - columns(keys) - 7)} `}</Text>
-        <Text color={theme.dim}>{keys}</Text>
-        <Text color={theme.accent}>{' ─'}</Text>
+        <Text color={theme.accent}>{` ${fill(cols - columns(title) - keysCols - 6)}${keys ? ' ' : ''}`}</Text>
+        {keys ? <Text color={theme.dim}>{keys}</Text> : null}
+        <Text color={theme.accent}>{keys ? ' ─' : '──'}</Text>
       </Box>
       {p.lines.slice(from, from + rows).map((line, n) => (
         <Box key={`popover-line:${from + n}`} flexDirection="row" height={1} flexShrink={0}>
@@ -315,6 +331,12 @@ function popoverBox($: EngineInterface, e: any, p: Popover, at: { start: number;
         <Text color={theme.dim}>{scroll}</Text>
         <Text color={theme.accent}>{fill(cols - 2 - columns(scroll))}</Text>
       </Box>
+      {footer ? (
+        <Box key="popover-footer" flexDirection="row" height={1} flexShrink={0}>
+          <Text color={theme.dim}>{`  ${footer}`}</Text>
+          <Text>{' '.repeat(Math.max(0, cols - 2 - columns(footer)))}</Text>
+        </Box>
+      ) : null}
       <Box key="popover-keys" height={0} flexShrink={0} overflow="hidden">
         <Button key="popover-down" hotkey="j" label="" plain onPress={() => scrollPop($, 1)} />
         <Button key="popover-up" hotkey="k" label="" plain onPress={() => scrollPop($, -1)} />
@@ -743,7 +765,7 @@ async function openPane($: EngineInterface) {
   $.ui.invalidate('ui.render')
 }
 
-// A card's number only chooses it: on a card waiting on you that switches the band to it (and the switch prints it).
+// A card's number, Enter on it or a click on its nickname: on a card waiting on you that switches the band to it (and the switch prints it); any other card is only chosen.
 async function pickCard($: EngineInterface, s: Session) {
   sel = s.key
   follow = true
@@ -772,8 +794,9 @@ function scrollPop($: EngineInterface, by: number) {
   $.ui.invalidate('ui.render')
 }
 
-// Enter on a card, or a click on its nickname, opens or closes that session's recap in a popover under the card; nothing reaches the conversation.
-function toggleBrief($: EngineInterface, s: Session) {
+// d opens or closes the chosen card's recap in a popover under the card; nothing reaches the conversation.
+function toggleBrief($: EngineInterface, s: Session | null) {
+  if (!s) return
   sel = s.key
   togglePop($, 'brief', s.key)
 }
@@ -847,10 +870,6 @@ function toggleDetail($: EngineInterface, d: Decision) {
 }
 
 const SUMMARY_POLL_MS = 3_000
-const SUMMARY_PANE = 'worktree-console-summary'
-const SUMMARY_LABEL = '摘要'
-// The label and the gap after it; wrapped lines start under the text, not under the label.
-const SUMMARY_PREFIX = 6
 const SUMMARY_PENDING = '產生中…'
 const SUMMARY_TIMEOUT_MS = 120_000
 const SUMMARY_SLACK_MS = 60_000
@@ -906,26 +925,35 @@ async function startRecap($: EngineInterface) {
   $.clock.every(SUMMARY_POLL_MS, () => void pollRecap($))
 }
 
-// A child session's tab: its newest recap above the prompt once a turn ends; null when there is none to show.
+// A child session's tab: a 「── 摘要 ──」 rule, then its newest recap above the prompt once a turn ends, one row per layer; null when there is none to show.
+// A recap written without the layer labels keeps its own lines.
 function recapBand($: EngineInterface, e: any) {
   if (!recapHandle || e.props.hasSurvey || e.props.isWorking || (!recap.text && !recap.pending)) return null
-  const { Box, Text, Button } = $.ui.resolve(e)
+  const { Box, Text } = $.ui.resolve(e)
   const theme = THEMES[recapTheme]
-  const width = Math.max(1, e.props.bodyColumns - SUMMARY_PREFIX)
-  const lines = recap.pending ? [SUMMARY_PENDING] : summaryLines(recap.text!, width, Math.max(1, Math.min(SUMMARY_MAX_LINES, e.props.maxRows - 2)))
+  const cols = Math.max(1, e.props.bodyColumns)
+  const max = Math.max(1, Math.min(SUMMARY_MAX_LINES, e.props.maxRows - 2))
+  const layers = recap.pending ? null : parseDigest(recap.text)
+  const rows: DigestPart[][] = recap.pending
+    ? [[{ role: 'text', text: SUMMARY_PENDING, decide: false }]]
+    : layers
+      ? bandDigestRows(layers, cols, max)
+      : summaryLines(recap.text!, cols, max).map(text => [{ role: 'text', text, decide: false }])
+  const head = `── ${DIGEST_RULE} `
   return (
     <Box flexDirection="column" marginTop={1}>
-      {lines.map((line, i) => (
+      <Box key="summary-rule" flexDirection="row" height={1} flexShrink={0}>
+        <Text color={theme.dim}>{'── '}</Text>
+        <Text color={theme.accent} bold>{DIGEST_RULE}</Text>
+        <Text color={theme.dim}>{` ${'─'.repeat(Math.max(2, cols - columns(head)))}`}</Text>
+      </Box>
+      {rows.map((row, i) => (
         <Box key={`summary:${i}`} flexDirection="row" height={1} flexShrink={0}>
-          <Box key={`summary-label:${i}`} width={SUMMARY_PREFIX} flexShrink={0}>{i === 0 ? <Text color={theme.accent} bold>{SUMMARY_LABEL}</Text> : <Text> </Text>}</Box>
-          <Text color={recap.pending ? theme.dim : theme.fg} wrap="truncate-end">{line}</Text>
+          {row.map((p, j) => (
+            <Text key={`summary-part:${i}:${j}`} color={recap.pending ? theme.dim : p.decide ? theme.accent : p.role === 'label' ? theme.dim : theme.fg} bold={p.decide || undefined} wrap="truncate-end">{p.text}</Text>
+          ))}
         </Box>
       ))}
-      {!recap.pending && (
-        <Box key="summary-keys" flexDirection="row" paddingLeft={SUMMARY_PREFIX} height={1} flexShrink={0}>
-          <Button key="summary-full" hotkey="0" label="完整摘要" plain dimColor onPress={() => void $.ui.open({ id: SUMMARY_PANE, title: SUMMARY_LABEL, focus: true, closeOnEscape: true })} />
-        </Box>
-      )}
     </Box>
   )
 }
@@ -1167,6 +1195,7 @@ export const register: Register = on => {
       ...tabList.map(x => `tab:${x.id}`),
       ...(tab === 'decisions' ? ['decide-all', ...decisionList().flatMap(d => [`approve:${d.id}`, `manual:${d.id}`, `detail:${d.id}`]), 'decide-yes', 'decide-manual'] : []),
       ...rows.flatMap((r, i) => [...(numberOf(tab, i) ? [`num:${r.key}`] : []), `name:${r.key}`]),
+      ...(tab !== 'decisions' && tab !== 'hidden' ? ['brief-key'] : []),
       ...(pop ? ['popover-down', 'popover-up', ...(pop.kind === 'brief' ? ['popover-print'] : [])] : []),
     ]
     const at = (drawing += 1)
@@ -1209,7 +1238,7 @@ export const register: Register = on => {
       return shell(decisionsBody($, e, cols, theme), over)
     }
     const hidden = tab === 'hidden'
-    const press = (r: Session) => (hidden ? unarchiveCard($, r) : toggleBrief($, r))
+    const press = (r: Session) => (hidden ? unarchiveCard($, r) : pickCard($, r))
     // The header row past the blank column, the mark and the right margin; the question row also leaves the number column blank.
     const head = Math.max(1, cols - 4)
     const onPending = tab === 'pending'
@@ -1311,6 +1340,11 @@ export const register: Register = on => {
           {offscreen('above', rows.slice(0, top), 0)}
           {rows.length === 0 ? empty : body}
           {offscreen('below', rows.slice(end), end)}
+          {!hidden && (
+            <Box key="brief-keys" height={0} flexShrink={0} overflow="hidden">
+              <Button key="brief-key" hotkey="d" label="" plain onPress={() => toggleBrief($, rows.find(r => r.key === chosen) ?? null)} />
+            </Box>
+          )}
         </Box>
         {top >= lastTop(rows) && (
           <Box key="footer" flexShrink={0} marginTop={1}>
@@ -1318,18 +1352,6 @@ export const register: Register = on => {
           </Box>
         )}
         {briefOver}
-      </Box>
-    )
-  })
-
-  // The whole recap, uncut, in the side pane 0 opens from a child tab.
-  on('ui.render', { component: 'Pane', requestId: SUMMARY_PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    const theme = THEMES[recapTheme]
-    return (
-      <Box flexDirection="column" {...('bg' in theme ? { backgroundColor: theme.bg } : {})}>
-        <Box key="summary-text">{recap.text ? <Text color={theme.fg} wrap="wrap">{recap.text}</Text> : <Text color={theme.dim}>{BRIEF_EMPTY}</Text>}</Box>
-        {recap.pending && <Box key="summary-pending"><Text color={theme.dim}>{`新的摘要${SUMMARY_PENDING}`}</Text></Box>}
       </Box>
     )
   })

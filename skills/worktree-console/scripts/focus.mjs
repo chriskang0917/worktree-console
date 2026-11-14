@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { LABELS, textOptionLabels, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
+import { LABELS, textStop, textOptionLabels, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
 import { isConsoleSession } from "./log.mjs";
 import { adviceFor, advisorHome, advisorState, loadAdvice } from "./advice.mjs";
-import { readSummary } from "./summary.mjs";
+import { readSummary, stopDigest } from "./summary.mjs";
+import { digestLayers, digestMarkdown } from "../../../hooks/digest.mjs";
 import { decisionCards, splitBatch } from "./automation.mjs";
 
 export const FOCUS_WAIT_MS = 60_000;
+// How long a question that just reached the band waits for its recap before it prints without one.
+export const DIGEST_WAIT_MS = 15_000;
 const MODS_TTL_MS = 30_000;
 const FILE = "focus.json";
 const CONSOLE_SESSIONS_MAX = 10;
@@ -256,6 +259,24 @@ function briefOf(home, session, now) {
   return { text: stale && !pending ? null : text, pending };
 }
 
+// The four-layer recap under a text stop's report, once the recap of that very stop is written; `pending` while it is being written.
+export function stopDigestLines(session, { home = consoleHome(), now = Date.now() } = {}) {
+  if (!session || !textStop(session.status, session)) return { lines: [], pending: false };
+  const { text, pending } = stopDigest(home, session, now);
+  return { lines: digestMarkdown(digestLayers(text)), pending: !text && pending };
+}
+
+// A stop's report as /focus-show and the watcher print it: the reply as is, then its recap at the bottom.
+export function reportWithDigest(row, status, session, { again = false, home = consoleHome(), now = Date.now() } = {}) {
+  return [...reportLines(row, status, session, { again }), ...stopDigestLines(session, { home, now }).lines];
+}
+
+// A question that just reached the band holds its print while its recap is being written, up to DIGEST_WAIT_MS.
+export function holdForDigest(view, { home = consoleHome(), now = Date.now() } = {}) {
+  if (!view.current || now - (view.state.currentAt ?? 0) >= DIGEST_WAIT_MS) return false;
+  return stopDigestLines(view.current.item.session, { home, now }).pending;
+}
+
 function plainReport(tag, status) {
   const [icon, label] = STATUS[status.kind];
   return [`### ${icon} ${tag} ${label}`, "", `> ${lastActivity(status)}`];
@@ -284,7 +305,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         session,
         item ? (item.entries.length > 1 ? item.entries.map((x) => x.question).join(" / ") : item.entries[0].question) : status.kind === "idle" ? "（閒置）" : lastActivity(status),
       );
-      const report = needsYou(status.kind) ? reportLines(row, status, session) : plainReport(tag, status);
+      const report = needsYou(status.kind) ? reportWithDigest(row, status, session, { home, now }) : plainReport(tag, status);
       const key = keyOf.get(session) ?? session.paneKey;
       return {
         key,

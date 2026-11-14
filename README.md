@@ -70,7 +70,7 @@ worktree-console 是一個 Claude Code plugin。在 [Orca](https://github.com/st
 
 狀態存在 `~/.config/worktree-console/`（中控台登記、專注狀態、封存、設定與你自己的 `prompt.md`）、`~/.config/claude-handoff/`（交棒設定與說明）和 `~/.worktree-console/`（過程紀錄）。用到 Linear token 時，它存在 macOS 鑰匙圈的 `worktree-console-linear`。
 
-中控台管理的子 session 每次停下，背景會用 `claude -p --model sonnet` 把這一輪回覆摘要成幾句白話：子 session 分頁的輸入框上方顯示摘要（輸入框空白時按 `0` 看全文），中控台面板的卡片按 Enter 跳出該 session 的摘要。中控台自動送出的續命或快取交棒訊息觸發的那一輪不摘要，保留上一份；卡片上的摘要對不上這次停下的回覆時顯示「還沒有摘要」。要換模型就在 `config.json` 設 `"summaryModel": "haiku"`。每次呼叫的 token 與 `total_cost_usd` 記在 `~/.config/worktree-console/summary-usage.jsonl`。
+中控台管理的子 session 每次停下，背景會用 `claude -p --model sonnet` 把這一輪回覆摘要成四層白話：在做什麼、卡在哪（沒卡住就省略）、做了什麼、要你決定（回覆有建議時同一行寫「建議：…」；不用回答時改成「下一步」）。子 session 分頁的輸入框上方先畫一條「── 摘要 ──」，下面一層一行；中控台面板選中卡片按 `d` 打開或收起摘要小視窗；題目送回中控台時（`/focus-show`、沒有 mods 的 watcher 回報、待決詳情）照原文印，最下面接這四層。題目換上橫條時摘要還在產生就最多等 15 秒，逾時只印原文。中控台自動送出的續命或快取交棒訊息觸發的那一輪不摘要，保留上一份；卡片上的摘要對不上這次停下的回覆時顯示「還沒有摘要」。要換模型就在 `config.json` 設 `"summaryModel": "haiku"`。每次呼叫的 token 與 `total_cost_usd` 記在 `~/.config/worktree-console/summary-usage.jsonl`。
 
 ## session 名稱
 

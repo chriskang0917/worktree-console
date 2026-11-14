@@ -216,17 +216,19 @@ test("真實終端：橫條標題列左邊狀態與代號、右邊「8: 延後�
   }
 });
 
-test("真實終端：卡片按 Enter 跳出摘要浮層、蓋在下方卡片上；Esc 把鍵盤交回輸入框後浮層收起", { timeout: 30_000 }, async () => {
+test("真實終端：選中卡片按 d 跳出摘要浮層、蓋在下方卡片上，底部分隔線下寫 d 收起 · p 印出完整回報；Esc 把鍵盤交回輸入框後浮層收起", { timeout: 30_000 }, async () => {
   const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 151 });
   const open = frame => panel(frame).some(line => line.startsWith("── reply0 摘要"));
   try {
     await terminal.open();
-    terminal.tmux("send-keys", "-t", "fixture:0.0", "Enter");
+    terminal.tmux("send-keys", "-t", "fixture:0.0", "d");
     const shown = await terminal.waitFor(open, "等待摘要浮層");
     const lines = panel(shown);
     const title = lines.findIndex(line => line.startsWith("── reply0 摘要"));
-    assert.ok(lines[title].includes("p 印出完整回報"), lines.join("\n"));
+    assert.ok(!lines[title].includes("p 印出完整回報"), lines.join("\n"));
     assert.ok(lines[title + 1].includes("還沒有摘要"), lines.join("\n"));
+    assert.match(lines[title + 2], /^─+$/, lines.join("\n"));
+    assert.equal(lines[title + 3].trim(), "d 收起 · p 印出完整回報", lines.join("\n"));
     terminal.tmux("send-keys", "-t", "fixture:0.0", "Escape");
     const closed = await terminal.waitFor(frame => !open(frame), "Esc 後浮層應收起");
     assert.ok(panel(closed).some(line => /^ {3}1: ↩ 已回覆  reply1 +fixture$/.test(line)), panel(closed).join("\n"));

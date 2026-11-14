@@ -19,7 +19,6 @@ import {
   parseBaseline,
   readKeepalive,
   reportBlock,
-  reportLines,
   snapshot,
   stopFields,
   writeKeepalive,
@@ -27,7 +26,7 @@ import {
 import { terminals } from "./terminals.mjs";
 import { handedOver, keepaliveStep, keepaliveUsage, sessionEntries } from "./keepalive.mjs";
 import { sweepDisposable } from "./disposable.mjs";
-import { loadFocus, modsActive } from "./focus.mjs";
+import { DIGEST_WAIT_MS, loadFocus, modsActive, reportWithDigest, stopDigestLines } from "./focus.mjs";
 import { answeredStops, commitLog, distillReminder, logEvent, registerConsole, sessionFor, stopLogged } from "./log.mjs";
 import { gitScene } from "./git-scene.mjs";
 import { trialStep } from "./automation.mjs";
@@ -57,6 +56,7 @@ const { values } = parseArgs({
 
 const INTERVAL = Number(process.env.WATCH_INTERVAL_MS || 10_000);
 const TIMEOUT = Number(process.env.WATCH_TIMEOUT_MS || 110 * 60_000);
+const DIGEST_POLL_MS = 500;
 
 function ancestors() {
   const pids = new Set([String(process.pid)]);
@@ -232,9 +232,12 @@ for (;;) {
         : data.rows.flatMap((row) =>
             row.sessions.filter((x) => x.agent && !x.archived && !fresh.has(x) && ["waiting", "permission"].includes(x.status.kind)).map((x) => ({ row, x })),
           );
+      // Without the band the watcher prints the report itself, so it waits for the recaps being written, like the band does.
+      const until = Date.now() + DIGEST_WAIT_MS;
+      while (!focused && Date.now() < until && wake.some(({ x }) => stopDigestLines(x).pending)) await new Promise((r) => setTimeout(r, DIGEST_POLL_MS));
       const reports = [
-        ...wake.map(({ row, x }) => reportLines(row, x.status, x)),
-        ...unanswered.map(({ row, x }) => reportLines(row, x.status, x, { again: true })),
+        ...wake.map(({ row, x }) => reportWithDigest(row, x.status, x)),
+        ...unanswered.map(({ row, x }) => reportWithDigest(row, x.status, x, { again: true })),
       ];
       if (focused) console.log(reports.map((r) => r.join("\n")).join("\n\n---\n\n"));
       else {

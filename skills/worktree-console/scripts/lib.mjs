@@ -32,6 +32,8 @@ const MIN_CLIP = 8;
 const KEY_STOPWORDS = new Set(["release", "hotfix", "v", "rc", "build", "version"]);
 const MENU_TOOL = "AskUserQuestion";
 const menuOpen = (agent) => agent?.toolName === MENU_TOOL && agent.state !== "done";
+// A stop whose report quotes the reply as typed: not a menu, a permission prompt or an anomaly.
+export const textStop = (status, session = null) => ["waiting", "done"].includes(status?.kind) && !status.menu && !menuOpen(session?.agent);
 const NICKNAME = /^[a-z]{3,8}$/i;
 export const ALIAS = /^[a-z]{3,5}$/;
 const CLIP_BRANCH = 8;

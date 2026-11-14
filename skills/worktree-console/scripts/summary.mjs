@@ -20,16 +20,18 @@ const TERMINAL_ENV = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKS
 
 export const SYSTEM_PROMPT = [
   "你把一個 coding agent 剛結束的這一輪回覆，摘要成給開發者本人看的繁體中文白話摘要。",
-  "只寫這四行，照這個順序，每行用標籤開頭：",
-  "前提：這一輪在做什麼、現在的狀況。",
-  "問題：卡住或要開發者決定的事；沒有就整行省略。",
-  "解法：做了什麼，或打算怎麼做。",
-  "建議：回覆裡建議的下一步或選擇，選項寫出內容不只寫字母；回覆沒有給建議時寫「要你決定：<要回答什麼>」，不要自己替開發者選。",
+  "照這個順序寫四層，每層用標籤開頭，最多 2 行；第 2 行不加標籤，直接接在下一行：",
+  "在做什麼：這一輪在做什麼、現在的狀況。",
+  "卡在哪：卡住的事；沒有卡住就整層省略。",
+  "做了什麼：做了什麼，或打算怎麼做。",
+  "要你決定：要開發者回答或決定什麼。回覆裡有建議時接在同一行，寫成「建議：<建議的內容>」。",
+  "不用開發者回答時，第四層改用「下一步：<接下來會做什麼>」，不寫「要你決定」。",
   "寫法：",
-  "1. 每行只講一件事，不超過 30 個中文字（反引號裡的內容、英文技術名詞各算 1 字）。",
-  "2. 用主動語態和動詞，寫「檢查」不寫「進行檢查」，少用「被」「由…」。",
-  "3. 只留做決定需要的資訊：檔名、測試數字、指令細節不重要就省略；只有這次對話懂的代號不要出現。",
-  "4. 不加標題、前言或結語，不用 Markdown。",
+  "1. 一行只講一件事，不用「；」串兩件事；每行不超過 30 個中文字（反引號裡的內容、英文技術名詞各算 1 字）。",
+  "2. 提到選項時寫出選項內容，不寫 a、b、c 或 A、B 這類代號。",
+  "3. 用主動語態和動詞，寫「檢查」不寫「進行檢查」，少用「被」「由…」。",
+  "4. 只留做決定需要的資訊：檔名、測試數字、指令細節不重要就省略；只有這次對話懂的代號不要出現。",
+  "5. 不加標題、前言或結語，不用 Markdown；不要自己替開發者選，回覆沒有建議就不寫建議。",
   "只輸出這幾行。",
 ].join("\n");
 
@@ -88,6 +90,16 @@ export function readSummary(home, handle, now = Date.now()) {
   const marker = readJson(pendingFile(home, handle));
   const pending = !!marker && now - (marker.since ?? 0) < (marker.timeoutMs ?? timeoutMs()) + PENDING_SLACK_MS;
   return { text: saved?.text ?? null, at: saved?.at ?? null, sessionId: saved?.sessionId ?? null, replyAt: saved?.replyAt ?? null, pending };
+}
+
+// The recap of the stop a card shows, or null: only a recap whose replyAt matches the stop counts; herdr and the Herdr app read
+// the stop time from the same transcript entry, Orca's own clock is not compared. A recap still being written for it is `pending`.
+export function stopDigest(home, session, now = Date.now()) {
+  const { text, pending, replyAt } = readSummary(home, session?.handle, now);
+  const since = session?.since ?? session?.agent?.stateStartedAt ?? null;
+  const comparable = !!session?.agent?.herdr && typeof replyAt === "number" && typeof since === "number";
+  const matches = comparable ? replyAt === since : !pending;
+  return { text: text && matches ? text : null, pending };
 }
 
 function textOf(content) {
