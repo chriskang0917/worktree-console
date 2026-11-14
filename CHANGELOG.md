@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.19.0
+
+- feat(asks): show how long each worktree's questions waited for you
+
 ## 1.18.1
 
 - fix(focus): resend a /focus-show that answers without the report and write focus.json atomically
