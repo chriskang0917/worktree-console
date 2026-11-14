@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.18.2
+
+- fix(template): record unsourced guesses as decided and finalize without a sheet when nothing is left to decide
+
 ## 1.18.1
 
 - fix(focus): resend a /focus-show that answers without the report and write focus.json atomically
