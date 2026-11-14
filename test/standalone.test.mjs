@@ -157,3 +157,14 @@ test("每個測試檔先載入 isolate-env，跑測試不會碰到真的 herdr �
   const missing = files.filter((f) => !read(`test/${f}`).startsWith('import "./fixtures/isolate-env.mjs";'));
   assert.deepEqual(missing, []);
 });
+
+test("範本的需求訪談：無出處的推測寫進已決定並標 ⚠️，沒有待決定時不出單直接回定稿完成（動工）", () => {
+  const template = read("templates/prompt.md");
+  const rules = template.split("\n");
+  const rule = rules.find((l) => l.startsWith("- ") && l.includes("⚠️ 無出處（推測）") && l.includes("已決定"));
+  assert.ok(rule, "缺推測題放已決定的規則");
+  assert.doesNotMatch(rule, /放「待決定」/);
+  assert.doesNotMatch(rules.find((l) => l.includes("待決定排序")), /無出處 →/);
+  assert.match(template, /⚠️ 無出處（推測）[^\n]*請先看/);
+  assert.match(template, /沒有待決定[^\n]*不出單[^\n]*「定稿完成（動工）：<目標檔絕對路徑>」/);
+});

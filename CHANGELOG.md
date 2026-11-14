@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.19.0
+## 1.18.2
 
-- feat(asks): show how long each worktree's questions waited for you
+- fix(template): record unsourced guesses as decided and finalize without a sheet when nothing is left to decide
 
 ## 1.18.1
 
