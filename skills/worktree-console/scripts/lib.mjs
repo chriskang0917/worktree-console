@@ -465,6 +465,12 @@ function askLines(text) {
   return proseLines(text).filter((l) => /[?？]/.test(l) && !isTableRow(l)).map((l) => l.trim());
 }
 
+// A 第 N 題 heading or a, b, c options ask outright; plain sentences ask only when the last paragraph does.
+export function asksUser(text) {
+  if (askLines(text).length === 0) return false;
+  return /\*\*第\s*\d+\s*題[:：]/.test(text) || textOptionLabels(text).length > 0 || asksAtEnd(text);
+}
+
 // Returns { kind, text, tool, input, menu } for one ps agent; text/input are verbatim.
 export function agentStatus(agent) {
   const state = agent?.state;
@@ -479,7 +485,7 @@ export function agentStatus(agent) {
   }
   if (state === "done") {
     const text = paragraphs(agent.lastAssistantMessage).map((p) => p.join("\n")).join("\n\n");
-    return { kind: askLines(agent.finalMessage ?? text).length > 0 ? "waiting" : "done", text };
+    return { kind: asksUser(agent.finalMessage ?? text) ? "waiting" : "done", text };
   }
   return { kind: "idle", text: "" };
 }

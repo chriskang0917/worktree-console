@@ -112,6 +112,12 @@ test("一般句子的問號要在最後一段、而且不在程式碼、引用�
   assert.equal(classify(world({ text: "已經修好。\n\n要順便把舊測試也改掉嗎？" }).item, { prediction: ready(), now: NOW }).band, false);
 });
 
+test("面板與看板的 💬 跟代回同一條：「第 N 題」、a b c 選項或最後一段有問句才算在問；自問自答的報告顯示 ⏸", () => {
+  const kind = (text) => agentStatus({ state: "done", lastAssistantMessage: text }).kind;
+  for (const text of [ASK, "**第 2 題：README 要寫什麼內容？**\n\n建議：安裝與用法", "要用哪個？\n\n- **a.** 甲\n- **b.** 乙\n\n建議 a", "做完了。\n\n要順便改舊測試嗎？"]) assert.equal(kind(text), "waiting", text);
+  for (const text of ["為什麼會壞？因為少了一個參數。\n\n已經修好，測試都過了。", "已經修好。\n\n## 為什麼會壞？", "已經修好。\n\n| 題目 | 要改嗎？ |\n|---|---|\n| a | 是 |", "已經修好，測試都過了。"]) assert.equal(kind(text), "done", text);
+});
+
 test("dev-flow 未定題算緊急第 5 類；攔截點停下的那則一律不代回", () => {
   const und = world({ text: `未定 1 題\n第 1 題（gate#016a044c-1）：重置要不要進草稿；暫定：照 plan\n\n${ASK}` });
   assert.deepEqual(classify(und.item, { prediction: ready(), now: NOW }), { band: true, urgent: URGENT[4] });

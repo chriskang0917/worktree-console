@@ -1,7 +1,7 @@
 // Which waiting questions reach the band: urgent ones at once, others only after the advisor has judged them; a non-urgent one is answered for the user.
 import fs from "node:fs";
 import path from "node:path";
-import { asksAtEnd, asksSeveral, batchSheet, homeRunFolder, textOptionLabels } from "./lib.mjs";
+import { asksSeveral, asksUser, batchSheet, homeRunFolder } from "./lib.mjs";
 
 // The ten kinds the advisor never answers; any one question of them makes the whole message urgent.
 export const URGENT = [
@@ -21,7 +21,6 @@ export const JUDGE_WAIT_MS = 120_000;
 export const DELEGATE_PREFIX = "（中控台代回，待實作前審核）";
 export const SHEET_ANSWER = `${DELEGATE_PREFIX}全照建議`;
 
-const QUESTION_HEAD = /\*\*第\s*\d+\s*題[:：]/;
 const UNDECIDED = /第\s*\d+\s*題（gate#[0-9a-z]{8}-\d+）[：:]/;
 const GATE_STOP = /^\s*審核單[：:]|console\.mjs review sheet/m;
 const SUBMIT = /回「送審」/;
@@ -114,7 +113,7 @@ export function classify(item, { prediction = null, now = Date.now(), gateBlocke
     return { band: false, delegate: { answer: SHEET_ANSWER, items, sheet: true } };
   }
   if (isUndecided(text)) return urgent(URGENT[4]);
-  if (kind === "text" && !QUESTION_HEAD.test(text) && textOptionLabels(text).length === 0 && !asksAtEnd(text)) return onBand("問句不在最後一段");
+  if (kind === "text" && !asksUser(text)) return onBand("問句不在最後一段");
   const since = ms(item.session?.since ?? item.session?.agent?.stateStartedAt) || now;
   const p = prediction;
   if (!p || p.status === "pending") return now - since >= JUDGE_WAIT_MS ? urgent(UNSURE) : { band: false, wait: true };

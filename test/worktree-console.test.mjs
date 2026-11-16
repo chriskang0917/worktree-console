@@ -1568,7 +1568,7 @@ test("等待回應判斷：問號只在程式碼區塊或引用框裡時仍是 �
 });
 
 test("最後動態與清單問題欄都取整則回覆最後一個含問號的那一行，同樣排除程式碼與引用", () => {
-  const text = "第一個問題：要改 API 嗎？\n\n**第二個問題：要不要順便改畫面？**\n\n> 引用的問句？\n\n```\nx?.y\n```\n\n建議先改 API。";
+  const text = "第一個問題：要改 API 嗎？\n\n**第二個問題：要不要順便改畫面？**\n\n> 引用的問句？\n\n```\nx?.y\n```";
   const status = asking(text);
   assert.equal(lastActivity(status), "**第二個問題：要不要順便改畫面？**");
   assert.equal(pendingItems([listRow("PROJ-1", session(status))])[0].entries[0].question, "**第二個問題：要不要順便改畫面？**");
