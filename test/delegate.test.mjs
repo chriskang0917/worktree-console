@@ -87,9 +87,32 @@ test("其他題等 advisor 判完：判斷中不上橫條；超過 2 分鐘判�
   assert.deepEqual(d.delegate.items[0].basis, { kind: "precedent", source: "11/10 你回「b」" });
 });
 
-test("沒有選項的開放題不代回、照常上待回覆；dev-flow 未定題算緊急第 5 類；攔截點停下的那則一律不代回", () => {
-  const open = world({ text: "README 要寫什麼內容？" });
-  assert.equal(classify(open.item, { prediction: ready(), now: NOW }).band, true);
+test("沒有選項的開放題照同一套規則代回（一般句子與「第 N 題」都算）；緊急的照舊上橫條", () => {
+  const answer = ready({ answer: "寫安裝與用法兩段" });
+  for (const text of ["README 要寫什麼內容？", "做完了。\n\nREADME 要寫什麼內容？", "**第 2 題：README 要寫什麼內容？**\n\n建議：安裝與用法"]) {
+    const v = classify(world({ text }).item, { prediction: answer, now: NOW });
+    assert.equal(v.band, false, text);
+    assert.equal(v.delegate.answer, "寫安裝與用法兩段", text);
+  }
+  assert.deepEqual(classify(world({ text: "要先做哪張票？" }).item, { prediction: ready({ urgent: URGENT[3] }), now: NOW }), { band: true, urgent: URGENT[3] });
+});
+
+test("一般句子的問號要在最後一段、而且不在程式碼、引用框、表格或標題裡，才算在問；不算的照舊上橫條", () => {
+  const notAsking = [
+    "為什麼會壞？因為少了一個參數。\n\n已經修好，測試都過了。",
+    "已經修好。\n\n## 為什麼會壞？",
+    "已經修好。\n\n> 要不要順便改？",
+    "已經修好。\n\n| 題目 | 要改嗎？ |\n|---|---|\n| a | 是 |",
+    "已經修好。\n\n```\nif (ok?) run()\n```",
+  ];
+  for (const text of notAsking) {
+    const v = classify(world({ text }).item, { prediction: ready(), now: NOW });
+    assert.equal(v.delegate, undefined, text);
+  }
+  assert.equal(classify(world({ text: "已經修好。\n\n要順便把舊測試也改掉嗎？" }).item, { prediction: ready(), now: NOW }).band, false);
+});
+
+test("dev-flow 未定題算緊急第 5 類；攔截點停下的那則一律不代回", () => {
   const und = world({ text: `未定 1 題\n第 1 題（gate#016a044c-1）：重置要不要進草稿；暫定：照 plan\n\n${ASK}` });
   assert.deepEqual(classify(und.item, { prediction: ready(), now: NOW }), { band: true, urgent: URGENT[4] });
   const gated = world({ text: `審核單：T1\nfeat/demo  repo\n\n${ASK}` });
