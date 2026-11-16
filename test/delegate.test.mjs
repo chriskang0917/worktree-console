@@ -87,9 +87,38 @@ test("其他題等 advisor 判完：判斷中不上橫條；超過 2 分鐘判�
   assert.deepEqual(d.delegate.items[0].basis, { kind: "precedent", source: "11/10 你回「b」" });
 });
 
-test("沒有選項的開放題不代回、照常上待回覆；dev-flow 未定題算緊急第 5 類；攔截點停下的那則一律不代回", () => {
-  const open = world({ text: "README 要寫什麼內容？" });
-  assert.equal(classify(open.item, { prediction: ready(), now: NOW }).band, true);
+test("沒有選項的開放題照同一套規則代回（一般句子與「第 N 題」都算）；緊急的照舊上橫條", () => {
+  const answer = ready({ answer: "寫安裝與用法兩段" });
+  for (const text of ["README 要寫什麼內容？", "做完了。\n\nREADME 要寫什麼內容？", "**第 2 題：README 要寫什麼內容？**\n\n建議：安裝與用法"]) {
+    const v = classify(world({ text }).item, { prediction: answer, now: NOW });
+    assert.equal(v.band, false, text);
+    assert.equal(v.delegate.answer, "寫安裝與用法兩段", text);
+  }
+  assert.deepEqual(classify(world({ text: "要先做哪張票？" }).item, { prediction: ready({ urgent: URGENT[3] }), now: NOW }), { band: true, urgent: URGENT[3] });
+});
+
+test("一般句子的問號要在最後一段、而且不在程式碼、引用框、表格或標題裡，才算在問；不算的照舊上橫條", () => {
+  const notAsking = [
+    "為什麼會壞？因為少了一個參數。\n\n已經修好，測試都過了。",
+    "已經修好。\n\n## 為什麼會壞？",
+    "已經修好。\n\n> 要不要順便改？",
+    "已經修好。\n\n| 題目 | 要改嗎？ |\n|---|---|\n| a | 是 |",
+    "已經修好。\n\n```\nif (ok?) run()\n```",
+  ];
+  for (const text of notAsking) {
+    const v = classify(world({ text }).item, { prediction: ready(), now: NOW });
+    assert.equal(v.delegate, undefined, text);
+  }
+  assert.equal(classify(world({ text: "已經修好。\n\n要順便把舊測試也改掉嗎？" }).item, { prediction: ready(), now: NOW }).band, false);
+});
+
+test("面板與看板的 💬 跟代回同一條：「第 N 題」、a b c 選項或最後一段有問句才算在問；自問自答的報告顯示 ⏸", () => {
+  const kind = (text) => agentStatus({ state: "done", lastAssistantMessage: text }).kind;
+  for (const text of [ASK, "**第 2 題：README 要寫什麼內容？**\n\n建議：安裝與用法", "要用哪個？\n\n- **a.** 甲\n- **b.** 乙\n\n建議 a", "做完了。\n\n要順便改舊測試嗎？"]) assert.equal(kind(text), "waiting", text);
+  for (const text of ["為什麼會壞？因為少了一個參數。\n\n已經修好，測試都過了。", "已經修好。\n\n## 為什麼會壞？", "已經修好。\n\n| 題目 | 要改嗎？ |\n|---|---|\n| a | 是 |", "已經修好，測試都過了。"]) assert.equal(kind(text), "done", text);
+});
+
+test("dev-flow 未定題算緊急第 5 類；攔截點停下的那則一律不代回", () => {
   const und = world({ text: `未定 1 題\n第 1 題（gate#016a044c-1）：重置要不要進草稿；暫定：照 plan\n\n${ASK}` });
   assert.deepEqual(classify(und.item, { prediction: ready(), now: NOW }), { band: true, urgent: URGENT[4] });
   const gated = world({ text: `審核單：T1\nfeat/demo  repo\n\n${ASK}` });
@@ -338,4 +367,37 @@ test("自動送審：watcher 這一輪對報告乾淨的送審停點送「送審
   assert.deepEqual(delegateStep(w.rows, { now: NOW, home, send }), [`[${w.row.label}] 已自動回覆：送審`]);
   delegateStep(w.rows, { now: NOW + 5000, home, send });
   assert.deepEqual(sent, [[w.row.label, "送審"]]);
+});
+
+const { autoReplyOf } = await import("../skills/worktree-console/scripts/auto-reply.mjs");
+const { waitingLine, awaitsDecision } = await import("../skills/worktree-console/scripts/waiting-line.mjs");
+
+test("代回中：session 正在跑、而且這一輪是中控台最近一筆代回送出後才開始的，才回傳代回的答案；停下、自己另外下指令、送失敗都不算", () => {
+  const sentAt = NOW - 30_000;
+  const busy = (startedAt) => world({ state: "working", since: startedAt }).session;
+  const s = busy(sentAt + 3_000);
+  const key = (x) => `${x.paneKey}@${sentAt - 60_000}`;
+  assert.equal(autoReplyOf(s, { [key(s)]: { at: sentAt, answer: "先改 API" } }), "先改 API");
+  assert.equal(autoReplyOf(s, { [key(s)]: { at: sentAt, submit: true } }), "送審");
+  assert.equal(autoReplyOf(s, { [key(s)]: { at: sentAt, failed: true } }), null, "送失敗不算");
+  assert.equal(autoReplyOf(s, {}), null);
+  const later = busy(sentAt + 10 * 60_000);
+  assert.equal(autoReplyOf(later, { [key(later)]: { at: sentAt, answer: "先改 API" } }), null, "停下後使用者自己下指令的那一輪不算");
+  const stopped = world({ state: "done", since: sentAt + 3_000, text: "做完了。" }).session;
+  assert.equal(autoReplyOf(stopped, { [key(stopped)]: { at: sentAt, answer: "先改 API" } }), null, "停下就不算");
+});
+
+test("waiting-line：一行「等待：…｜自動處理中：…｜在跑：…」，空的寫「無」；⏸ 只有最後一段在等使用者決定才算等待", () => {
+  const sentAt = NOW - 30_000;
+  const asking = world({ text: "做完了。\n\n要順便改舊測試嗎？" });
+  const report = world({ text: "為什麼會壞？因為少了參數。\n\n已經修好。" });
+  const decide = world({ text: "原型開好了。\n\n看完請說「定稿」。" });
+  const auto = world({ state: "working", since: sentAt + 2_000 });
+  const run = world({ state: "working", since: NOW - 5_000 });
+  const rows = [asking, report, decide, auto, run].map((w) => w.row);
+  const delegated = { [`${auto.session.paneKey}@x`]: { at: sentAt, answer: "b" } };
+  const tag = (w) => w.row.label;
+  assert.equal(waitingLine(rows, delegated), `等待：${tag(asking)}、${tag(decide)}｜自動處理中：${tag(auto)}｜在跑：${tag(run)}`);
+  assert.equal(waitingLine([report.row], {}), "等待：無｜自動處理中：無｜在跑：無");
+  assert.equal(awaitsDecision("請你確認\n\n已經修好。"), false, "只看最後一段");
 });

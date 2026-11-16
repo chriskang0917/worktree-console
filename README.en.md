@@ -161,12 +161,14 @@ Add these keys to your existing `~/.config/worktree-console/config.json` (or `$W
 ```json
 {
   "theme": "neutral",
-  "motion": true
+  "motion": true,
+  "autoShow": true
 }
 ```
 
 - **theme:** `neutral` (default, uses terminal colors), `neutral-light`, `dracula`, `gruvbox`, or `light`. `neutral` leaves foreground text in your terminal's default color.
 - **motion:** `true` (default) alternates ◆/◇ every 900ms only for the primary question. The current item takes priority, otherwise the first queued question or authorization request does. Every visible authorization ◆ breathes in sync: 1.2 seconds in the blocked color, then 0.6 seconds dim; the label and focus-band rail keep the blocked color. Working sessions and errors stay still. `false` keeps all icons at their initial frame and disables the animation timer.
+- **autoShow:** `true` (default) prints a question into the console conversation with `/focus-show` as soon as it reaches the band. `false` skips that; press `9`, or `d` then `p` in the digest popover, to print it.
 
 ### Repo abbreviations
 

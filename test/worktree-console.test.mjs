@@ -1568,7 +1568,7 @@ test("等待回應判斷：問號只在程式碼區塊或引用框裡時仍是 �
 });
 
 test("最後動態與清單問題欄都取整則回覆最後一個含問號的那一行，同樣排除程式碼與引用", () => {
-  const text = "第一個問題：要改 API 嗎？\n\n**第二個問題：要不要順便改畫面？**\n\n> 引用的問句？\n\n```\nx?.y\n```\n\n建議先改 API。";
+  const text = "第一個問題：要改 API 嗎？\n\n**第二個問題：要不要順便改畫面？**\n\n> 引用的問句？\n\n```\nx?.y\n```";
   const status = asking(text);
   assert.equal(lastActivity(status), "**第二個問題：要不要順便改畫面？**");
   assert.equal(pendingItems([listRow("PROJ-1", session(status))])[0].entries[0].question, "**第二個問題：要不要順便改畫面？**");
@@ -2683,6 +2683,21 @@ test("有 mods 時 watcher 不為題目叫醒中控台：題目停下只寫紀�
   const plain = run("watch.mjs", ["--baseline", allPanes("busy")], { dir, env: { WATCH_TIMEOUT_MS: "300" } });
   assert.ok(plain.out.includes(BOARD_HEADER) && plain.out.includes("### 📋"), "沒有 mods 時照舊整批回報");
   assert.ok(plain.out.includes("### 🔐 PROJ-102(perm) 等你授權"));
+});
+
+test("config.json 的 autoShow 設成 false：題目換上橫條不 announce（不自動印）；按 9 選這題（focus-pick）照舊印；沒設或 true 照舊自動印", () => {
+  const home = consoleHome({ mods: true });
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ autoShow: false }));
+  const env = { WORKTREE_CONSOLE_HOME: home };
+  const dir = fake({ mutatePs: stagger });
+  const first = focusRun(dir, env);
+  assert.equal(first.currentTag, "PROJ-102(perm)");
+  assert.equal(first.announce, null, "autoShow false 不自動印");
+  const picked = focusRun(dir, env, ["focus-pick", first.current]);
+  assert.equal(picked.announce, "PROJ-102(perm)", "按 9 照舊印");
+  const on = consoleHome({ mods: true });
+  fs.writeFileSync(path.join(on, "config.json"), JSON.stringify({ autoShow: true }));
+  assert.equal(focusRun(dir, { WORKTREE_CONSOLE_HOME: on }).announce, "PROJ-102(perm)");
 });
 
 test("專注：同一題（session＋停下時間）只 announce 一次，輪詢、重啟都不重送；該 session 有新題才再 announce", () => {

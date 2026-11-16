@@ -192,6 +192,7 @@ type Session = {
   report: string
   // Decisions made without the user still waiting in this worktree's pre-implementation review sheet.
   review?: number
+  autoReply?: string | null
   branch?: string
   path?: string
 }
@@ -246,6 +247,7 @@ const FOOT = 2
 const CARD_ROWS = 3
 const CARD_BODY = 2
 const REVIEW_STATUS = { glyph: '◈', label: '待審核', color: 'waiting' as const, glyphColor: 'waiting' as const }
+const AUTO_STATUS = { glyph: '↻', label: '代回中', color: 'answered' as const, glyphColor: 'answered' as const }
 const REVIEW_TIMEOUT_MS = 120_000
 export const MARK_SPIN = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 export const MARK_STILL = '✻'
@@ -1332,7 +1334,8 @@ export const register: Register = on => {
       const isSel = r.key === chosen
       const num = numberOf(tab, i)
       const reviewing = r.review ?? 0
-      const cell = reviewing > 0 ? REVIEW_STATUS : statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
+      const auto = (r.autoReply ?? '').replace(/\s+/g, ' ').trim()
+      const cell = auto ? AUTO_STATUS : reviewing > 0 ? REVIEW_STATUS : statusCell(r.status, animationTick, { primary: r.key === primaryKey(), animated: appearance.motion })
       const mark = <Text color={theme.accent} bold={isSel || undefined}>{isSel ? ` ${markGlyph()} ` : '   '}</Text>
       const rail = <Text>{'   '}</Text>
       // The advisor's suggestion is ready: ✓ 建議, only the ✓ below 46 columns.
@@ -1348,7 +1351,7 @@ export const register: Register = on => {
       const question = questionWidth >= 2 ? truncateColumns(r.question.replace(/\s+/g, ' ').trim(), questionWidth) : ''
       const name = <Text color={isSel ? theme.accent : theme.fg} bold>{tag}</Text>
       const inner = Math.max(1, head - 3)
-      const branch = (r.branch ?? '').trim()
+      const branch = auto ? `已代回：${auto}` : (r.branch ?? '').trim()
       const repoWidth = Math.min(columns(r.repo), branch ? Math.max(REPO_MIN, inner - columns(branch) - CORNER_GAP) : inner, inner)
       const repo = truncateColumns(r.repo, repoWidth)
       const branchWidth = inner - columns(repo) - (repo ? CORNER_GAP : 0)

@@ -305,6 +305,18 @@ test("看板 mod：每列是圖示、代號、階段、等待時間加一行最�
   assert.match(main, /child\(r\.activity\)/);
 });
 
+test("看板 mod：中控台代回後還在跑的列，圖示換成 ↻、第二行寫「代回中 · 已代回：<答案>」，排序照 🔄；boardState 從 delegated.json 帶出 autoReply", async () => {
+  const now = 1_790_000_000_000;
+  const view = boardView({ at: now, rows: [{ repo: "app", tag: "PROJ-1", kind: "busy", stage: "規劃中", activity: "ls", since: now, terminal: "t1", autoReply: "先改 API" }, { repo: "app", tag: "PROJ-2", kind: "busy", activity: "ls", since: now, terminal: "t2", autoReply: null }] }, now);
+  assert.deepEqual(view.rows.map((r) => [r.tag, r.icon, r.activity]), [["PROJ-1", "↻", "代回中 · 已代回：先改 API"], ["PROJ-2", "🔄", "ls"]]);
+  const { boardState } = await import("../skills/worktree-console/scripts/herdr-app.mjs");
+  const session = { handle: "h1", paneKey: "p1", agent: { stateStartedAt: now + 2_000 }, status: { kind: "busy", text: "" } };
+  const row = { repo: "app", label: "PROJ-1", ticket: "PROJ-1", stage: "規劃中", sessions: [session] };
+  const state = boardState([row], now, () => "規劃中", { "p1@x": { at: now, answer: "先改 API" } });
+  assert.equal(state.rows[0].autoReply, "先改 API");
+  assert.equal(boardState([row], now, () => "規劃中", {}).rows[0].autoReply, null);
+});
+
 test("看板 mod：依 repo 分組，組的順序跟著組裡最需要處理的那一列，所以等你處理的仍排最上面", () => {
   const now = Date.UTC(2026, 9, 31, 12, 0, 0);
   const view = boardView(

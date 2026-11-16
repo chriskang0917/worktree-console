@@ -67,6 +67,7 @@ import { consoleSessionOk, focusOwnerOk, focusPayload, focusPick, focusReplied, 
 import { usageLines } from "./console-usage.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
 import { appWorktreeHome, branchFolder } from "./herdr-app.mjs";
+import { waitingLine } from "./waiting-line.mjs";
 import { herdrReport } from "./herdr-report.mjs";
 import { finishRound, reviewCommand } from "./review-cli.mjs";
 import { SHEET_ANSWER } from "./urgency.mjs";
@@ -308,7 +309,7 @@ function archived() {
 function focusOut({ rows, keys }, { change = null, show = false, notice = null } = {}) {
   const now = Date.now();
   const view = syncFocus(rows, { now, change, heartbeat: true });
-  const fresh = view.current && !view.state.reported.includes(view.current.key);
+  const fresh = view.current && readConfig()?.autoShow !== false && !view.state.reported.includes(view.current.key);
   const announced = view.current && (show || fresh) && !holdForDigest(view, { now }) ? view.current : null;
   const { payload, titles, firsts } = focusPayload(rows, view, { now, keys, notice, announce: announced?.item.tag ?? null, announceKey: announced?.key ?? null });
   saveTitles(titles, firsts);
@@ -1373,6 +1374,12 @@ function asks() {
 }
 
 // `review`: the records need no terminal; only `done` loads the sessions to send the result back.
+// The one line every console reply opens with: who waits on the user, who works on an answer sent for them, who runs.
+function waitingLineCommand() {
+  const { rows } = load({});
+  console.log(waitingLine(rows));
+}
+
 function reviewEntry() {
   return reviewCommand(values, positionals, {
     deliver: (wt, r) => {
@@ -1420,6 +1427,7 @@ const commands = {
   prune,
   stage: stageCommand,
   review: reviewEntry,
+  "waiting-line": waitingLineCommand,
 };
 const OFFLINE = new Set(["asks", "report", "distilled", "herdr-report", "focus", "prompt", "prune", "stage", "review"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);
