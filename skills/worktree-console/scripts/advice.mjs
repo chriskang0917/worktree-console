@@ -2,12 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { asksSeveral } from "./lib.mjs";
 
 export const ADVICE_PENDING = "建議產生中…";
 // Only these keep a question from auto-reply; older 範圍與目標／產品行為 labels go through the trial like any other.
-const PRINCIPLE_LABEL = { 不可逆: "不可逆或對外動作", 沒有前例: "沒有前例", 批改單: "批改單，你看過再回", 多題: "一則多題，你看過再回" };
-const COUNTDOWN_SECONDS = 15;
+const PRINCIPLE_LABEL = { 不可逆: "不可逆或對外動作", 沒有前例: "沒有前例", 未定題: "dev-flow 未定題，只收你本人回答" };
 // A stop and its prediction are written by different processes; the stop time can trail the prediction by this much.
 const STOP_SLACK_MS = 120_000;
 
@@ -40,7 +38,7 @@ export function loadAdvice(home = advisorHome(), now = Date.now(), file = "predi
     const p = byId.get(l.ref);
     if (!p) continue;
     if (l.event === "repost") p.seenAt = ms(l.at);
-    if (l.event === "done") Object.assign(p, { status: "ready", answer: l.answer, reason: l.reason, type: l.type ?? null, principle: l.principle ?? null, precedent: l.precedent ?? null, tier: l.tier ?? null, verb: l.verb ?? null });
+    if (l.event === "done") Object.assign(p, { status: "ready", answer: l.answer, reason: l.reason, type: l.type ?? null, principle: l.principle ?? null, precedent: l.precedent ?? null, tier: l.tier ?? null, verb: l.verb ?? null, ...("urgent" in l ? { urgent: l.urgent } : {}), brief: l.brief ?? null, precedentText: l.precedentText ?? null });
     if (l.event === "fail") p.status = "failed";
   }
   const byPath = new Map();
@@ -60,12 +58,11 @@ function readJson(file) {
   }
 }
 
-// What the advisor says about auto-reply: each type open or on trial and its own script (state.json), and the countdown length read live from config.json.
+// The advisor's own script (state.json): worktree-console runs it to record an answer it gave for the user.
 export function advisorState(home = advisorHome()) {
   const state = readJson(path.join(home, "state.json"));
   if (!state?.script) return null;
-  const seconds = [readJson(path.join(home, "config.json"))?.countdownSeconds, state.countdownSeconds].map(Number).find((n) => Number.isFinite(n) && n > 0);
-  return { script: state.script, types: state.types ?? {}, seconds: seconds ?? COUNTDOWN_SECONDS };
+  return { script: state.script, types: state.types ?? {} };
 }
 
 // The newest prediction of a worktree made for this stop, not an older one.
@@ -78,23 +75,11 @@ export function latestFor(byPath, target, since) {
 export const isSheet = (p) => p?.principle === "批改單" || String(p?.question ?? "").split("\n")[0].includes("批改單");
 
 // An older label written over a missing precedent still means 沒有前例.
-const blocking = (p) => (isSheet(p) ? "批改單" : asksSeveral(p.question) ? "多題" : PRINCIPLE_LABEL[p.principle] ? p.principle : p.principle && !p.precedent ? "沒有前例" : null);
+const blocking = (p) => (PRINCIPLE_LABEL[p.principle] ? p.principle : p.principle && !p.precedent ? "沒有前例" : null);
 
-// The words of the option an a／b／c answer picks, else the reason: what the countdown says it will send.
-export function answerMeaning(question, answer, reason) {
-  const picked = String(answer ?? "").trim().toLowerCase().match(/^[a-z](?:\s*[、,，/和與]\s*[a-z])*(?![a-z])/)?.[0];
-  const options = new Map();
-  for (const line of String(question ?? "").split("\n")) {
-    const m = line.replace(/\*\*/g, "").match(/^\s*(?:[-*]\s*)?([a-z])[.)、]\s*(.+)$/i);
-    if (m && !options.has(m[1].toLowerCase())) options.set(m[1].toLowerCase(), m[2].split(/[：:]/)[0].trim());
-  }
-  const words = picked ? [...picked.matchAll(/[a-z]/g)].map((x) => options.get(x[0])).filter(Boolean) : [];
-  return words.length ? words.join("、") : reason ?? "";
-}
 
 // The band's suggestion row for a session waiting on a text or menu question: pending, ready, or null (failed, 🔐, nothing predicted).
-// A ready one of an open type, neither irreversible nor without precedent, carries `auto` unless its countdown was cancelled.
-export function adviceFor(byPath, { path: target, status, since, now = Date.now(), advisor = null, cancelled = false }) {
+export function adviceFor(byPath, { path: target, status, since, now = Date.now() }) {
   if (!byPath || status?.kind !== "waiting") return null;
   const p = latestFor(byPath, target, since);
   if (!p || p.status === "failed") return null;
@@ -102,13 +87,5 @@ export function adviceFor(byPath, { path: target, status, since, now = Date.now(
   const principle = blocking(p);
   const label = principle ? PRINCIPLE_LABEL[principle] : null;
   const note = label ? `（原則性：${label}）` : "";
-  const open = !principle && !cancelled && ["text", "menu"].includes(p.kind) && advisor?.types?.[p.type] === "open";
-  return {
-    state: "ready",
-    text: `建議：${p.answer}，${p.reason}${note}`,
-    answer: p.answer,
-    reason: p.reason,
-    principle: label,
-    ...(open ? { auto: { answer: p.answer, meaning: answerMeaning(p.question, p.answer, p.reason), seconds: advisor.seconds } } : {}),
-  };
+  return { state: "ready", text: `建議：${p.answer}，${p.reason}${note}`, answer: p.answer, reason: p.reason, principle: label };
 }

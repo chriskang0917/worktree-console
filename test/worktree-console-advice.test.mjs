@@ -16,7 +16,7 @@ const iso = (secondsAgo) => new Date(NOW - secondsAgo * 1000).toISOString();
 function write(predictions, answers = [], { types = null, config = null } = {}) {
   fs.rmSync(advisor, { recursive: true, force: true });
   fs.mkdirSync(advisor);
-  if (types) fs.writeFileSync(path.join(advisor, "state.json"), JSON.stringify({ script: "/x/advisor.mjs", countdownSeconds: 15, types }));
+  if (types) fs.writeFileSync(path.join(advisor, "state.json"), JSON.stringify({ script: "/x/advisor.mjs", types }));
   if (config) fs.writeFileSync(path.join(advisor, "config.json"), JSON.stringify(config));
   fs.writeFileSync(path.join(advisor, "predictions.jsonl"), predictions.map((l) => JSON.stringify(l)).join("\n") + "\n");
   fs.writeFileSync(path.join(advisor, "answers.jsonl"), answers.map((l) => JSON.stringify(l)).join("\n") + (answers.length ? "\n" : ""));
@@ -56,39 +56,6 @@ test("橫條建議：只有不可逆、沒有前例註明原則性；舊預測�
   assert.equal(sessionOf().advice.principle, "沒有前例", "舊標籤又沒有前例時算沒有前例");
 });
 
-test("代回倒數：題型已開放、不是原則性的題目帶 auto（答案、選項的字、秒數）；秒數讀 config.json，沒設 15 秒", () => {
-  write([start("p1"), done("p1")], [], { types: { 流程關卡: "open" } });
-  assert.deepEqual(sessionOf().advice.auto, { answer: "a", meaning: "先跑測試", seconds: 15 });
-  write([start("p1"), done("p1")], [], { types: { 流程關卡: "open" }, config: { countdownSeconds: 30 } });
-  assert.equal(sessionOf().advice.auto.seconds, 30);
-  write([start("p1"), done("p1")], [], { types: { 流程關卡: "trial" } });
-  assert.equal(sessionOf().advice.auto, undefined, "試用中不倒數");
-  write([start("p1"), done("p1", { principle: "不可逆" })], [], { types: { 流程關卡: "open" } });
-  assert.equal(sessionOf().advice.auto, undefined, "不可逆不倒數");
-  write([start("p1"), done("p1", { principle: "沒有前例" })], [], { types: { 流程關卡: "open" } });
-  assert.equal(sessionOf().advice.auto, undefined, "沒有前例不倒數");
-  write([start("p1"), done("p1")]);
-  assert.equal(sessionOf().advice.auto, undefined, "沒有 state.json（舊版 advisor）不倒數");
-});
-
-test("代回倒數：一則訊息兩題以上（兩個「第 N 題」或選單兩組 a、b）不倒數、不代回，建議行註明原則性；只有一題照舊倒數", () => {
-  const twoTopics = "**第 2 題：要不要先跑測試？**\n\n- **a.** 先跑測試：比較穩\n- **b.** 直接繼續\n\n建議：a\n\n**第 3 題：要不要補文件？**\n\n- **a.** 補：README 一起改\n- **b.** 不補\n\n建議：a";
-  const twoMenus = "要不要先跑測試？\na. 先跑測試：比較穩\nb. 直接繼續\n\n要不要補文件？\na. 補：README 一起改\nb. 不補";
-  for (const [kind, question] of [["text", twoTopics], ["menu", twoMenus]]) {
-    write([{ ...start("p1"), kind, question }, done("p1", { answer: "全照建議" })], [], { types: { 流程關卡: "open" } });
-    const advice = sessionOf().advice;
-    assert.equal(advice.auto, undefined, `${kind} 兩題不倒數`);
-    assert.equal(advice.principle, "一則多題，你看過再回");
-    assert.equal(advice.text, "建議：全照建議，改動小，先跑最快（原則性：一則多題，你看過再回）");
-  }
-  const oneMenu = "要不要先跑測試？\na. 先跑測試：比較穩\nb. 直接繼續";
-  write([{ ...start("p1"), kind: "menu", question: oneMenu }, done("p1")], [], { types: { 流程關卡: "open" } });
-  assert.deepEqual(sessionOf().advice.auto, { answer: "a", meaning: "先跑測試", seconds: 15 }, "選單一題照舊倒數");
-  const oneWithBackground = "**第 2 題：要不要先跑測試？**\n\n1. 改了兩個檔\n2. 都有測試\n\n- **a.** 先跑測試：比較穩\n- **b.** 直接繼續\n\n建議：a";
-  write([{ ...start("p1"), question: oneWithBackground }, done("p1")], [], { types: { 流程關卡: "open" } });
-  assert.deepEqual(sessionOf().advice.auto, { answer: "a", meaning: "先跑測試", seconds: 15 }, "背景用 1. 2. 條列的單題照舊倒數");
-});
-
 test("橫條建議：預測失敗、背景沒回報逾時、🔐 等你授權、⏸ 回覆完畢都不顯示建議行", () => {
   write([start("p1"), { event: "fail", ref: "p1", at: iso(1), error: "timeout" }]);
   assert.equal(sessionOf().advice, null);
@@ -113,4 +80,11 @@ test("橫條建議：沒有 ~/.advisor/ 時不顯示，/focus-show 的完整回�
   assert.equal(sessionOf().advice, null);
   write([start("p1"), done("p1")]);
   assert.doesNotMatch(sessionOf().report, /建議：a/);
+});
+
+test("代回倒數已拿掉：建議行不帶 auto，題型開放、一則多題、批改單都只給建議", () => {
+  write([start("p1"), done("p1")], [], { types: { 流程關卡: "open" }, config: { countdownSeconds: 30 } });
+  const advice = sessionOf().advice;
+  assert.equal("auto" in advice, false);
+  assert.doesNotMatch(advice.text, /一則多題|批改單，你看過再回/);
 });

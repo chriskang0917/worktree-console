@@ -11,7 +11,6 @@ import { CACHE_HANDOFF_TEXT, KEEPALIVE_REPLY, KEEPALIVE_TEXT, TAKEOVER_HEAD } fr
 import { modelCommand, pendingFile, readSummary, summaryFile, summaryModel, usageFile } from "../skills/worktree-console/scripts/summary.mjs";
 import { DIGEST_WAIT_MS, focusPayload, holdForDigest } from "../skills/worktree-console/scripts/focus.mjs";
 import { reportLines } from "../skills/worktree-console/scripts/lib.mjs";
-import { decisionCards } from "../skills/worktree-console/scripts/automation.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const script = path.join(root, "skills", "worktree-console", "scripts", "summary.mjs");
@@ -417,19 +416,6 @@ test("橫條換題等摘要：這次的摘要還在產生時，換上橫條 15 �
     if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
     else process.env.WORKTREE_CONSOLE_HOME = prev;
   }
-});
-
-test("待決詳情：卡片帶這次停下的摘要（digest）給詳情最下面畫；replyAt 對不上或沒有摘要時是 null", () => {
-  const home = freshHome();
-  const card = (s) => {
-    const entry = { key: "pane-a@x", paneKey: "pane-a", tag: "PROJ-2", item: { row: askRow(s), session: s, entries: [{ question: "要不要也改註冊頁？" }] } };
-    return decisionCards([{ entry, prediction: { id: "p1", verb: "push", question: "要 push 嗎？", answer: "a", reason: "r", tier: 2 } }], () => [], home)[0];
-  };
-  assert.equal(card(askSession(T0 + 9_000)).digest, null);
-  saveRecap(home, LAYERED);
-  assert.equal(card(askSession(T0 + 9_000)).digest, LAYERED);
-  assert.ok(card(askSession(T0 + 9_000)).context.includes("要不要也改註冊頁？"), "子 session 的回覆照舊");
-  assert.equal(card(askSession(T0 + 120_000)).digest, null);
 });
 
 test("假模型端到端：子 session 停下、背景用 WORKTREE_CONSOLE_SUMMARY_CMD 寫出四層摘要後，這次停下的回報最下面接摘要；摘要逾時或沒有輸出時回報跟原本一模一樣", async () => {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.21.0
+
+- feat(review): auto-reply non-urgent questions and review them in the focus pane before implementation
+
 ## 1.20.0
 
 - feat(focus): print the original question with a four-layer digest below it and switch a card's Enter to its question

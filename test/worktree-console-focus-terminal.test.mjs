@@ -64,8 +64,10 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
           const name = index === 2 && cols < 46 ? "arc…" : `${prefix}0`;
           const header = lines.find(line => line.includes(name) && /^ [·✢✳✶✻✽] /.test(line));
           assert.ok(header, lines.join("\n"));
-          assert.match(header, new RegExp(`^ [·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${name}${index === 2 ? '  取消封存' : ''} +(?:fixture|fix[a-z]*…)$`), "首卡標頭右側沒有覆畫的數字、不畫階段，repo 貼齊右端");
-          assert.equal([...header].reduce((n, c) => n + (/[\u3000-\u9fff\uff00-\uffef]/u.test(c) ? 2 : 1), 0), cols - 1, `repo 右端貼齊標題列右端：${JSON.stringify(header)}`);
+          assert.match(header, new RegExp(`^ [·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${name}${index === 2 ? '  取消封存' : ''}  假資[料問題]*…?$`), "首卡標頭：狀態、代號後接題目，沒有覆畫的數字、不畫階段");
+          const second = lines[lines.indexOf(header) + 1];
+          assert.match(second, / +(?:fixture|fix[a-z]*…)$/, "第二行右端是 repo");
+          assert.equal([...second].reduce((n, c) => n + (/[\u3000-\u9fff\uff00-\uffef]/u.test(c) ? 2 : 1), 0), cols - 1, `repo 右端貼齊卡片右緣：${JSON.stringify(second)}`);
           assert.ok(!/[╭╮╰╯║═]/.test(lines.join("\n")), "卡片不畫外框");
         } else {
           assert.ok(lines.some(line => line.includes("目前沒有符合條件的 session")), lines.join("\n"));
@@ -107,22 +109,20 @@ const fgOf = (line, text) => {
   return at < 0 ? undefined : cells.slice(at, at + [...text].length).map(c => c.fg);
 };
 
-test("真實終端：neutral 全部分頁摘要開頭的數字用預設前景色、其餘灰色；字中數字不拆；待回覆分頁整段灰色", { timeout: 30_000 }, async () => {
+test("真實終端：neutral 卡片不放票名；題目與第二行的 repo 都是灰色，只有代號用前景色", { timeout: 30_000 }, async () => {
   const terminal = await terminalFixture({ counts: [2, 2, 0, 0], summaries: ["1 未核對", "面板 v2 改版"], columns: 151 });
   try {
     await terminal.open();
-    await terminal.waitFor(f => f.includes("未核對") && f.includes("面板 v2 改版"), "等待摘要");
-    const pendingLine = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n").find(line => line.includes("未核對"));
-    assert.ok(fgOf(pendingLine, "1 未核對").every(fg => fg !== "default"), `待回覆的開頭數字也是灰色：${JSON.stringify(pendingLine)}`);
-    await terminal.press("w", frame => panel(frame).join("\n").includes("── fixture"));
-    const lines = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
-    const counted = lines.find(line => line.includes("未核對"));
-    const [lead] = fgOf(counted, "1 未核對") ?? [];
-    const rest = fgOf(counted, "未核對");
-    assert.equal(lead, "default", `開頭數字應是預設前景色：${JSON.stringify(counted)}`);
-    assert.ok(rest.every(fg => fg !== "default"), "標籤應是灰色");
-    const word = lines.find(line => line.includes("面板 v2 改版"));
-    assert.equal(new Set(fgOf(word, "面板 v2 改版")).size, 1, "字中數字維持同色");
+    for (const key of ["q", "w"]) {
+      await terminal.press(key, frame => panel(frame).join("\n").includes("reply1"));
+      const lines = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
+      const text = lines.map(l => l.replace(/\x1b\[[0-9;:]*m/g, "")).join("\n");
+      assert.ok(!text.includes("未核對") && !text.includes("面板 v2 改版"), "卡片不再畫票名");
+      const header = lines.find(line => line.includes("reply1") && line.includes("假資料問題"));
+      assert.ok(fgOf(header, "假資料問題").every(fg => fg !== "default"), `題目是灰色：${JSON.stringify(header)}`);
+      const second = lines[lines.indexOf(header) + 1];
+      assert.ok(fgOf(second, "fixture").every(fg => fg !== "default"), `repo 是灰色：${JSON.stringify(second)}`);
+    }
   } finally {
     await terminal.close();
   }
@@ -231,8 +231,8 @@ test("真實終端：選中卡片按 d 跳出摘要浮層、蓋在下方卡片�
     assert.equal(lines[title + 3].trim(), "d 收起 · p 印出完整回報", lines.join("\n"));
     terminal.tmux("send-keys", "-t", "fixture:0.0", "Escape");
     const closed = await terminal.waitFor(frame => !open(frame), "Esc 後浮層應收起");
-    assert.ok(panel(closed).some(line => /^ {3}1: ↩ 已回覆  reply1 +fixture$/.test(line)), panel(closed).join("\n"));
-    assert.ok(panel(closed).some(line => /^ ✻ {4}↩ 已回覆  reply0 +fixture$/.test(line)), panel(closed).join("\n"));
+    assert.ok(panel(closed).some(line => /^ {3}1: ↩ 已回覆  reply1  假資料問題$/.test(line)), panel(closed).join("\n"));
+    assert.ok(panel(closed).some(line => /^ ✻ {4}↩ 已回覆  reply0  假資料問題$/.test(line)), panel(closed).join("\n"));
   } finally {
     await terminal.close();
   }

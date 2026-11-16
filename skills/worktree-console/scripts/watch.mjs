@@ -30,6 +30,9 @@ import { DIGEST_WAIT_MS, loadFocus, modsActive, reportWithDigest, stopDigestLine
 import { answeredStops, commitLog, distillReminder, logEvent, registerConsole, sessionFor, stopLogged } from "./log.mjs";
 import { gitScene } from "./git-scene.mjs";
 import { trialStep } from "./automation.mjs";
+import { delegateStep, verdicts } from "./delegate.mjs";
+import { flushOutbox } from "./review-deliver.mjs";
+import { prNoteStep } from "./pr-note.mjs";
 
 const stopSince = (x) => x.since ?? x.agent?.stateStartedAt ?? null;
 
@@ -205,6 +208,18 @@ for (;;) {
     console.log(`baseline: ${next}`);
     process.exit(0);
   }
+  // Non-urgent questions are answered for the user, and a review whose session has stopped since is sent back; neither wakes the console.
+  let offBand = new Set();
+  try {
+    for (const line of delegateStep(data.rows)) logEvent("delegate", { line });
+    for (const line of flushOutbox(data.rows)) logEvent("review-returned", { line });
+    for (const line of prNoteStep(data.rows)) logEvent("review-pr-note", { line });
+    offBand = new Set(verdicts(data.rows).filter((v) => !v.verdict.band).map((v) => v.item.session.paneKey));
+  } catch {}
+  for (const key of offBand) {
+    if (baseline?.has(key)) current.set(key, baseline.get(key));
+    else current.delete(key);
+  }
   const answered = answeredStops();
   for (const row of data.rows) {
     for (const x of row.sessions) {
@@ -219,7 +234,7 @@ for (;;) {
     const changed = [];
     for (const row of data.rows) {
       for (const x of row.sessions) {
-        if (x.agent && !x.archived && needsYou(x.status.kind) && baseline.get(x.paneKey) !== x.status.kind) changed.push({ row, x });
+        if (x.agent && !x.archived && needsYou(x.status.kind) && !offBand.has(x.paneKey) && baseline.get(x.paneKey) !== x.status.kind) changed.push({ row, x });
       }
     }
     for (const { row, x } of changed) logEvent("stop", stopEvent(row, x));
