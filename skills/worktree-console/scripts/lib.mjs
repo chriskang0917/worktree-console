@@ -451,6 +451,16 @@ export function proseLines(text) {
   return out;
 }
 
+// The last paragraph outside code and quotes holds a ？ or ? line that is not a table row or a heading.
+export function asksAtEnd(text) {
+  const lines = proseLines(text);
+  let end = lines.length;
+  while (end > 0 && !lines[end - 1].trim()) end--;
+  let start = end;
+  while (start > 0 && lines[start - 1].trim()) start--;
+  return lines.slice(start, end).some((l) => /[?？]/.test(l) && !isTableRow(l) && !/^\s*#/.test(l));
+}
+
 function askLines(text) {
   return proseLines(text).filter((l) => /[?？]/.test(l) && !isTableRow(l)).map((l) => l.trim());
 }
