@@ -2685,6 +2685,21 @@ test("有 mods 時 watcher 不為題目叫醒中控台：題目停下只寫紀�
   assert.ok(plain.out.includes("### 🔐 PROJ-102(perm) 等你授權"));
 });
 
+test("config.json 的 autoShow 設成 false：題目換上橫條不 announce（不自動印）；按 9 選這題（focus-pick）照舊印；沒設或 true 照舊自動印", () => {
+  const home = consoleHome({ mods: true });
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ autoShow: false }));
+  const env = { WORKTREE_CONSOLE_HOME: home };
+  const dir = fake({ mutatePs: stagger });
+  const first = focusRun(dir, env);
+  assert.equal(first.currentTag, "PROJ-102(perm)");
+  assert.equal(first.announce, null, "autoShow false 不自動印");
+  const picked = focusRun(dir, env, ["focus-pick", first.current]);
+  assert.equal(picked.announce, "PROJ-102(perm)", "按 9 照舊印");
+  const on = consoleHome({ mods: true });
+  fs.writeFileSync(path.join(on, "config.json"), JSON.stringify({ autoShow: true }));
+  assert.equal(focusRun(dir, { WORKTREE_CONSOLE_HOME: on }).announce, "PROJ-102(perm)");
+});
+
 test("專注：同一題（session＋停下時間）只 announce 一次，輪詢、重啟都不重送；該 session 有新題才再 announce", () => {
   const home = consoleHome({ mods: true });
   const env = { WORKTREE_CONSOLE_HOME: home };

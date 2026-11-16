@@ -9,26 +9,19 @@ import { advisorHome, advisorState, latestFor, loadAdvice } from "./advice.mjs";
 import { addItem, append, itemProblems, stateOf, worktreeOf } from "./review.mjs";
 import { classify } from "./urgency.mjs";
 import { sessionFor } from "./log.mjs";
+import { DELEGATED_FILE, readDelegated } from "./auto-reply.mjs";
 
-const FILE = "delegated.json";
 const KEEP_MS = 3 * 86400_000;
 // The console's prompt counts as being typed in for this long after the band last saw text in it.
 export const TYPING_MS = 15_000;
 const CONSOLE = fileURLToPath(new URL("./console.mjs", import.meta.url));
 
-export function readDelegated(home = consoleHome()) {
-  try {
-    const v = JSON.parse(fs.readFileSync(path.join(home, FILE), "utf8"));
-    return v && typeof v === "object" ? v : {};
-  } catch {
-    return {};
-  }
-}
+export { readDelegated };
 
 function writeDelegated(state, home = consoleHome(), now = Date.now()) {
   const kept = Object.fromEntries(Object.entries(state).filter(([, v]) => now - (v.at ?? 0) < KEEP_MS));
   fs.mkdirSync(home, { recursive: true });
-  fs.writeFileSync(path.join(home, FILE), JSON.stringify(kept));
+  fs.writeFileSync(path.join(home, DELEGATED_FILE), JSON.stringify(kept));
 }
 
 export const stopKey = (item) => `${item.session.paneKey ?? item.session.handle}@${item.session.since ?? item.session.agent?.stateStartedAt ?? item.entries?.[0]?.question ?? ""}`;

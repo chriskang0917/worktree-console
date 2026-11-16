@@ -3,6 +3,8 @@ export const ICONS = { anomaly: "⚠️", permission: "🔐", waiting: "💬", b
 // Sessions that need the person come first.
 export const ORDER = ["anomaly", "permission", "waiting", "busy", "done", "idle"];
 export const STALE_MS = 2 * 60 * 1000;
+// A running turn that works on an answer the console sent for the user.
+export const AUTO_ICON = "↻";
 
 const rank = (kind) => {
   const i = ORDER.indexOf(kind);
@@ -34,11 +36,11 @@ export function boardView(state, now) {
       tag: r.tag,
       terminal: r.terminal,
       kind: r.kind,
-      icon: ICONS[r.kind] ?? "·",
+      icon: r.autoReply ? AUTO_ICON : ICONS[r.kind] ?? "·",
       wait: waited(r.since, now),
       since: r.since,
       stage: r.stage ?? "",
-      activity: r.activity && r.activity !== "—" ? r.activity : "",
+      activity: r.autoReply ? `代回中 · 已代回：${r.autoReply}` : r.activity && r.activity !== "—" ? r.activity : "",
     }))
     .sort((a, b) => rank(a.kind) - rank(b.kind) || (a.since ?? now) - (b.since ?? now));
   const groups = [];

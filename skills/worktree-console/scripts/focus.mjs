@@ -6,6 +6,7 @@ import { adviceFor, advisorHome, advisorState, loadAdvice } from "./advice.mjs";
 import { readSummary, stopDigest } from "./summary.mjs";
 import { digestLayers, digestMarkdown } from "../../../hooks/digest.mjs";
 import { verdicts } from "./delegate.mjs";
+import { autoReplyOf, readDelegated } from "./auto-reply.mjs";
 import { sheetLines, sheetProblems, stateOf, tagOf, worktreeOf } from "./review.mjs";
 import { isLiveStop, sheetPath } from "./urgency.mjs";
 
@@ -308,6 +309,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
   const advice = loadAdvice(advisorHome(), now);
   const advisor = advice ? advisorState(advisorHome()) : null;
   const reviews = new Map();
+  const delegated = readDelegated(home);
   const sessions = rows.flatMap((row) =>
     row.sessions.map((session) => {
       if (!(row.path in titles)) {
@@ -341,6 +343,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         branch: row.branch ?? "",
         path: row.path,
         review: reviewCount(reviews, row.path),
+        autoReply: autoReplyOf(session, delegated),
       };
     }),
   );

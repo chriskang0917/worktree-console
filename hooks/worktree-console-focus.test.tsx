@@ -996,6 +996,23 @@ test('待審核卡片：review > 0 的卡片狀態字換成「待審核」（待
   }
 })
 
+test('代回中卡片：autoReply 有值的卡片狀態寫「↻ 代回中」（已回覆色），第二行左邊寫「已代回：<答案>」；需審核 N 件照舊；沒有 autoReply 的照原狀態', async ($, on) => {
+  const w = world(withRepos({ focusui: { review: 2, autoReply: '先改  API' } }))
+  appearanceConfig.set(w, { motion: false })
+  await start($, on, w)
+  await openPane($)
+  const ui = await $.ui.mount({ ...pane(70), surface: 'terminal' })
+  await ui.press({ key: 'tab:all' })
+  const root = await ui.drawn()
+  const status = findKey(root, `status:${keyOf('focusui')}`)
+  expect(textOf(status).trim()).toBe('↻ 代回中')
+  expect([status.children[0].props.color, status.children[1].props.color]).toEqual([THEMES.neutral.answered, THEMES.neutral.answered])
+  expect(textOf(findKey(root, `branch:${keyOf('focusui')}`)).trim()).toBe('已代回：先改 API')
+  expect(textOf((await headerOf(ui, keyOf('focusui'))).right)).toBe('需審核 2 件')
+  expect(textOf(findKey(root, `status:${keyOf('logging')}`))).toBe('◆ 待回答')
+  await ui.unmount()
+})
+
 for (const tabKey of ['tab:pending', 'tab:all', 'tab:hidden'] as const) {
   test(`卡片代號（${tabKey.slice(4)}）：代號太長時題目仍留 8 格、代號以 … 截短，代號與題目之間固定 2 格；標題列永遠一行、不超出面板`, async ($, on) => {
     const huge = 'x'.repeat(60)

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { autoReplyOf, readDelegated } from "./auto-reply.mjs";
 import { claudeProjectDir, consoleHome, lastActivity, realpath, recycledMark, sessionTag, stageOf } from "./lib.mjs";
 import { readEvents, transcriptFor } from "./log.mjs";
 import { auditRows, draftOf, herdrAgent, isPrompt, linear, promptText, readTranscript, repoName, snapshotFrom, tabRenames, workspaceNamed } from "./herdr.mjs";
@@ -211,7 +212,7 @@ const titles = new Map();
 // What the board mod shows: one entry per session on the board, with the board's own stage and last-activity cells,
 // rewritten on every read so its age tells whether a console still runs. The watcher reads without stages, so they
 // are worked out here when missing.
-export function boardState(rows, now = Date.now(), stage = stageOf) {
+export function boardState(rows, now = Date.now(), stage = stageOf, delegated = readDelegated()) {
   const list = rows.flatMap((r) => {
     const shown = r.sessions.filter((s) => s.handle && !s.archived);
     const label = shown.length > 0 ? r.stage ?? stage(r) : null;
@@ -223,6 +224,7 @@ export function boardState(rows, now = Date.now(), stage = stageOf) {
       activity: recycledMark(s, lastActivity(s.status)) || null,
       since: s.agent?.stateStartedAt ?? null,
       terminal: s.handle,
+      autoReply: autoReplyOf(s, delegated),
     }));
   });
   return { at: now, rows: list };

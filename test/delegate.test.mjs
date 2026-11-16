@@ -368,3 +368,36 @@ test("自動送審：watcher 這一輪對報告乾淨的送審停點送「送審
   delegateStep(w.rows, { now: NOW + 5000, home, send });
   assert.deepEqual(sent, [[w.row.label, "送審"]]);
 });
+
+const { autoReplyOf } = await import("../skills/worktree-console/scripts/auto-reply.mjs");
+const { waitingLine, awaitsDecision } = await import("../skills/worktree-console/scripts/waiting-line.mjs");
+
+test("代回中：session 正在跑、而且這一輪是中控台最近一筆代回送出後才開始的，才回傳代回的答案；停下、自己另外下指令、送失敗都不算", () => {
+  const sentAt = NOW - 30_000;
+  const busy = (startedAt) => world({ state: "working", since: startedAt }).session;
+  const s = busy(sentAt + 3_000);
+  const key = (x) => `${x.paneKey}@${sentAt - 60_000}`;
+  assert.equal(autoReplyOf(s, { [key(s)]: { at: sentAt, answer: "先改 API" } }), "先改 API");
+  assert.equal(autoReplyOf(s, { [key(s)]: { at: sentAt, submit: true } }), "送審");
+  assert.equal(autoReplyOf(s, { [key(s)]: { at: sentAt, failed: true } }), null, "送失敗不算");
+  assert.equal(autoReplyOf(s, {}), null);
+  const later = busy(sentAt + 10 * 60_000);
+  assert.equal(autoReplyOf(later, { [key(later)]: { at: sentAt, answer: "先改 API" } }), null, "停下後使用者自己下指令的那一輪不算");
+  const stopped = world({ state: "done", since: sentAt + 3_000, text: "做完了。" }).session;
+  assert.equal(autoReplyOf(stopped, { [key(stopped)]: { at: sentAt, answer: "先改 API" } }), null, "停下就不算");
+});
+
+test("waiting-line：一行「等待：…｜自動處理中：…｜在跑：…」，空的寫「無」；⏸ 只有最後一段在等使用者決定才算等待", () => {
+  const sentAt = NOW - 30_000;
+  const asking = world({ text: "做完了。\n\n要順便改舊測試嗎？" });
+  const report = world({ text: "為什麼會壞？因為少了參數。\n\n已經修好。" });
+  const decide = world({ text: "原型開好了。\n\n看完請說「定稿」。" });
+  const auto = world({ state: "working", since: sentAt + 2_000 });
+  const run = world({ state: "working", since: NOW - 5_000 });
+  const rows = [asking, report, decide, auto, run].map((w) => w.row);
+  const delegated = { [`${auto.session.paneKey}@x`]: { at: sentAt, answer: "b" } };
+  const tag = (w) => w.row.label;
+  assert.equal(waitingLine(rows, delegated), `等待：${tag(asking)}、${tag(decide)}｜自動處理中：${tag(auto)}｜在跑：${tag(run)}`);
+  assert.equal(waitingLine([report.row], {}), "等待：無｜自動處理中：無｜在跑：無");
+  assert.equal(awaitsDecision("請你確認\n\n已經修好。"), false, "只看最後一段");
+});
