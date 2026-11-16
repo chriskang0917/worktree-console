@@ -214,7 +214,7 @@ function runBash(dir, command, session = "child-1") {
 }
 
 for (const [name, command] of [
-  ["sed -i", "sed -i '' 's/a/b/' app.js"],
+  ["sed -i", "sed -i.bak 's/a/b/' app.js && rm app.js.bak"],
   ["> 重新導向", "echo changed > app.js"],
   ["git apply", "printf 'diff --git a/app.js b/app.js\\n--- a/app.js\\n+++ b/app.js\\n@@ -1 +1 @@\\n-a\\n+z\\n' > /tmp/wtc-review-$$.diff && git apply /tmp/wtc-review-$$.diff"],
 ]) {
