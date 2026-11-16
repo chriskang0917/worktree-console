@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { LABELS, textStop, textOptionLabels, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
+import { LABELS, batchSheet, readNames, textStop, textOptionLabels, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
 import { isConsoleSession } from "./log.mjs";
 import { adviceFor, advisorHome, advisorState, loadAdvice } from "./advice.mjs";
 import { readSummary, stopDigest } from "./summary.mjs";
 import { digestLayers, digestMarkdown } from "../../../hooks/digest.mjs";
-import { decisionCards, splitBatch } from "./automation.mjs";
+import { verdicts } from "./delegate.mjs";
+import { sheetLines, sheetProblems, stateOf, tagOf, worktreeOf } from "./review.mjs";
+import { isLiveStop, sheetPath } from "./urgency.mjs";
 
 export const FOCUS_WAIT_MS = 60_000;
 // How long a question that just reached the band waits for its recap before it prints without one.
@@ -22,7 +24,7 @@ export const FOCUS_VERSION = 1;
 export const stopId = (key) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36);
 
 export function emptyFocus() {
-  return { modsAt: 0, current: null, currentAt: 0, reported: [], wait: null, answered: [], replied: [], back: {}, bumped: {}, seen: {}, cancelled: {}, titles: {}, firsts: {} };
+  return { modsAt: 0, current: null, currentAt: 0, reported: [], wait: null, answered: [], replied: [], back: {}, bumped: {}, seen: {}, titles: {}, firsts: {} };
 }
 
 export function loadFocus() {
@@ -95,9 +97,9 @@ function focusEntries(rows) {
   });
 }
 
-// Tiers, each first stopped first out: ⚠️, one the advisor will answer itself, back after a reply, 🔐, the rest, then the skipped ones by when they were skipped.
+// Tiers, each first stopped first out: ⚠️, back after a reply, 🔐, the rest, then the skipped ones by when they were skipped.
 function order(entries, state) {
-  const tier = (e) => (e.kind === "anomaly" ? -1 : e.auto && !state.cancelled?.[e.key] ? -0.5 : state.back?.[e.key] ? 0 : e.kind === "permission" ? 1 : 2);
+  const tier = (e) => (e.kind === "anomaly" ? -1 : state.back?.[e.key] ? 0 : e.kind === "permission" ? 1 : 2);
   const rank = (e) => (state.bumped?.[e.key] ? [3, state.bumped[e.key]] : [tier(e), e.since ?? state.seen[e.key] ?? 0]);
   return [...entries].sort((a, b) => {
     const [x, y] = [rank(a), rank(b)];
@@ -121,7 +123,6 @@ export function focusStep(prev, entries, now = Date.now(), busy = []) {
     replied: replied.filter((s) => !returned.some((e) => sameSession(s, e))),
     back: { ...keepLive(prev.back), ...Object.fromEntries(returned.map((e) => [e.key, replied.find((s) => after(s, e)).at ?? true])) },
     bumped: keepLive(prev.bumped),
-    cancelled: keepLive(prev.cancelled),
     seen: { ...keepLive(prev.seen), ...Object.fromEntries(fresh.map((e) => [e.key, now])) },
   };
   const open = order(entries.filter((e) => !state.answered.includes(e.key)), state);
@@ -178,11 +179,6 @@ export function focusPick(prev, key, now = Date.now()) {
   return { ...prev, wait: null, current: key, bumped: left ? { ...prev.bumped, [left]: now } : prev.bumped };
 }
 
-// 7 during the band's countdown: the question is not sent and stays on the band as an ordinary one.
-export function focusCancel(prev, key, now = Date.now()) {
-  return { ...prev, cancelled: { ...prev.cancelled, [key]: now } };
-}
-
 // Marks a question as shown once the mod has printed it, so an automatic change never prints the same stop twice.
 export function markReported(state, key) {
   return state.reported.includes(key) ? state : { ...state, reported: [...state.reported, key] };
@@ -198,29 +194,26 @@ export function waitLine(view) {
 }
 
 // Loads the saved focus, applies `change` (a reply, a pick), steps it over `rows` and saves it back.
+// Only urgent questions reach the band: one the advisor is still judging, or has answered for the user, stays off it.
 export function syncFocus(rows, { now = Date.now(), change = null, heartbeat = false } = {}) {
   let state = loadFocus();
-  const all = focusEntries(rows);
-  const banded = new Set([...(state.banded ?? []), state.current].filter(Boolean));
-  const { open: entries, batch } = splitBatch(markAuto(all, now), now, banded);
+  const entries = onBand(focusEntries(rows), rows, now);
   const busy = rows.flatMap((row) => row.sessions.filter((s) => s.status.kind === "busy").map((s) => ({ paneKey: s.paneKey, handle: s.handle, tag: sessionTag(row, s) })));
   if (change) state = change(state, entries, now);
   const view = focusStep(state, entries, now, busy);
   if (heartbeat) view.state.modsAt = now;
-  if (batch) {
-    const live = new Set(all.map((e) => e.key));
-    view.state.banded = [...new Set([...banded, view.state.current].filter((k) => k && live.has(k)))];
-  }
   saveFocus(view.state);
-  return batch ? { ...view, decisions: batch } : view;
+  return view;
 }
 
-// Which waiting questions the advisor would answer itself once they reach the band.
-function markAuto(entries, now) {
-  const advisor = advisorState(advisorHome());
-  if (!advisor) return entries;
-  const byPath = loadAdvice(advisorHome(), now);
-  return entries.map((e) => ({ ...e, auto: !!adviceFor(byPath, { path: e.item.row.path, status: e.item.session.status, since: e.since, now, advisor })?.auto }));
+// Any failure here keeps every question on the band, so a judging bug never hides one.
+function onBand(entries, rows, now) {
+  try {
+    const off = new Set(verdicts(rows, { now }).filter((v) => !v.verdict.band).map((v) => v.item.session));
+    return entries.filter((e) => !off.has(e.item.session));
+  } catch {
+    return entries;
+  }
 }
 
 const STATUS = Object.fromEntries(Object.entries(LABELS).map(([k, v]) => [k, [v.slice(0, v.indexOf(" ")), v.slice(v.indexOf(" ") + 1)]]));
@@ -232,11 +225,17 @@ function optionsOf(item) {
   return e.options.split("／").filter((o) => o !== "其他").map((o) => o.replace(/^[a-z](?:\s|$)/, "").trim());
 }
 
-// A 待決 card's options: a text question's labels whole, since the card gives each its own line.
-function decisionOptionsOf(item) {
-  if (item.kind !== "text" || item.entries.length > 1) return optionsOf(item);
-  const labels = textOptionLabels(item.session.status.text);
-  return labels.length ? labels : optionsOf(item);
+// How many decisions made without the user wait on this worktree's review; 0 when there are none or the records cannot be read.
+function reviewCount(cache, target) {
+  if (!cache.has(target)) {
+    let n = 0;
+    try {
+      const wt = worktreeOf(target);
+      n = wt ? stateOf(wt).open.filter((x) => x.status === "pending").length : 0;
+    } catch {}
+    cache.set(target, n);
+  }
+  return cache.get(target);
 }
 
 // A card's bottom right: the ticket title (a temporary worktree's task title), or per session when several share the worktree.
@@ -268,7 +267,24 @@ export function stopDigestLines(session, { home = consoleHome(), now = Date.now(
 
 // A stop's report as /focus-show and the watcher print it: the reply as is, then its recap at the bottom.
 export function reportWithDigest(row, status, session, { again = false, home = consoleHome(), now = Date.now() } = {}) {
-  return [...reportLines(row, status, session, { again }), ...stopDigestLines(session, { home, now }).lines];
+  return [...reportLines(row, status, session, { again }), ...reviewAppendix(row, status), ...stopDigestLines(session, { home, now }).lines];
+}
+
+// A define-goal or lean dev-flow batch sheet, and dev-flow's full path stopping with the prototype open, carry the worktree's review sheet:
+// the user reviews both at the one stop.
+export function reviewAppendix(row, status) {
+  const text = String(status?.text ?? "");
+  if (status?.kind !== "waiting" && status?.kind !== "done") return [];
+  const sheet = batchSheet(text);
+  if (!(sheet && sheetPath(row, text) !== "full") && !isLiveStop(text)) return [];
+  try {
+    const wt = worktreeOf(row.path);
+    const st = wt ? stateOf(wt) : null;
+    if (!st || st.open.length === 0 || sheetProblems(st.open).length) return [];
+    return ["", "---", "", ...sheetLines({ tag: tagOf(wt, readNames()), wt, pr: null, open: st.open })];
+  } catch {
+    return [];
+  }
 }
 
 // A question that just reached the band holds its print while its recap is being written, up to DIGEST_WAIT_MS.
@@ -291,7 +307,7 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
   const firsts = Object.fromEntries(Object.entries(view.state.firsts ?? {}).filter(([k]) => live.has(k)));
   const advice = loadAdvice(advisorHome(), now);
   const advisor = advice ? advisorState(advisorHome()) : null;
-  const deciding = new Set((view.decisions ?? []).map((b) => b.entry.item.session));
+  const reviews = new Map();
   const sessions = rows.flatMap((row) =>
     row.sessions.map((session) => {
       if (!(row.path in titles)) {
@@ -317,12 +333,14 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         summary: cardSummary(row, session, titles[row.path], firsts),
         question,
         options: item ? optionsOf(item) : [],
-        advice: item ? adviceFor(advice, { path: row.path, status, since: session.since ?? session.agent?.stateStartedAt, now, advisor, cancelled: !!view.state.cancelled?.[key] }) : null,
+        advice: item ? adviceFor(advice, { path: row.path, status, since: session.since ?? session.agent?.stateStartedAt, now, advisor }) : null,
         brief: briefOf(home, session, now),
         archived: !!session.archived,
         pending: !!item,
         report: report.join("\n"),
-        ...(deciding.has(session) ? { decide: true } : {}),
+        branch: row.branch ?? "",
+        path: row.path,
+        review: reviewCount(reviews, row.path),
       };
     }),
   );
@@ -340,7 +358,6 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
       queue: view.queue.map((e) => ({ key: e.key, isNew: (view.state.seen?.[e.key] ?? 0) > since })),
       stats: `${count(STATUS.anomaly[1]) ? `session 異常 ${count(STATUS.anomaly[1])} | ` : ""}等待回應 ${count("等待回應")} | 等待授權 ${count("等待授權")} | 回覆完畢 ${count("回覆完畢")} | 執行中 ${count("執行中")} | 封存 ${sessions.filter((s) => s.archived).length} | 閒置 ${count("閒置")}`,
       sessions,
-      ...(view.decisions ? { decisions: decisionCards(view.decisions, decisionOptionsOf, home) } : {}),
     },
     titles,
     firsts,

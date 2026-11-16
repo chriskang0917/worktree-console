@@ -95,7 +95,7 @@ test("不依賴任何 define-goal skill：說明與程式只在認舊標記時�
   const hits = [];
   for (const file of tracked().filter((f) => !f.startsWith("test/") && f !== "CHANGELOG.md")) {
     read(file).split("\n").forEach((line, i) => {
-      if (/define-goal/i.test(line) && !/舊|rec\.defineGoal|define-goal\|interview/.test(line)) hits.push(`${file}:${i + 1}: ${line.trim().slice(0, 80)}`);
+      if (/define-goal/i.test(line) && !/舊|rec\.defineGoal|define-goal\|interview|handoff-files|批改單|batch sheet/.test(line)) hits.push(`${file}:${i + 1}: ${line.trim().slice(0, 80)}`);
     });
   }
   assert.deepEqual(hits, []);

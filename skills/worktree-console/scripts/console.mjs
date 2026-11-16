@@ -1,8 +1,6 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   LABELS,
@@ -45,6 +43,7 @@ import {
   stageOf,
   stageWithSource,
   goalPlan,
+  batchSheet,
   ticketFromBranch,
   ticketKeys,
   selfInfo,
@@ -63,14 +62,17 @@ import {
   readConfig,
   STOPPED,
 } from "./lib.mjs";
-import { advisorHome, advisorState } from "./advice.mjs";
 import { asksReport } from "./asks.mjs";
-import { consoleSessionOk, focusCancel, focusOwnerOk, focusPayload, focusPick, focusReplied, focusSkip, holdForDigest, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
+import { consoleSessionOk, focusOwnerOk, focusPayload, focusPick, focusReplied, focusSkip, holdForDigest, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
-import { approve, takeOver } from "./automation.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
 import { appWorktreeHome, branchFolder } from "./herdr-app.mjs";
 import { herdrReport } from "./herdr-report.mjs";
+import { finishRound, reviewCommand } from "./review-cli.mjs";
+import { SHEET_ANSWER } from "./urgency.mjs";
+import { deliverReview } from "./review-deliver.mjs";
+import { stateOf, worktreeOf } from "./review.mjs";
+import { sheetPath } from "./urgency.mjs";
 import { alreadyIn } from "./git-scene.mjs";
 import { maybeTerminals, runOrca, terminals } from "./terminals.mjs";
 import { commitsSince, dropBranch } from "./disposable.mjs";
@@ -124,6 +126,24 @@ const { values, positionals } = parseArgs({
     to: { type: "string" },
     apply: { type: "boolean", default: false },
     all: { type: "boolean", default: false },
+    only: { type: "string" },
+    typing: { type: "string" },
+    n: { type: "string" },
+    question: { type: "string" },
+    plan: { type: "string" },
+    basis: { type: "string" },
+    source: { type: "string" },
+    impact: { type: "string" },
+    by: { type: "string" },
+    stop: { type: "string" },
+    prediction: { type: "string" },
+    q: { type: "string" },
+    width: { type: "string" },
+    markdown: { type: "boolean", default: false },
+    json: { type: "boolean", default: false },
+    before: { type: "string" },
+    after: { type: "string" },
+    prototype: { type: "string" },
   },
 });
 
@@ -296,6 +316,11 @@ function focusOut({ rows, keys }, { change = null, show = false, notice = null }
 }
 
 function focus() {
+  // The band says while the console's prompt holds a draft; no question is answered for the user meanwhile.
+  if (values.typing) {
+    const state = loadFocus();
+    saveFocus({ ...state, typingAt: values.typing === "1" ? Date.now() : 0 });
+  }
   if (!isConsole(maybeTerminals()?.selfHandle()) || !consoleSessionOk(values.session ?? process.env.CLAUDE_CODE_SESSION_ID) || !focusOwnerOk(values.owner, { claim: values.claim })) return console.log(JSON.stringify({ active: false }));
   focusOut(load({}, { repoOptional: true }));
 }
@@ -316,66 +341,6 @@ function focusPickCommand() {
 // 8 on the band: the question on screen goes behind the queue and the first one in the queue comes up.
 function focusLater() {
   focusOut(load({}, { repoOptional: true }), { change: (state) => focusSkip(state), show: true });
-}
-
-// 7 during the band's countdown: nothing is sent and the question waits on the band for the user.
-function focusCancelCommand() {
-  if (!positionals[0]) fail("缺少題目代號");
-  focusOut(load({}, { repoOptional: true }), { change: (state, entries, now) => focusCancel(state, positionals[0], now) });
-}
-
-// The band's countdown ran out, or 6 was pressed: the advisor records the auto-reply and hands back the answer, which `reply` sends.
-// Only the question still on the band goes; one the user answered meanwhile has no open prediction, so the advisor refuses it.
-function focusAutoCommand() {
-  const key = positionals[0];
-  if (!key) fail("缺少題目代號");
-  const current = syncFocus(load({}, { repoOptional: true }).rows).current;
-  const owned = focusOwnerOk(values.owner);
-  // TEMP: tells which band sent an early auto-reply; remove once the cause is confirmed.
-  try {
-    fs.appendFileSync(path.join(consoleHome(), "focus-auto-debug.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), key, current: current?.key ?? null, owner: values.owner ?? null, owned, reason: values.reason ?? null, clock: values.clock ? Number(values.clock) : null, now: Date.now() })}\n`);
-  } catch {}
-  if (!owned) return console.log(JSON.stringify({ active: false }));
-  const advisor = advisorState(advisorHome());
-  let notice = null;
-  if (current?.key === key && advisor && !loadFocus().cancelled?.[key]) {
-    const { tag, row } = current.item;
-    const run = (script, args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8", env: process.env });
-    const auto = run(advisor.script, ["auto", "--tag", tag, "--path", row.path]);
-    const answer = auto.status === 0 ? auto.stdout.trim() : "";
-    if (answer) {
-      const sent = run(fileURLToPath(import.meta.url), ["reply", "--", `${tag} ${answer}`]);
-      if (sent.status === 0) notice = `[${tag}] 已自動回覆：${answer}`;
-      else {
-        run(advisor.script, ["undo", "--tag", tag]);
-        notice = `[${tag}] 代回沒送出，請自己回答`;
-      }
-    }
-  }
-  focusOut(load({}, { repoOptional: true }), { notice });
-}
-
-// The 待決 tab's buttons: `decide <predictionId> approve` or `decide --all approve` send through `reply`; `decide <predictionId> manual` puts it on the band for the user.
-function decide() {
-  const [first, second] = positionals;
-  const choice = values.all ? first : second;
-  if (!["approve", "manual"].includes(choice) || (!values.all && !first) || (values.all && choice === "manual")) fail("用法：console.mjs decide <predictionId> approve|manual | decide --all approve");
-  const { rows } = load({}, { repoOptional: true });
-  const batch = syncFocus(rows).decisions;
-  const before = loadFocus();
-  if (!batch) fail("待決分頁沒有打開：automation.json 的 batch.enabled 不是 true");
-  if (choice === "manual") {
-    const taken = takeOver(batch, first);
-    if (!taken.ok) fail(taken.line);
-    syncFocus(rows, { change: (state) => focusPick(state, taken.key) });
-    return console.log(taken.line);
-  }
-  const reply = (tag, answer) => spawnSync(process.execPath, [fileURLToPath(import.meta.url), "reply", "--", `${tag} ${answer}`], { encoding: "utf8", env: process.env }).status === 0;
-  const result = approve(batch, { ids: values.all ? null : [first], reply });
-  // A reply makes the band wait on that session; an approval from 待決 must not take the band's question away.
-  saveFocus({ ...loadFocus(), current: before.current, currentAt: before.currentAt, wait: before.wait });
-  for (const line of result.lines) console.log(line);
-  if (!result.ok) process.exit(1);
 }
 
 function detail() {
@@ -727,7 +692,11 @@ function screenText(handle) {
   return res.ok ? (res.terminal?.tail ?? []).join("\n") : "";
 }
 
+// Run once a reply has landed, before the line is printed (a reply that answers a batch sheet closes the worktree's review).
+const delivered = [];
+
 function print(line, code) {
+  if (code === 0) for (const f of delivered.splice(0)) f();
   console.log(line);
   process.exit(code);
 }
@@ -924,23 +893,47 @@ async function reply() {
   const text = positionals.join(" ").trim();
   if (!text) fail("用法：console.mjs reply --repo R -- <整則訊息>");
   const { rows } = load({}, { repoOptional: true });
-  const head = text.split(/\s+/)[0];
-  const rest = text.slice(head.length).trim();
-  const sessions = matchSessions(rows, head).map((h) => h.session);
-  const named = rest ? pendingItems(rows).filter((x) => sessions.includes(x.session)) : [];
-  if (named.length > 1) fail(`「${head}」對應到 ${named.length} 個在等你的 session，請加 #n`);
-  let item = named[0] ?? null;
-  if (!item) {
-    item = syncFocus(rows).current?.item ?? null;
-    if (!item) fail("橫條上目前沒有題目：請在開頭寫代號");
+  let item;
+  let said;
+  if (values.only) {
+    // Only this tag's question, or nothing: an answer meant for one session must never land on the band's question.
+    const sessions = matchSessions(rows, values.only).map((h) => h.session);
+    const hits = pendingItems(rows).filter((x) => sessions.includes(x.session));
+    if (hits.length !== 1) fail(`[${values.only}] ${hits.length > 1 ? `對應到 ${hits.length} 個在等你的 session，請加 #n` : "不在待回覆清單，沒有送出"}`);
+    item = hits[0];
+    said = childAnswer(item, text);
+  } else {
+    const head = text.split(/\s+/)[0];
+    const rest = text.slice(head.length).trim();
+    const sessions = matchSessions(rows, head).map((h) => h.session);
+    const named = rest ? pendingItems(rows).filter((x) => sessions.includes(x.session)) : [];
+    if (named.length > 1) fail(`「${head}」對應到 ${named.length} 個在等你的 session，請加 #n`);
+    item = named[0] ?? null;
+    if (!item) {
+      item = syncFocus(rows).current?.item ?? null;
+      if (!item) fail("橫條上目前沒有題目：請在開頭寫代號");
+    }
+    said = childAnswer(item, item === named[0] ? rest : text);
   }
-  const said = childAnswer(item, item === named[0] ? rest : text);
+  closeSheetReview(item, said);
   if (item.kind === "anomaly") return sendRaw(item, said);
   if (item.kind === "text") {
     if (!item.session.handle) fail(`[${item.tag}] 找不到這個 session 的終端機`);
     return sendText(item.session.handle, item.tag, said);
   }
   return answerSession(item.row, item.session, said);
+}
+
+// A define-goal or lean dev-flow batch sheet is this ticket's pre-implementation review: the user's own reply to it also closes the review sheet sent along.
+function closeSheetReview(item, said) {
+  if (item.kind !== "text" || !batchSheet(item.session.status.text ?? "") || said.startsWith(SHEET_ANSWER)) return;
+  if (sheetPath(item.row, item.session.status.text ?? "") === "full") return;
+  delivered.push(() => {
+    try {
+      const wt = worktreeOf(item.row.path);
+      if (wt && stateOf(wt).open.length > 0) finishRound(wt, { by: "reply", passAll: true });
+    } catch {}
+  });
 }
 
 // ⚠️: nobody knows what the child waits on, so the reply is typed verbatim and Enter pressed, past herdr's blocked guard.
@@ -1379,6 +1372,16 @@ function asks() {
   for (const l of lines) console.log(l);
 }
 
+// `review`: the records need no terminal; only `done` loads the sessions to send the result back.
+function reviewEntry() {
+  return reviewCommand(values, positionals, {
+    deliver: (wt, r) => {
+      const { rows } = load({}, { repoOptional: true });
+      return deliverReview(rows, wt.path, r.message, r.sessions);
+    },
+  });
+}
+
 const commands = {
   board,
   asks,
@@ -1401,9 +1404,6 @@ const commands = {
   "focus-pick": focusPickCommand,
   "focus-later": focusLater,
   "focus-shown": focusShown,
-  "focus-cancel": focusCancelCommand,
-  "focus-auto": focusAutoCommand,
-  decide,
   reply,
   distilled,
   open,
@@ -1419,8 +1419,9 @@ const commands = {
   rename,
   prune,
   stage: stageCommand,
+  review: reviewEntry,
 };
-const OFFLINE = new Set(["asks", "report", "distilled", "herdr-report", "focus", "prompt", "prune", "stage"]);
+const OFFLINE = new Set(["asks", "report", "distilled", "herdr-report", "focus", "prompt", "prune", "stage", "review"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);
 if (!OFFLINE.has(command)) manager();
 await commands[command]();
