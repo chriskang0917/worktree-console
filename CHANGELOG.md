@@ -3,6 +3,7 @@
 ## 1.22.0
 
 - feat(review): auto-reply open and plain-sentence questions, and show 💬 only when a reply asks
+- feat(focus): mark auto-replied sessions as ↻ 代回中, add `waiting-line`, and let `autoShow: false` stop printing questions automatically
 
 ## 1.21.0
 
