@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.23.0
+
+- fix(waiting-line): catch the asks it missed: the ending line 「等你：…」/「不用等你」 a child now writes decides first, then a wider phrase list (按「…」、送出決定、審核頁＋動作、回 a／b／c …) that also looks past trailing notes
+- feat(waiting-line): list questions skipped on the focus band in a fourth cell 「已跳過」, with the hours waited past a day
+- feat(asks): count ⏸ stops left off the waiting line that you then replied to
+- feat(qa): `console.mjs qa` lists each question and answer by 代號, keyword and a flexible time range
+- fix(audit): write a session's audit line only when its states or waiting change, and report an unreadable last-state file instead of treating it as empty
+- feat(herdr): remove `herdr-report`, the distill reminder and `distilled`, and the focus-show debug log
+- feat(log): delete transcript copies whose session has not changed for 30 days
+- fix(waiting-line): judge a kept-alive session by the question it had before the keepalive, never by its 「收到」 turn
+- feat(review): number the sheet top to bottom, space its items, wrap a long 改／問 field, focus it at once, drop ** from answers, and add u to take back the last pass or edit
+- fix(review): answer 問 from the worktree's plans and the child's conversation when there is no goal file, and say 查不到 instead of guessing
+
 ## 1.22.0
 
 - feat(review): auto-reply open and plain-sentence questions, and show 💬 only when a reply asks

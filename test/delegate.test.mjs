@@ -370,7 +370,8 @@ test("自動送審：watcher 這一輪對報告乾淨的送審停點送「送審
 });
 
 const { autoReplyOf } = await import("../skills/worktree-console/scripts/auto-reply.mjs");
-const { waitingLine, awaitsDecision } = await import("../skills/worktree-console/scripts/waiting-line.mjs");
+const { waitingLine, awaitsDecision, awaitsUser, readBumped } = await import("../skills/worktree-console/scripts/waiting-line.mjs");
+const { asksUser } = await import("../skills/worktree-console/scripts/lib.mjs");
 
 test("代回中：session 正在跑、而且這一輪是中控台最近一筆代回送出後才開始的，才回傳代回的答案；停下、自己另外下指令、送失敗都不算", () => {
   const sentAt = NOW - 30_000;
@@ -387,7 +388,7 @@ test("代回中：session 正在跑、而且這一輪是中控台最近一筆代
   assert.equal(autoReplyOf(stopped, { [key(stopped)]: { at: sentAt, answer: "先改 API" } }), null, "停下就不算");
 });
 
-test("waiting-line：一行「等待：…｜自動處理中：…｜在跑：…」，空的寫「無」；⏸ 只有最後一段在等使用者決定才算等待", () => {
+test("waiting-line：一行「等待：…｜自動處理中：…｜在跑：…｜已跳過：…」，空的寫「無」；⏸ 只有最後一段在等使用者決定才算等待", () => {
   const sentAt = NOW - 30_000;
   const asking = world({ text: "做完了。\n\n要順便改舊測試嗎？" });
   const report = world({ text: "為什麼會壞？因為少了參數。\n\n已經修好。" });
@@ -397,7 +398,98 @@ test("waiting-line：一行「等待：…｜自動處理中：…｜在跑：�
   const rows = [asking, report, decide, auto, run].map((w) => w.row);
   const delegated = { [`${auto.session.paneKey}@x`]: { at: sentAt, answer: "b" } };
   const tag = (w) => w.row.label;
-  assert.equal(waitingLine(rows, delegated), `等待：${tag(asking)}、${tag(decide)}｜自動處理中：${tag(auto)}｜在跑：${tag(run)}`);
-  assert.equal(waitingLine([report.row], {}), "等待：無｜自動處理中：無｜在跑：無");
+  assert.equal(waitingLine(rows, delegated, {}), `等待：${tag(asking)}、${tag(decide)}｜自動處理中：${tag(auto)}｜在跑：${tag(run)}｜已跳過：無`);
+  assert.equal(waitingLine([report.row], {}, {}), "等待：無｜自動處理中：無｜在跑：無｜已跳過：無");
   assert.equal(awaitsDecision("請你確認\n\n已經修好。"), false, "只看最後一段");
+});
+
+// Two finalize stops that waited on the review page and were left off the line: the ask is 按「送出決定」 in the last paragraph, 等你 only in the first.
+const REVIEW_PAGE_A = [
+  "審核頁已經開好，我在等你決定。",
+  "**目前進度**\n- branch 檢查通過。\n- 審查找到 6 條，都不阻斷。其中 3 條我已經直接修好。",
+  "**要你決定的 3 條**（每張卡片選「修正」「接受風險（A）」或「誤判（F）」）\n1. 通知選單會多渲染一次。\n2. 通知彈窗裡有兩處型別強轉。\n3. 表單送出後用了一次型別強轉。",
+  "另外提醒一件事：origin/dev 已經比這個 branch 多 43 個 commit。",
+  "## 下一步\n- 3 條都決定好 → 在審核頁按「送出決定」，不用回話，我會接著做。",
+].join("\n\n");
+const REVIEW_PAGE_B = [
+  "收尾跑到 code review，現在停在審核頁，等你在上面做決定。",
+  "**目前進度**\n- 開工檢查通過。\n- 3 條已自動修，修完 lint、型別檢查、相關測試都通過。",
+  "**需要你在審核頁決定的 2 條**\n- **R2**：用 effect 把「等待中」的標記清掉。\n- **R5**：用 effect 把清單焦點拉回第一列。",
+  "我建議兩條都按「接受風險（A）」，理由寫「目前行為正確，改寫風險大於好處」。按「送出決定」後，我會接著做到開 draft MR。",
+].join("\n\n");
+
+test("waiting-line：等使用者的說法——回我「…」、按「…」、送出決定、審核頁／確認頁＋動作、要你、你同意、你拍板、待你、回 a／b／c；「跟我說」「告訴我」與否定說法不算", () => {
+  for (const t of ["改好了，回我「定稿」就收尾。", "在審核頁按「送出決定」。", "三條都看完就送出決定。", "審核頁開好了，請在上面勾選要修的。", "確認頁上選一個方案。", "這裡需要你看一下截圖。", "你同意的話我就合併。", "這個方向等你拍板。", "還有兩條待你處理。", "回 a／b／c 其中一個。", "回 a 或 b。"]) {
+    assert.equal(awaitsDecision(`已經跑完。\n\n${t}`), true, t);
+  }
+  for (const t of ["有問題再跟我說。", "想看細節可以告訴我。", "這步不需要你介入。", "不用等你回，我會接著做。", "期待你的回饋。"]) {
+    assert.equal(awaitsDecision(`已經跑完。\n\n${t}`), false, t);
+  }
+});
+
+test("waiting-line：等你寫在倒數 2–4 段、後面只是備註、提醒、標題或分隔線也算等待；後面是一般內容或超過四段就不算", () => {
+  assert.equal(awaitsDecision("改法有兩種，請你確認要哪個。\n\n備註：舊測試沒動。"), true);
+  assert.equal(awaitsDecision("請你確認改法。\n\n另外：CI 已過。\n\n提醒：明天要升版。\n\n---"), true, "等你在倒數第 4 段");
+  assert.equal(awaitsDecision("請你確認改法。\n\n備註：a\n\n備註：b\n\n備註：c\n\n備註：d"), false, "倒數第 5 段太遠");
+  assert.equal(awaitsDecision("請你確認\n\n已經修好。"), false, "後面一段是一般內容");
+});
+
+test("waiting-line：兩個 finalize 停在審核頁的回覆（最後一段只寫按「送出決定」）列進等待", () => {
+  const a = world({ text: REVIEW_PAGE_A });
+  const b = world({ text: REVIEW_PAGE_B });
+  assert.deepEqual([a.session.status.kind, b.session.status.kind], ["done", "done"], "沒有問號，是 ⏸");
+  assert.equal(waitingLine([a.row, b.row], {}, {}), `等待：${a.row.label}、${b.row.label}｜自動處理中：無｜在跑：無｜已跳過：無`);
+});
+
+test("💬：問句後面接「等你：…」結尾行或備註段照樣算在問；問句後面是一般內容不算", () => {
+  assert.equal(asksUser("做完了。\n\n要先改 A 還是 B？\n\n等你：回 a 或 b"), true);
+  assert.equal(asksUser("要順便改舊測試嗎？\n\n備註：CI 已過。"), true);
+  assert.equal(asksUser("要順便改舊測試嗎？\n\n已經修好了。"), false);
+  assert.equal(agentStatus({ state: "done", lastAssistantMessage: "要先改 A 還是 B？\n\n等你：回 a 或 b" }).kind, "waiting");
+});
+
+test("waiting-line：最後一行「等你：…」或「不用等你」先決定，沒寫才看說法；🔐、⚠️、選單照舊算等待", () => {
+  const done = (text) => agentStatus({ state: "done", lastAssistantMessage: text });
+  assert.equal(awaitsUser(done("已經修好。\n\n等你：看完截圖說好不好看")), true, "沒有等你的說法也算");
+  assert.equal(awaitsUser(done("請你確認改法。\n\n不用等你")), false, "不用等你蓋過「請你確認」");
+  assert.equal(awaitsUser(done("要順便改舊測試嗎？\n\n不用等你")), false, "💬 寫了不用等你也不算");
+  assert.equal(awaitsUser(done("已經修好。\n**等你：** 在審核頁按送出")), true, "粗體、同一段的最後一行也認");
+  assert.equal(awaitsUser({ kind: "permission", tool: "Bash", input: "x" }), true);
+  assert.equal(awaitsUser({ kind: "anomaly", text: "" }), true);
+  assert.equal(awaitsUser({ kind: "waiting", text: "", menu: [{ question: "q" }] }), true);
+  assert.equal(awaitsUser({ kind: "busy", text: "等你：x" }), false);
+});
+
+test("waiting-line：在焦點橫條按過延後處理（focus.json 的 bumped）的改列「已跳過」，等超過一天加時數", () => {
+  const fresh = world({ text: "請你確認改法。", since: NOW - 2 * 3_600_000 });
+  const old = world({ text: "請你確認改法。", since: NOW - 27 * 3_600_000 });
+  const still = world({ text: "請你確認改法。" });
+  const key = (w) => `${w.session.paneKey}@${w.session.since}`;
+  const bumped = { [key(fresh)]: NOW - 3_600_000, [key(old)]: NOW - 3_600_000, [`${still.session.paneKey}@1`]: NOW };
+  assert.equal(
+    waitingLine([fresh.row, old.row, still.row], {}, bumped, NOW),
+    `等待：${still.row.label}｜自動處理中：無｜在跑：無｜已跳過：${fresh.row.label}、${old.row.label}（等了 27 小時）`,
+    "同一個分頁前一次停下的跳過紀錄不算這次",
+  );
+  const home = consoleHome();
+  fs.writeFileSync(path.join(home, "focus.json"), JSON.stringify({ bumped }));
+  assert.deepEqual(readBumped(home), bumped);
+  assert.deepEqual(readBumped(path.join(home, "none")), {});
+});
+
+test("waiting-line：續命中的 session 照續命前記下的原題判斷（等你行、關鍵字），不看續命那輪的「收到」", async () => {
+  const { applyKeepalive, KEEPALIVE_TEXT } = await import("../skills/worktree-console/scripts/lib.mjs");
+  const original = { kind: "done", text: "審核頁開好了。\n\n等你：在審核頁按「送出決定」" };
+  const kept = world({ text: "收到", since: NOW - 60_000 });
+  kept.session.agent.prompt = KEEPALIVE_TEXT;
+  const keepalive = { [kept.session.paneKey]: { phase: "kept", stopAt: NOW - 3_600_000, status: original } };
+  applyKeepalive(kept.rows, keepalive);
+  assert.equal(kept.session.status.text, original.text, "畫面換回原題");
+  assert.equal(waitingLine(kept.rows, {}, {}, NOW, keepalive), `等待：${kept.row.label}｜自動處理中：無｜在跑：無｜已跳過：無`);
+  const missed = world({ text: "收到" });
+  const byKeyword = { [missed.session.paneKey]: { phase: "sent", stopAt: NOW - 3_600_000, status: { kind: "done", text: "改好了。\n\n請你確認改法。" } } };
+  assert.equal(waitingLine(missed.rows, {}, {}, NOW, byKeyword), `等待：${missed.row.label}｜自動處理中：無｜在跑：無｜已跳過：無`, "畫面沒換回原題時也用續命紀錄的原題");
+  assert.equal(waitingLine(missed.rows, {}, {}, NOW, {}), "等待：無｜自動處理中：無｜在跑：無｜已跳過：無", "沒有續命紀錄就照畫面");
+  const free = { [missed.session.paneKey]: { phase: "kept", stopAt: NOW - 3_600_000, status: { kind: "done", text: "做完了。\n\n不用等你" } } };
+  assert.equal(waitingLine(missed.rows, {}, {}, NOW, free), "等待：無｜自動處理中：無｜在跑：無｜已跳過：無");
 });

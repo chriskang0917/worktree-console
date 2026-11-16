@@ -11,10 +11,7 @@ import {
   backfillConsoles,
   commitLog,
   consoleCalls,
-  distillList,
-  distillReminder,
   logEvent,
-  markDistilled,
   readEntries,
   readEvents,
   subagentFiles,
@@ -182,31 +179,20 @@ test("補登記：載入過 worktree-console skill 且跑過 board 的舊對話�
   assert.deepEqual(backfillConsoles(), [], "第二次不再掃");
 });
 
-test("蒸餾提醒：第 19 份不提醒、第 20 份提醒並寫路徑清單、同一批不重複、中控台重啟再提醒、標記後歸零、標記後重啟不提醒", () => {
+test("複製：原始紀錄超過 30 天沒更新的副本自動刪掉（副本剛被寫過也一樣）；原檔沒變就不再複製回來，原檔有新內容才再複製", () => {
   freshLog();
-  const add = (i) => register(`sid-${String(i).padStart(2, "0")}`, transcript(`sid-${String(i).padStart(2, "0")}`, [reply(`d${i}`, T(i))]));
-  for (let i = 1; i <= 19; i++) add(i);
+  const file = transcript("sid-old", [reply("o1", T(0))]);
+  register("sid-old", file);
+  register("sid-new", transcript("sid-new", [reply("n1", T(0))]));
+  const old = (Date.now() - 31 * 86_400_000) / 1000;
+  fs.utimesSync(file, old, old);
   archiveTranscripts();
-  assert.equal(distillReminder(), null, "第 19 份不提醒");
-  add(20);
+  assert.deepEqual(copies(), ["sid-new.jsonl"], "原始紀錄 31 天前的刪掉，新的留著");
   archiveTranscripts();
-  const line = distillReminder();
-  assert.match(line, /^\[蒸餾\] 已保存 20 份.*已蒸餾/);
-  assert.ok(line.includes(distillList()));
-  const listed = fs.readFileSync(distillList(), "utf8").trim().split("\n");
-  assert.equal(listed.length, 20);
-  assert.ok(listed.every((p) => p.startsWith(archiveDir()) && fs.existsSync(p)));
-  assert.equal(distillReminder(), null, "同一批不重複提醒");
-  assert.match(distillReminder({ start: true }), /^\[蒸餾\]/, "未標記時中控台啟動再提醒");
-  assert.match(markDistilled(), /已標記處理到第 20 份/);
-  assert.equal(distillReminder({ start: true }), null, "標記後歸零，重啟也不提醒");
-  for (let i = 21; i <= 39; i++) add(i);
+  assert.deepEqual(copies(), ["sid-new.jsonl"], "原檔沒變不複製回來");
+  transcript("sid-old", [reply("o1", T(0)), reply("o2", T(1))]);
   archiveTranscripts();
-  assert.equal(distillReminder({ start: true }), null, "下一批第 19 份不提醒");
-  add(40);
-  archiveTranscripts();
-  assert.match(distillReminder(), /已保存 20 份/);
-  assert.match(fs.readFileSync(distillList(), "utf8"), /sid-21\.jsonl/);
+  assert.deepEqual(copies().sort(), ["sid-new.jsonl", "sid-old.jsonl"]);
 });
 
 test("子指令：直接路徑、變數別名都算，讀檔不算", () => {

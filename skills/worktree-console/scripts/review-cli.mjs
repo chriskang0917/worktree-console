@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readNames } from "./lib.mjs";
+import { homeRunFolder, readNames } from "./lib.mjs";
+import { archiveDir, readEntries, transcriptOf } from "./log.mjs";
 import { advisorHome, advisorState } from "./advice.mjs";
 import {
   DONE_MESSAGE,
@@ -25,7 +26,7 @@ import {
   worktreeOf,
 } from "./review.mjs";
 
-const USAGE = "用法：console.mjs review <add|correct|sheet|data|pass|pass-all|edit|ask|example|done|reviewed|status> [--path <worktree>] …";
+const USAGE = "用法：console.mjs review <add|correct|sheet|data|pass|pass-all|edit|undo|ask|example|done|reviewed|status> [--path <worktree>] …";
 
 function die(line) {
   console.error(line);
@@ -64,15 +65,66 @@ function askModel(prompt) {
   return r.status === 0 ? String(r.stdout).trim() : null;
 }
 
+const CONTEXT_MAX = 12000;
+const PLAN_FILES = new Set(["spec.md", "plan.md", "goal.md", "userflow.md", "handoff.md"]);
+
 function goalText(wt) {
   const dir = path.join(wt.main, ".goals");
   const tail = wt.branch.split("/").pop();
   for (const name of [tail, tail.replace(/^[a-z]+-\d+-/i, ""), path.basename(wt.path)]) {
     try {
-      return fs.readFileSync(path.join(dir, `${name}.md`), "utf8").slice(0, 12000);
+      return fs.readFileSync(path.join(dir, `${name}.md`), "utf8").slice(0, CONTEXT_MAX);
     } catch {}
   }
-  return "（找不到目標檔）";
+  return null;
+}
+
+function planFiles(root, depth = 0) {
+  if (depth > 4) return [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.flatMap((e) => {
+    if (e.name === "node_modules" || e.name === ".git") return [];
+    const p = path.join(root, e.name);
+    return e.isDirectory() ? planFiles(p, depth + 1) : PLAN_FILES.has(e.name) ? [p] : [];
+  });
+}
+
+// The worktree's planning documents (spec, plan, goal, userflow, handoff) and its dev-flow run folder's.
+function planText(wt) {
+  const files = [...planFiles(wt.path), ...planFiles(homeRunFolder(wt.repo, wt.branch))];
+  const text = files.map((f) => `# ${path.relative(wt.path, f)}\n${fs.readFileSync(f, "utf8")}`).join("\n\n");
+  return text ? text.slice(0, CONTEXT_MAX) : null;
+}
+
+// The end of the child session's conversation: what was asked and what it said, from its copy or else its original transcript.
+function talkText(sessionId) {
+  if (!sessionId) return null;
+  const entries = readEntries(path.join(archiveDir(), `${sessionId}.jsonl`)) ?? readEntries(transcriptOf(sessionId) ?? "") ?? [];
+  const said = entries.flatMap((e) => {
+    if ((e.type !== "user" && e.type !== "assistant") || e.isSidechain) return [];
+    const c = e.message?.content;
+    const text = typeof c === "string" ? c : (c ?? []).filter((p) => p.type === "text").map((p) => p.text).join("\n");
+    return text.trim() && !/^\s*</.test(text) ? [`${e.type === "user" ? "使用者" : "子 session"}：${text.trim()}`] : [];
+  });
+  const text = said.join("\n\n");
+  return text ? text.slice(-CONTEXT_MAX) : null;
+}
+
+export const NOTHING_TO_READ = "查不到：這個 worktree 沒有目標檔、規劃文件，也讀不到子 session 的對話，沒辦法根據資料回答";
+
+// What the answer may rest on: the goal file, else the worktree's planning documents and the child session's conversation.
+export function askContext(wt, x, st) {
+  const goal = goalText(wt);
+  if (goal) return ["目標檔：", goal];
+  const plan = planText(wt);
+  const talk = talkText(x.session ?? st.sessions.at(-1));
+  if (!plan && !talk) return null;
+  return [...(plan ? ["規劃文件：", plan, ""] : []), ...(talk ? ["子 session 的對話（最後一段）：", talk] : [])];
 }
 
 const itemText = (x) => [`題目：${x.question}`, `當前方案：${x.plan}`, `依據：${x.basis?.kind === "precedent" ? x.basis.source : "沒有前例"}`, `影響範圍：${x.impact}`].join("\n");
@@ -196,6 +248,14 @@ export async function reviewCommand(values, positionals, { deliver }) {
     append(wt, sub === "pass" ? { event: "pass", n, by: values.by ?? "panel" } : { event: "edit", n, to: String(values.to).trim(), by: values.by ?? "panel" });
     return console.log(sub === "pass" ? `第 ${n} 件已通過` : `第 ${n} 件已改：${String(values.to).trim()}`);
   }
+  if (sub === "undo") {
+    const wt = worktree(values);
+    const n = number(values);
+    const x = item(stateOf(wt), n);
+    if (x.status === "pending") die(`第 ${n} 件本來就是待審`);
+    append(wt, { event: "undo", n, by: values.by ?? "panel" });
+    return console.log(`第 ${n} 件已退回待審`);
+  }
   if (sub === "pass-all") {
     const wt = worktree(values);
     const st = stateOf(wt);
@@ -215,7 +275,26 @@ export async function reviewCommand(values, positionals, { deliver }) {
       append(wt, { event: "ask", n, q: "（要範例）", a: ex.answer, example: ex.file });
       return console.log(ex.answer);
     }
-    const a = askModel(["使用者在審核一件 coding agent 替他做的決定，問了一個問題。用白話回答，三句內、不寫程式碼。", "", "目標檔：", goalText(wt), "", "這一件：", itemText(x), ...x.asks.flatMap((r) => [`先前問：${r.q}`, `先前答：${r.a}`]), "", `問題：${q}`].join("\n"));
+    const st = stateOf(wt);
+    const context = askContext(wt, x, st);
+    if (!context) {
+      append(wt, { event: "ask", n, q, a: NOTHING_TO_READ });
+      return console.log(NOTHING_TO_READ);
+    }
+    const a = askModel(
+      [
+        "使用者在審核一件 coding agent 替他做的決定，問了一個問題。用白話回答，三句內、不寫程式碼、不用 Markdown。",
+        "只根據下面的資料回答；資料裡查不到答案時，只回一句「查不到：<缺的是什麼>」，不要推測。",
+        "",
+        ...context,
+        "",
+        "這一件：",
+        itemText(x),
+        ...x.asks.flatMap((r) => [`先前問：${r.q}`, `先前答：${r.a}`]),
+        "",
+        `問題：${q}`,
+      ].join("\n"),
+    );
     if (!a) die(`第 ${n} 件的問題沒有得到回答`);
     append(wt, { event: "ask", n, q, a });
     return console.log(a);

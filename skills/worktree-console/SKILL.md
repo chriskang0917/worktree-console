@@ -35,12 +35,13 @@ orca `--json` 回傳一律是 `{ok, result}`；`ok:false` 時看 `error.code`（
 | `console.mjs send --terminal H --tag T -- <文字>` | 把文字送進子 session 並讀畫面確認（見〈指揮〉第 1 步）：`[T] 已送出`、`[T] 已送出（排隊中）`、`[T] 已送出（已按 Esc 退回對話後重送）`；子 session 執行中卻還沒在畫面上看到那句時印未確認狀態 `[T] 已送出（子 session 執行中，畫面上還沒看到這句，等它停下再確認）` 並 exit 0；未送達印 `[T] 未送達：<原因>` 加畫面最後幾行並 exit 1 |
 | `console.mjs nickname --repo R <branch 或代號> <暱稱>` | 存中控台替 worktree 取的暱稱（3～5 個英文小寫字母）：`[<暱稱>] 已存暱稱：<branch>（<repo>）`；格式不對印 `[<暱稱>] 暱稱要 3～5 個英文小寫字母`、跟任何 repo 已有的暱稱或代號撞名印 `[<暱稱>] 暱稱已被使用，請換一個`，都 exit 1 |
 | `console.mjs rename --repo R <代號> <名稱>` | 「<代號> 改名 <名稱>」：存下名稱，看板、專注橫條、待回覆清單、herdr 分頁名稱立刻換成新名稱；停著的 session 立刻送 `/rename <名稱>` 改 Claude Code session 名稱，還在跑（或等你回應、授權）的記下來，等它停下由 watcher 送。輸出 `[<名稱>] 已改名：<舊代號> → <名稱>`，有沒停下的再加一行 `<代號> 還沒停下，Claude Code session 名稱等它停下再改`；名稱不合格式或撞名印 `[<名稱>] 不能用：<原因>` 並 exit 1 |
-| `console.mjs asks [--since YYYY-MM-DD] [--days N]` | 使用者說「問了幾次」「被問幾次」時跑，輸出原樣貼出。只讀 advisor 的 `answers.jsonl`（`ADVISOR_HOME`，預設 `~/.advisor`），期間預設 `--days 7`、結束在今天（帶 `--since` 就從那天起算）。每個 worktree 一列 `代號｜問你幾次｜agent 自己能回答｜比例`，依問的次數由多到少；最下面一行本期合計，再一行前一個等長期間的合計與差值。「問你幾次」只算 `source` 是 `console` 或 `tab`、`kind` 是 `text` 或 `menu` 的回答（代回、代錯改正、自由提問不算）；「自己能回答」＝有 `childSuggestion`，且回答開頭的選項字母和它相同、回「照建議」「全照建議」開頭，或批改單回 a、b。同一個 worktree 跨交棒的 session 合成一列（`path` 往上找到 `.git` 所在的目錄），代號用它最後一筆紀錄的 `tag`。沒有紀錄印 `期間內沒有回答紀錄`。不登記中控台、不需要 Orca 或 herdr |
-| `console.mjs waiting-line --repo R` | 印一行 `等待：…｜自動處理中：…｜在跑：…`（代號以「、」分隔，空的寫「無」）。等待＝💬、🔐、⚠️，以及最後一段在等使用者決定（「等你」「請確認」「說「定稿」」這類字）的 ⏸；自動處理中＝中控台代回後還在跑這一輪的（卡片顯示「↻ 代回中」）；在跑＝其他 🔄。**中控台每則回覆的第一行原樣貼它的輸出。** |
+| `console.mjs asks [--since YYYY-MM-DD] [--days N]` | 使用者說「問了幾次」「被問幾次」時跑，輸出原樣貼出。只讀 advisor 的 `answers.jsonl`（`ADVISOR_HOME`，預設 `~/.advisor`），期間預設 `--days 7`、結束在今天（帶 `--since` 就從那天起算）。每個 worktree 一列 `代號｜問你幾次｜agent 自己能回答｜比例`，依問的次數由多到少；最下面一行本期合計，再一行前一個等長期間的合計與差值。「問你幾次」只算 `source` 是 `console` 或 `tab`、`kind` 是 `text` 或 `menu` 的回答（代回、代錯改正、自由提問不算）；「自己能回答」＝有 `childSuggestion`，且回答開頭的選項字母和它相同、回「照建議」「全照建議」開頭，或批改單回 a、b。同一個 worktree 跨交棒的 session 合成一列（`path` 往上找到 `.git` 所在的目錄），代號用它最後一筆紀錄的 `tag`。沒有紀錄印 `期間內沒有回答紀錄`。最後一行 `等待判斷：看板顯示回覆完畢、沒列入等待 N 次，其中你接著回答了 M 次（P%）` 讀事件紀錄的停下事件：⏸ 而且沒列入等待的停下，在它下次停下前你回答了它（選項字母、照建議、好／確認這類短回答，或題目裡「」引起來的字）就算一次；你另外下的新指令、續命那輪的「收到」、還沒記「有沒有列入等待」的舊停下都不算。不登記中控台、不需要 Orca 或 herdr |
+| `console.mjs qa [<代號>…] [--grep 關鍵字] [--days N \| --since 時間 [--until 時間]] [--limit N]` | 使用者要查「問過什麼、怎麼回的」時跑，輸出原樣貼出。一題一行 `時間｜代號｜問什麼｜怎麼回｜誰回的`（使用者／代回／分頁直接回），時間由舊到新。只讀不寫 advisor 的 `answers.jsonl`；沒記題目的，用同一個 session 稍早的停下事件，或子 session 最後一段補上（先讀對話副本，副本已刪就讀 `~/.claude/projects` 的原始對話），補不到寫 `（沒記到題目）`。時間接受 `YYYY-MM-DD`、`YYYY-MM-DD HH:mm`、`today`、`yesterday`、`3h`、`2d`，`--until` 給日期時算到那天結束；不帶時間只列今天，`--days N` 是含今天往前 N 天。沒有符合的印 `這段時間沒有問答紀錄`。不登記中控台、不需要 Orca 或 herdr |
+| `console.mjs waiting-line --repo R` | 印一行 `等待：…｜自動處理中：…｜在跑：…｜已跳過：…`（代號以「、」分隔，空的寫「無」）。先看子 session 回覆的最後一行（續命中的 session 看續命前記下的原題，不看「收到」）：`等你：…` 算等待、`不用等你` 不算；沒寫這行時，等待＝💬、🔐、⚠️，以及最後一段（後面只接備註、提醒、標題、分隔線時往前看，最多倒數第 4 段）在等使用者的 ⏸（「等你」「請確認」「說「定稿」」「按「送出決定」」「審核頁＋按／勾／選」「回 a／b／c」這類字，「跟我說」「告訴我」不算）；選單、🔐、⚠️ 一律算等待。自動處理中＝中控台代回後還在跑這一輪的（卡片顯示「↻ 代回中」）；在跑＝其他 🔄；已跳過＝在等你、但你在焦點橫條按過延後處理（`focus.json` 的 `bumped`）的，停下超過一天加 `（等了 N 小時）`。**中控台每則回覆的第一行原樣貼它的輸出。** |
 | `console.mjs stage --path <worktree>` | 印一行 JSON `{"stage":"<未開工｜規劃中｜實作中｜已推送>","source":"<判斷依據>"}`，判斷規則同看板的「階段」欄（見 `references/status-stage.md`），`source` 是 `dirty`、`pushed`、`ahead`、`dev-flow-plan`、`goal-file`、`interview-comment` 或 `none`；不是 git worktree 印 `{"stage":"unknown","source":"not-a-worktree"}`。只讀 git 與檔案，不登記中控台、不需要 Orca 或 herdr；給 advisor 這類背景腳本查階段用（腳本路徑記在 `~/.worktree-console/.state/managed.json` 的 `script`） |
 | `console.mjs review add --question Q --plan P (--basis 沒有前例[；補充] \| --source <出處>) --impact I --by advisor\|child --stop S [--path W]` | 記一筆沒問使用者就做的決定，寫進 `~/.worktree-console/reviews/<repo>/<branch>/review.jsonl`（編號、時間、repo、branch、票號、worktree 路徑、session、題目、當前方案、依據、影響範圍、誰代回、對應停點）。寫入時就檢查格式：缺欄位、說明句超過 40 字、程式碼區塊或行內程式碼以外的程式碼都當場拒寫並印 `第 N 件「欄位」不合格：…`。`review correct --n N …` 寫一行更正覆蓋該件內容。紀錄只往後追加，以 worktree 路徑＋編號對應，branch 改名後照樣找得到 |
 | `console.mjs review sheet [--path W] [--markdown]` | 印出這個 worktree 還沒審的審核單（格式見〈實作前審核〉）；有不合格的件就拒絕產生並印哪一件哪一欄。`--markdown` 印給 draft PR／MR 說明用的版本 |
-| `console.mjs review data\|pass\|edit\|pass-all\|ask\|done --path W …` | 焦點面板的審核單畫面用：`data` 給 JSON、`pass --n N` 通過、`edit --n N --to T` 改、`pass-all` 通過「照你過去的回答」那區剩下的、`ask --n N [--q Q]` 就地問（不帶 `--q` 是要範例）、`done` 審完：寫已審標記、把結果寫回 advisor、送一則「審核完成：N 件通過、M 件已改，請重跑剛才被擋的指令」回原 session。改狀態的子指令只有中控台與面板能跑，子 session 跑會被 hook 擋下 |
+| `console.mjs review data\|pass\|edit\|undo\|pass-all\|ask\|done --path W …` | 焦點面板的審核單畫面用：`data` 給 JSON、`pass --n N` 通過、`edit --n N --to T` 改、`undo --n N` 把通過或改過的那件退回待審、`pass-all` 通過「照你過去的回答」那區剩下的、`ask --n N [--q Q]` 就地問（不帶 `--q` 是要範例；有目標檔照目標檔答，沒有就讀這個 worktree 的規劃文件與子 session 的對話，資料裡查不到就回「查不到：…」，三樣都沒有時不問模型）、`done` 審完：寫已審標記、把結果寫回 advisor、送一則「審核完成：N 件通過、M 件已改，請重跑剛才被擋的指令」回原 session。改狀態的子指令只有中控台與面板能跑，子 session 跑會被 hook 擋下 |
 | `node <base>/scripts/involvement.mjs [--from D] [--until D] [--days N]` | 印出涉入佔比（你回答÷全部回答）、每天回答次數、每天超過 25 分鐘沒被打斷的段數；只讀事件紀錄與 advisor 的 `answers.jsonl` |
 | `watch.mjs [--baseline <快照>] [--takeover]` | 全機唯一的常駐監看，涵蓋 Orca 所有 repo；有 session 進入待你處理的狀態就輸出回報＋完整看板並結束（有 mods 時只為定稿叫醒，只印那一則回報）；暫存 worktree 的最後一個分頁關掉後，乾淨的自動移除（見 `references/ask.md`） |
 
@@ -59,11 +60,11 @@ orca `--json` 回傳一律是 `{ok, result}`；`ok:false` 時看 `error.code`（
 
 子 session 規劃時，非緊急題由中控台直接代回、它自己推測的決定也記下來；這些決定在進入實作前集中成一張審核單，由使用者在焦點面板一次審完（畫面與按鍵見 `references/focus.md`〈審核單〉）。
 
-- 開場規則：worktree-console 的 SessionStart hook 替每個 session 加三條規則：緊急名單 10 類一律停下問使用者；其他推測的決定用 `console.mjs review add --by child` 記下；CLAUDE.md〈停點〉五個條件都成立就直接做，不在結尾等「開工」「OK」「繼續」，「送出並合併」仍等使用者本人說。
+- 開場規則：worktree-console 的 SessionStart hook 替每個 session 加四條規則：緊急名單 10 類一律停下問使用者；其他推測的決定用 `console.mjs review add --by child` 記下；CLAUDE.md〈停點〉五個條件都成立就直接做，不在結尾等「開工」「OK」「繼續」，「送出並合併」仍等使用者本人說；每次停下，最後一行固定寫 `等你：<要使用者做什麼>` 或 `不用等你`。
 - 緊急名單 10 類（一律不代回、當下上待回覆）：等待授權、session 異常、不可逆或對外動作（push、合併、刪資料或 branch、寫 Linear／Slack、改遠端設定）、代價高的決定（方向、範圍、資料寫入、權限）、需使用者本人判定的驗收與原型確認、加進〈不做〉或拿掉先前決定、要用秘密值、要連 SSH 或 RDS、連續 3 個假設失敗、判斷不出是否緊急。一則訊息只要有一題緊急，整則算緊急。判斷由 agent-skills advisor 的背景預測做（模型＋關鍵字補網），超過 2 分鐘判不出來算緊急。
 - 代回：watcher 每一輪把判成非緊急的題先記成審核項目，再用 `console.mjs reply --only <代號>` 送出（不倒數、不看題型猜中率），送失敗補一行「未送出」；中控台輸入框有字時不代回。哪些題照常上橫條、批改單與 implement 的「送審」怎麼處理，見 `references/focus.md`〈只有緊急題上橫條〉〈代回〉。
 - 攔截點（`hooks/review-gate.mjs` 的 PreToolUse）：這個 worktree 有待審代回、又沒有「已通過實作前審核」標記時，擋下前端 dev-flow 的 `approve`（含 `--auto`、`--user-said`）、後端的 `confirm-spec`、define-goal 的 `handoff-files.mjs`，以及 Edit、Write、MultiEdit、NotebookEdit 改 worktree 裡的檔（worktree 外、`.goals/`、dev-flow run folder、`spec.md`、`plan.md`、自動交棒說明檔放行），並印「先跑 console.mjs review sheet、停下等使用者審核」。比對的是子命令：flow 腳本後第一個詞是 `approve`／`confirm-spec` 才擋，`event start --phase approve` 不擋；`console.mjs review` 開頭的指令一律放行。前三個攔截點另外檢查 worktree：規劃產物以外有任何改動就擋下。讀不到審核紀錄或出錯時一律擋下並寫原因。
-- Bash：攔截點不比對 Bash 的寫法。有待審代回且沒有已審標記時，PostToolUse 在每次 Bash 前後用 `git status` 比對 worktree；規劃產物以外多出改動就鎖住這個 session（之後的改檔工具與 Bash 一律擋下，只放行 `console.mjs review` 開頭的指令），不還原檔案，審核單第一件列出「規劃階段改了這些檔」與檔名，由使用者決定留著或還原。
+- Bash：攔截點不比對 Bash 的寫法。有待審代回且沒有已審標記時，PostToolUse 在每次 Bash 前後用 `git status` 比對 worktree；規劃產物以外多出改動就鎖住這個 session（之後的改檔工具與 Bash 一律擋下，只放行 `console.mjs review` 開頭的指令），不還原檔案，審核單「先看」那區照編號多一件「規劃階段改了這些檔」列出檔名，由使用者決定留著或還原。
 - 已審標記：審完（面板 `done`，或 define-goal／前端精簡路徑回批改單）時寫入；dev-flow `reopen` 或後端 spec 改回 `status: draft` 時清掉。有標記之後新記的代回屬於實作階段，不擋流程。
 - 審核單格式：第一行 `審核單：<代號>`；第二行左邊 branch（有 PR／MR 時接 ` · PR #N`）、右邊 repo；只分「先看：沒有前例」（每件四行：題目、當前方案、依據、影響範圍）與「照你過去的回答」（每件兩行：題目、當前方案＋出處）；沒有開頭說明句、沒有提醒。每欄一句白話、40 字內、不放程式碼（寫入時就檢查）。
 - 什麼時候給使用者看：子 session 被攔截點擋下時照擋下訊息貼出審核單並停下；define-goal 與前端精簡路徑的批改單、前端完整路徑原型開好那次停下時，回報後面直接接上審核單（卡片同時顯示原型確認與「需審核 N 件」），使用者回批改單時中控台用 `reply` 送出的同時把審核單記成審完。子 session 因攔截點停下的那則訊息一律不代回。
@@ -100,7 +101,7 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
   - `[watch] orca-unreachable`：跑一次 `orca status --json` 回報使用者，**不重掛**，等使用者下次開口時先檢查 orca 再重掛。
   - `[watch] timeout`：直接帶 baseline 重掛，不必告訴使用者。
   - `[<暱稱>] 未移除：…`：使用者關掉暫存 worktree 最後一個分頁，但它有未 commit 改動或有 commit 所以沒自動移除（見 `references/ask.md`），只原樣貼這一行，不當待處理、不貼看板，帶 baseline 重掛。
-  - `[票號] 已自動交棒（context N%）`、`[票號] 已自動交棒（快取將到期）`、`[票號] 已交棒（手動）`、`[票號] 自動交棒失敗：…`：子 session 換手的結果（見 `handoff` skill 與〈快取續命〉），只原樣貼這一行，不當待處理、不貼看板，帶 baseline 重掛。`[票號] 續命時沒照指示只回「收到」…`、`[蒸餾] …` 一行（保存的對話紀錄滿 20 份的提醒）同樣處理。
+  - `[票號] 已自動交棒（context N%）`、`[票號] 已自動交棒（快取將到期）`、`[票號] 已交棒（手動）`、`[票號] 自動交棒失敗：…`：子 session 換手的結果（見 `handoff` skill 與〈快取續命〉），只原樣貼這一行，不當待處理、不貼看板，帶 baseline 重掛。`[票號] 續命時沒照指示只回「收到」…` 一行同樣處理。
   - `[試營運] 到期，報告：<路徑>`：試營運到期（`automation.json` 的 `trial.until` 當天或之後、這一期還沒有報告），watcher 已用 advisor 的 `trial-report --final` 產生報告。照中控台 prompt〈中控台〉一段的試營運規則處理（內建範本 `templates/prompt.md` 有寫；自訂版沒寫就只原樣貼這一行），不貼看板，帶 baseline 重掛。開始滿 7 天時 watcher 另寫一份期中報告 `~/.advisor/reports/trial-<到期日>-midterm.md`，不印、不叫醒中控台。沒有 `automation.json`、沒裝 advisor 或產報告失敗時 watcher 什麼都不做。
   - 沒有任何輸出就結束（被另一個中控台接手停掉）：**不重掛**，回一行「監看已交給另一個中控台」。
   - 收到 watcher 背景工作被停掉的通知（task-notification 狀態 `stopped`，或寫「didn't finish before the previous session ended」，常見於中控台的 Claude Code session 重啟）：不問使用者，直接帶最後一次的 `baseline:` 加 `--takeover` 重掛；手上沒有 baseline 時只加 `--takeover`。
@@ -136,11 +137,11 @@ node <base>/scripts/watch.mjs [--baseline "<上一輪最後一行 baseline: 後�
 | 需求訪談的子 session 回報「定稿完成」（交棒） | `handoff.md` |
 | 「關掉 <票號>」（〈關閉〉） | `close.md` |
 | 「清理 branch」「prune」（列出並清掉已合併的本地 branch 與 worktree） | `prune.md` |
-| 「報表」「最近卡在哪」等要看紀錄、打「已蒸餾」（〈過程紀錄〉） | `process-log.md` |
+| 「報表」「最近卡在哪」等要看紀錄（〈過程紀錄〉） | `process-log.md` |
 | `todo` 印 `skip:no-config`（待開工提醒的設定與篩選規則） | `todo-config.md` |
 | 使用者問為什麼是這個狀態或階段，或寫詳情建議需要判斷階段時 | `status-stage.md` |
 | 「封存 <代號>」（〈封存〉） | `archive.md` |
-| 中控台在 herdr 分頁裡（`HERDR_ENV=1`）：啟動前；使用者說「<票號> 狀態錯了，其實是 X」；「把 <票號> 搬到 <工作區>」；要看 herdr 試跑評估 | `herdr.md` |
+| 中控台在 herdr 分頁裡（`HERDR_ENV=1`）：啟動前；使用者說「<票號> 狀態錯了，其實是 X」；「把 <票號> 搬到 <工作區>」 | `herdr.md` |
 | 中控台在 Herdr app 分頁裡（有 `HC_TERMINAL_ID`、沒有 `HERDR_ENV=1`）：啟動前（先讀 `herdr.md`）；看板 pane 沒出現或顯示過期 | `herdr-app.md` |
 | 「問：<問題>」、「問 <repo>：<問題>」、「<代號> 問：<問題>」，或開頭那個字像 repo 名稱（3 個字元以上）且不是中控台指令（〈問問題〉） | `ask.md` |
 | 對話出現 `/focus-show` 的輸出，或 `after-send` 印出 `等 <代號> 回應中…`（〈專注模式〉） | `focus.md` |

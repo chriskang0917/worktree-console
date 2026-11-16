@@ -34,13 +34,13 @@
 | 讀畫面、按鍵 | `hc read <t>`、`hc keys <t> <鍵>`（`enter`、`esc`、`down`、數字） |
 | 關閉 | 分頁裡只有這個 worktree 的終端機就 `tab.close`，和別的終端機同分頁就只關它的 pane；中控台自己的分頁一律不關 |
 | 交棒與搬移 | 手動與自動交棒都在舊分頁所在的 space 開新分頁（沿用名稱、`--session-id`、同一個 `--permission-mode`），接手指令與 `/goal` 走 `hc send`，全部成功才關舊分頁。`move` 在目標 space 開新分頁 `--resume` 同一段對話，新分頁就緒才關舊分頁 |
-| 試跑紀錄 | `herdr-audit.jsonl` 的讀取與人工誤判多帶 `terminal: "herdr-app"`；`herdr-report` 把舊 herdr 與 Herdr app 的讀取次數、異常與誤判分開列 |
+| 試跑紀錄 | `herdr-audit.jsonl` 的讀取與人工誤判多帶 `terminal: "herdr-app"` |
 
 〈指揮〉裡寫 `orca terminal …` 的步驟在 Herdr app 模式改成：讀畫面 `hc read <t>`、送按鍵 `hc keys <t> <鍵>`、開 claude 分頁 `console.mjs open`。`未開工：新分頁沒就緒` 時用 `hc read` 看畫面，信任資料夾的對話框用 `hc keys <t> down enter` 回應後再送首則指令。
 
 ## 指令
 
-與 `herdr.md`〈指令〉相同（`start`、`open`、`move`、`misjudge`、`herdr-report` 都能用），差別只有 `start` 的 `--dir` 可省略。
+與 `herdr.md`〈指令〉相同（`start`、`open`、`move`、`misjudge` 都能用），差別只有 `start` 的 `--dir` 可省略。
 
 ## 看板 pane
 

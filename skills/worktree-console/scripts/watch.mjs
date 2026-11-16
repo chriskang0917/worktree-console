@@ -27,17 +27,18 @@ import { terminals } from "./terminals.mjs";
 import { handedOver, keepaliveStep, keepaliveUsage, sessionEntries } from "./keepalive.mjs";
 import { sweepDisposable } from "./disposable.mjs";
 import { DIGEST_WAIT_MS, loadFocus, modsActive, reportWithDigest, stopDigestLines } from "./focus.mjs";
-import { answeredStops, commitLog, distillReminder, logEvent, registerConsole, sessionFor, stopLogged } from "./log.mjs";
+import { answeredStops, commitLog, logEvent, registerConsole, sessionFor, stopLogged } from "./log.mjs";
 import { gitScene } from "./git-scene.mjs";
 import { trialStep } from "./automation.mjs";
 import { delegateStep, verdicts } from "./delegate.mjs";
 import { flushOutbox } from "./review-deliver.mjs";
 import { prNoteStep } from "./pr-note.mjs";
+import { awaitsUser, judgedStatus } from "./waiting-line.mjs";
 
 const stopSince = (x) => x.since ?? x.agent?.stateStartedAt ?? null;
 
 // The git scene goes with each stop.
-const stopEvent = (row, x) => ({ ...stopFields(row, x), since: stopSince(x), scene: gitScene(row.path, row.baseRef) });
+const stopEvent = (row, x) => ({ ...stopFields(row, x), since: stopSince(x), scene: gitScene(row.path, row.baseRef), waiting: awaitsUser(judgedStatus(x, readKeepalive())) });
 
 // A finalised interview hands off or asks whether to start, so in focus mode its stop still wakes the console instead of waiting on the band.
 const finalized = (x) => /^\s*定稿完成(（動工）)?[：:]/m.test(x.status.text ?? "");
@@ -150,12 +151,6 @@ for (;;) {
   const current = snapshot(data.rows);
   if (start) baseline = unreported(data.rows, current);
   const next = formatBaseline(start ? baseline : current);
-  const distill = distillReminder({ start });
-  if (distill) {
-    console.log(distill);
-    console.log(`baseline: ${next}`);
-    process.exit(0);
-  }
   const trial = trialStep(Date.now(), trialTried);
   if (trial) {
     console.log(trial);

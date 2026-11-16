@@ -2069,7 +2069,7 @@ test("紀錄 watch：進入待你處理時寫停下事件（狀態、問題前 1
   const stops = events.filter((e) => e.event === "stop");
   assert.deepEqual(
     stops.map(({ ts, handle, paneKey, sessionId, since, ...rest }) => rest),
-    [{ event: "stop", repo: "app", ticket: "PROJ-101", status: "waiting", question: "要先補測試還是直接接 API？", suggestion: "先加單元測試", scene: "A" }],
+    [{ event: "stop", repo: "app", ticket: "PROJ-101", status: "waiting", question: "要先補測試還是直接接 API？", suggestion: "先加單元測試", scene: "A", waiting: true }],
   );
   assert.equal(stops[0].handle, "term_a");
   assert.equal(typeof stops[0].since, "number", "記下停下時間，重掛時認得同一次停下");
@@ -3129,24 +3129,6 @@ test("有 mods 時在輸入框回覆（send 送達）也算回完這題：專注
   const plain = consoleHome();
   assert.equal(sendRun(["chat"], SCREENS.chat[1], { WORKTREE_CONSOLE_HOME: plain }).out, "[PROJ-103] 已送出");
   assert.ok(!fs.existsSync(path.join(plain, "focus.json")));
-});
-
-test("蒸餾提醒：保存的對話紀錄滿 20 份時 watcher 印一行提醒（附路徑清單檔）並帶 baseline 結束；同一批下次不再叫醒，中控台重啟再提醒", () => {
-  const log = fs.mkdtempSync(path.join(tmp, "distill-log-"));
-  fs.mkdirSync(path.join(log, ".state"), { recursive: true });
-  fs.writeFileSync(path.join(log, ".state", "archive.json"), JSON.stringify({ order: Array.from({ length: 20 }, (_, i) => `sid-${i}`), sources: {} }));
-  const dir = fake();
-  const env = { WORKTREE_CONSOLE_LOG_DIR: log, WATCH_TIMEOUT_MS: "300" };
-  const first = run("watch.mjs", [], { dir, env });
-  assert.match(first.lines[0], /^\[蒸餾\] 已保存 20 份對話紀錄待蒸餾，這批 20 份的路徑清單：.*distill-batch\.txt；處理完打「已蒸餾」$/);
-  assert.match(first.lines.at(-1), /^baseline: /);
-  assert.equal(first.lines.length, 2);
-  assert.equal(fs.readFileSync(path.join(log, "distill-batch.txt"), "utf8").trim().split("\n").length, 20);
-  const again = run("watch.mjs", ["--baseline", first.lines.at(-1).slice("baseline: ".length)], { dir, env });
-  assert.ok(!again.out.includes("[蒸餾]"), again.out);
-  assert.match(run("watch.mjs", [], { dir, env }).lines[0], /^\[蒸餾\]/, "中控台重啟（不帶 baseline）再提醒");
-  assert.match(run("console.mjs", ["distilled"], { dir, env }).out, /^\[蒸餾\] 已標記處理到第 20 份/);
-  assert.ok(!run("watch.mjs", [], { dir, env }).out.includes("[蒸餾]"));
 });
 
 test("中控台登記：只是跑 board 或 watcher 的開發 session（含共用 session 編號的子代理）不登記成中控台——過程紀錄與 consoles.json 都不登記；載入過 worktree-console skill 的才登記，看板照樣排除自己的分頁", () => {

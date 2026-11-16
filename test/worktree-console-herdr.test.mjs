@@ -10,7 +10,6 @@ import { fileURLToPath } from "node:url";
 import { claudeProjectDir, pendingItems, turnEntry } from "../skills/worktree-console/scripts/lib.mjs";
 import { terminalKind } from "../skills/worktree-console/scripts/terminals.mjs";
 import { transcriptState } from "../skills/worktree-console/scripts/herdr.mjs";
-import { evaluate, conclusionLines } from "../skills/worktree-console/scripts/herdr-report.mjs";
 import { emptyFocus, focusStep } from "../skills/worktree-console/scripts/focus.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -216,7 +215,7 @@ test("⚠️ 的詳情附子 session 畫面；回覆原文照送，不轉成 a�
   assert.deepEqual(w.sends().filter((s) => s.pane === "w1:p2").map((s) => s.text ?? s.keys.join(" ")), ["b", "enter"]);
 });
 
-test("每次讀狀態都寫一筆對照紀錄：herdr 原始、中控台顯示、紀錄與畫面推出，不一致標出", () => {
+test("狀態有變才寫一筆對照紀錄：herdr 原始、中控台顯示、紀錄與畫面推出、有沒有列入等待，不一致標出", () => {
   const w = standard();
   w.run(["board", "--repo", app()]);
   const rows = Object.fromEntries(w.audit().filter((e) => e.event === "read").map((e) => [e.ticket, e]));
@@ -225,8 +224,20 @@ test("每次讀狀態都寫一筆對照紀錄：herdr 原始、中控台顯示�
   assert.deepEqual([rows["PROJ-203"].shown, rows["PROJ-203"].inferred, rows["PROJ-203"].transcript, rows["PROJ-203"].mismatch], ["anomaly", "unknown", false, true]);
   assert.deepEqual([rows["PROJ-205"].herdr, rows["PROJ-205"].shown, rows["PROJ-205"].inferred, rows["PROJ-205"].mismatch], ["idle", "done", "done", false]);
   assert.equal(rows["PROJ-204"].herdr, "unknown");
+  assert.deepEqual(Object.fromEntries(Object.values(rows).map((e) => [e.ticket, e.waiting])), { "PROJ-201": true, "PROJ-202": true, "PROJ-203": true, "PROJ-204": true, "PROJ-205": false }, "有沒有列入等待");
+  assert.ok(Object.values(rows).every((e) => e.ending === null), "沒寫結尾行");
   w.run(["board", "--repo", app()]);
-  assert.equal(w.audit().filter((e) => e.event === "read").length, 10, "第二次讀再寫五筆");
+  assert.equal(w.audit().filter((e) => e.event === "read").length, 5, "第二次讀狀態都沒變，不再寫");
+});
+
+test("對照紀錄的上次狀態檔讀不到時在 stderr 照實報錯、這次不寫，不當成第一次", () => {
+  const w = standard();
+  fs.mkdirSync(w.home, { recursive: true });
+  fs.writeFileSync(path.join(w.home, "herdr-audit-last.json"), "{broken");
+  const res = w.run(["board", "--repo", app()]);
+  assert.equal(res.code, 0, res.out);
+  assert.match(res.err ?? "", /試跑紀錄沒寫：讀不到 .*herdr-audit-last\.json/);
+  assert.deepEqual(w.audit(), []);
 });
 
 test("「<票號> 狀態錯了，其實是 X」記成人工誤判", () => {
@@ -554,34 +565,6 @@ test("待回覆與專注排隊：⚠️ 排在 🔐 前面", () => {
   assert.deepEqual([view.current.key, ...view.queue.map((e) => e.key)], ["b", "a", "c"]);
   const row = (tag, kind) => ({ label: tag, repo: "r", stage: "實作中", sessions: [{ n: null, paneKey: tag, status: { kind, text: "", tool: "Bash", input: "x" }, agent: { state: kind === "anomaly" ? "anomaly" : "blocked" } }] });
   assert.deepEqual(pendingItems([row("P", "permission"), row("A", "anomaly")]).map((x) => x.tag), ["A", "P"]);
-});
-
-test("評估報告：門檻是異常 <5% 且沒有該叫沒叫的誤判", () => {
-  const reads = (n, extra = {}) => Array.from({ length: n }, () => ({ ts: ts(0), event: "read", herdr: "working", shown: "busy", inferred: "busy", mismatch: false, ticket: "T", ...extra }));
-  const good = evaluate({ audit: [...reads(96), ...reads(4, { herdr: "unknown", shown: "anomaly", inferred: "unknown", mismatch: true })], events: [] });
-  assert.equal(good.safe, true);
-  assert.deepEqual(conclusionLines(good).slice(0, 2), ["herdr 原始 unknown：4／100 次讀取（4.0%）", "補判斷後「session 異常」：4／100（4.0%，門檻 <5%）"]);
-  assert.equal(conclusionLines(good).at(-1), "結論：herdr 版可以放心用");
-  const bad = evaluate({ audit: [...reads(95), ...reads(5, { shown: "anomaly", inferred: "unknown", mismatch: true })], events: [] });
-  assert.match(conclusionLines(bad).at(-1), /^結論：還不行——補判斷後「session 異常」佔 5\.0%/);
-  const missed = evaluate({ audit: [...reads(10), { ts: ts(1), event: "misjudge", shown: "done", actualKind: "permission", actual: "在等授權" }], events: [] });
-  assert.match(conclusionLines(missed).at(-1), /還不行——有 1 次實際在等使用者回應或授權/);
-  const noisy = evaluate({ audit: [...reads(10), { ts: ts(1), event: "misjudge", shown: "permission", actualKind: "busy", actual: "其實在跑" }], events: [] });
-  assert.equal(noisy.safe, true, "多叫一次不算否決");
-});
-
-test("herdr-report 指令寫出 HTML 並印路徑與結論", () => {
-  const w = standard();
-  w.run(["board", "--repo", app()]);
-  const out = path.join(w.dir, "report.html");
-  const res = w.run(["herdr-report", "--out", out], { HERDR_ENV: "", ORCA_TERMINAL_HANDLE: "" });
-  assert.equal(res.code, 0, res.out);
-  assert.equal(res.out.split("\n")[0], `報告：${out}`);
-  assert.match(res.out, /herdr 原始 unknown：1／5 次讀取（20\.0%）/);
-  assert.match(res.out, /結論：還不行——補判斷後「session 異常」佔 20\.0%/);
-  const html = fs.readFileSync(out, "utf8");
-  assert.match(html, /<title>herdr 試跑評估<\/title>/);
-  assert.match(html, /還不行/);
 });
 
 // linear.mjs: the key comes from a fake `security`, the API is a local server; nothing may print the key.

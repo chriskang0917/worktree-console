@@ -123,6 +123,7 @@ async function fakeReview(world: World, args: string[]) {
   if (sub === 'data') return ok(JSON.stringify({ ...sheet, pr: args.includes('--json') ? sheet.pr : null }))
   if (sub === 'pass') return ((it.status = 'passed'), ok(`第 ${n} 件已通過`))
   if (sub === 'edit') return Object.assign(it, { status: 'edited', edit: opt('--to') }), ok(`第 ${n} 件已改：${opt('--to')}`)
+  if (sub === 'undo') return Object.assign(it, { status: 'pending', edit: null }), ok(`第 ${n} 件已退回待審`)
   if (sub === 'pass-all') {
     const left = sheet.past.filter((x: any) => x.status === 'pending')
     for (const x of left) x.status = 'passed'
@@ -605,7 +606,6 @@ for (const skip of ['[perm] 這題已不在橫條上，略過', '[perm] 這題�
     const id = idOf(keyOf('perm'))
     expect(w.shown).toEqual([`perm ${id}`])
     expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
-    expect(JSON.parse(w.writes[`${HOME}/focus-show-debug.jsonl`]!.trim().split('\n').at(-1)!)).toMatchObject({ key: keyOf('perm'), id, turning: false, answer: skip })
     await clock.advance(5_000)
     expect(w.shown).toEqual([`perm ${id}`, `perm ${id}`])
     expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
@@ -3089,6 +3089,7 @@ test('審核單畫面（70 欄）：沒有說明句和警告；標題、branch �
     '      當前方案  先縮短進度條，狀態字只留符號。',
     '      依據      沒有前例；你說 repo 和 branch 不能讓位。',
     '      影響範圍  焦點面板的卡片第一行。',
+    '',
     '   2. 沒有驗收清單的卡片，執行段怎麼畫？',
     '      當前方案  畫淡綠虛線，不顯示數字。',
     '      依據      沒有前例；評審建議不要只靠變暗。',
@@ -3097,6 +3098,7 @@ test('審核單畫面（70 欄）：沒有說明句和警告；標題、branch �
     '照你過去的回答',
     '   3. 測試要補到哪一層？',
     '      當前方案  補在元件層（出處：11/10 你的回答）',
+    '',
     '   4. commit 要拆幾個？',
     '      當前方案  功能和升版分開（出處：AGENTS.md）',
     '',
@@ -3162,7 +3164,7 @@ test('審核單 Enter：通過選中的那件（review pass），那件收成一
   await ui.press({ key: 'item:1' })
   expect(reviewCalls(w).slice(1, 2)).toEqual([['pass', ...REVIEW_PATH, '--n', '1']])
   const frame = await reviewFrame(ui, 70)
-  expect(frame.slice(3, 6)).toEqual(['先看：沒有前例', ' ✓ 1. 卡片進度條在 46 欄時，要先讓出什麼？', ` ${MARK_STILL} 2. 沒有驗收清單的卡片，執行段怎麼畫？`])
+  expect(frame.slice(3, 7)).toEqual(['先看：沒有前例', ' ✓ 1. 卡片進度條在 46 欄時，要先讓出什麼？', '', ` ${MARK_STILL} 2. 沒有驗收清單的卡片，執行段怎麼畫？`])
   expect(frame.join('\n')).not.toContain('先縮短進度條')
   expect(paintOf(await ui.drawn(), ' ✓ ')?.color).toBe(THEMES.neutral.busy)
   await ui.unmount()
@@ -3312,7 +3314,7 @@ test('審核單 a：選取在「先看：沒有前例」時按鍵說明沒有 a�
   await ui.unmount()
 })
 
-test('審核單收尾：每件都通過或改過時自動跑 review done，跳出它印的結果，回到卡片並重新輪詢；卡片不再是待審核', async ($, on) => {
+test('審核單收尾：每件都通過或改過後停在「全部審完，按 Enter 送出審核結果」（還能按 u 退回），按 Enter 才跑 review done，跳出它印的結果，回到卡片並重新輪詢；卡片不再是待審核', async ($, on) => {
   const { w, ui, clock } = await openSheet($, on)
   await $.ui.focus({ component: 'Pane', requestId: PANE, plugin: PLUGIN, element: 'item:3', origin: { kind: 'plugin', name: PLUGIN } } as any)
   await ui.press({ key: 'review-all' })
@@ -3320,7 +3322,13 @@ test('審核單收尾：每件都通過或改過時自動跑 review done，跳�
   await ui.press({ key: 'review-edit' })
   await ui.input({ key: 'review-input', text: '畫灰色虛線' })
   await clock.settle()
-  expect(reviewCalls(w).map(c => c[0])).toEqual(['data', 'pass-all', 'data', 'pass', 'data', 'edit', 'data', 'done'])
+  expect(reviewCalls(w).map(c => c[0])).toEqual(['data', 'pass-all', 'data', 'pass', 'data', 'edit', 'data'])
+  const frame = await reviewFrame(ui, 70)
+  expect(frame).toContain(` ${MARK_STILL} 全部審完，按 Enter 送出審核結果`)
+  expect(frame.at(-1)).toBe('Enter 送出審核結果 · u 退回上一件 · Esc 返回')
+  await ui.press({ key: 'review-finish' })
+  await clock.settle()
+  expect(reviewCalls(w).map(c => c[0]).at(-1)).toBe('done')
   expect(w.toasts).toContain('[ask-aide] 審核單已審完 · 已送回 ask-aide')
   expect(await ui.find({ key: 'tab:pending' })).toBeDefined()
   expect(textOf(findKey(await ui.drawn(), `status:${keyOf('ask-aide')}`))).not.toContain('待審核')
@@ -3373,3 +3381,55 @@ for (const cols of [70, 46]) {
     await ui.unmount()
   })
 }
+
+test('審核單 u：退回這次最近通過或改的那件（review undo），那件回到待審並被選中；連按逐件往回退；沒有可退的時按鍵說明沒有 u、按 u 不做事', async ($, on) => {
+  const { w, ui, clock } = await openSheet($, on)
+  expect((await reviewFrame(ui, 70)).join('\n')).not.toContain('u 退回')
+  await ui.press({ key: 'review-undo' })
+  expect(reviewCalls(w).filter(c => c[0] === 'undo')).toEqual([])
+  await ui.press({ key: 'item:1' })
+  await ui.press({ key: 'review-edit' })
+  await ui.input({ key: 'review-input', text: '畫灰色虛線' })
+  await clock.settle()
+  expect((await reviewFrame(ui, 70)).slice(-2).join(' · ')).toContain('u 退回')
+  await ui.press({ key: 'review-undo' })
+  await clock.settle()
+  let frame = await reviewFrame(ui, 70)
+  expect(frame).toContain(` ${MARK_STILL} 2. 沒有驗收清單的卡片，執行段怎麼畫？`)
+  expect(frame).toContain('      當前方案  畫淡綠虛線，不顯示數字。')
+  await ui.press({ key: 'review-undo' })
+  await clock.settle()
+  frame = await reviewFrame(ui, 70)
+  expect(frame).toContain(` ${MARK_STILL} 1. 卡片進度條在 46 欄時，要先讓出什麼？`)
+  expect(frame.join('\n')).not.toContain('u 退回')
+  expect(reviewCalls(w).filter(c => c[0] === 'undo')).toEqual([['undo', ...REVIEW_PATH, '--n', '2'], ['undo', ...REVIEW_PATH, '--n', '1']])
+  await ui.unmount()
+})
+
+test('審核單 e／x：輸入框自動拿到焦點（autoFocus），打的字照寬度換行、輸入框跟著長高，下面的件往下推、不蓋字', async ($, on) => {
+  const { ui } = await openSheet($, on, 46)
+  await ui.press({ key: 'review-edit' })
+  const input = await ui.find({ key: 'review-input' })
+  expect(input?.props.autoFocus).toBe(true)
+  expect(input?.props.rows).toBe(1)
+  const long = '進度條改成 4 格，狀態字保留中文，repo 名稱過長時從中間截短並保留最後一段'
+  await ui.input({ key: 'review-input', text: long, kind: 'change' })
+  const grown = await ui.find({ key: 'review-input' })
+  expect(grown?.props.rows).toBeGreaterThan(1)
+  expect(grown?.props.value).toBe(long)
+  const rows = grown!.props.rows
+  expect(findKey(await ui.drawn(), 'row:input:1')?.props.height).toBe(rows)
+  expect(findKey(await ui.drawn(), 'review-input-box')?.props.height).toBe(rows)
+  const frame = await reviewFrame(ui, 46)
+  const at = frame.findIndex(l => l.startsWith('      改成'))
+  expect(frame.slice(at + 1, at + 3)).toEqual(['', '   2. 沒有驗收清單的卡片，執行段怎麼畫？'])
+  await ui.unmount()
+})
+
+test('審核單 x 問的答案：Markdown 粗體標記 ** 與 __ 不原樣顯示，只留文字', async ($, on) => {
+  const { ui } = await openSheet($, on, 70, 200, w => { w.sheet.fresh[0].asks = [{ q: '為什麼？', a: '因為 **46 欄** 時放不下，__狀態字__ 會被擠掉。' }] })
+  const frame = await reviewFrame(ui, 70)
+  expect(frame).toContain('      答        因為 46 欄 時放不下，狀態字 會被擠掉。')
+  expect(frame.join('\n')).not.toMatch(/\*\*|__/)
+  await ui.unmount()
+})

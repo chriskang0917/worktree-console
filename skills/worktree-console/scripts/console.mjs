@@ -63,12 +63,12 @@ import {
   STOPPED,
 } from "./lib.mjs";
 import { asksReport } from "./asks.mjs";
+import { qaLines } from "./qa.mjs";
 import { consoleSessionOk, focusOwnerOk, focusPayload, focusPick, focusReplied, focusSkip, holdForDigest, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
 import { usageLines } from "./console-usage.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
 import { appWorktreeHome, branchFolder } from "./herdr-app.mjs";
 import { waitingLine } from "./waiting-line.mjs";
-import { herdrReport } from "./herdr-report.mjs";
 import { finishRound, reviewCommand } from "./review-cli.mjs";
 import { SHEET_ANSWER } from "./urgency.mjs";
 import { deliverReview } from "./review-deliver.mjs";
@@ -82,7 +82,6 @@ import {
   clip,
   lastStop,
   logEvent,
-  markDistilled,
   parseSince,
   readEvents,
   readManaged,
@@ -109,6 +108,9 @@ const { values, positionals } = parseArgs({
     file: { type: "string" },
     since: { type: "string" },
     days: { type: "string" },
+    until: { type: "string" },
+    grep: { type: "string" },
+    limit: { type: "string" },
     session: { type: "string" },
     owner: { type: "string" },
     claim: { type: "boolean", default: false },
@@ -119,8 +121,6 @@ const { values, positionals } = parseArgs({
     ticket: { type: "string" },
     name: { type: "string" },
     continue: { type: "boolean", default: false },
-    out: { type: "string" },
-    notes: { type: "string" },
     target: { type: "string" },
     nickname: { type: "string" },
     title: { type: "string" },
@@ -1019,10 +1019,6 @@ function report() {
   for (const line of [...logReportLines(readEvents(since), readTokens(), since), "", ...usageLines(since)]) console.log(line);
 }
 
-function distilled() {
-  console.log(markDistilled());
-}
-
 function todo() {
   if (!values.repo) fail("缺少 --repo <主 checkout 絕對路徑>");
   const config = readConfig();
@@ -1251,18 +1247,6 @@ function promptCommand() {
   console.log(`需求訪談：${interview ? "有" : "無"}`);
 }
 
-function herdrReportCommand() {
-  let since;
-  try {
-    since = parseSince(values.since);
-  } catch (error) {
-    fail(error.message);
-  }
-  const { file, conclusion } = herdrReport({ since, out: values.out, notes: values.notes });
-  console.log(`報告：${file}`);
-  for (const line of conclusion) console.log(line);
-}
-
 // The default branch and the refs to compare against: the local one and origin's, whichever exist.
 function pruneBases(main) {
   const head = git(main, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
@@ -1363,6 +1347,24 @@ function prune() {
   if (failed) process.exit(1);
 }
 
+// `qa`: one line per answer in the advisor's records, filtered by 代號, keyword and time.
+function qa() {
+  let lines;
+  try {
+    lines = qaLines({
+      tags: positionals,
+      grep: values.grep ?? null,
+      since: values.since ?? null,
+      until: values.until ?? null,
+      days: values.days === undefined ? null : Number(values.days),
+      limit: values.limit === undefined ? null : Number(values.limit),
+    });
+  } catch (e) {
+    fail(e.message);
+  }
+  for (const l of lines) console.log(l);
+}
+
 function asks() {
   let lines;
   try {
@@ -1392,6 +1394,7 @@ function reviewEntry() {
 const commands = {
   board,
   asks,
+  qa,
   todo,
   "after-send": afterSend,
   detail,
@@ -1412,12 +1415,10 @@ const commands = {
   "focus-later": focusLater,
   "focus-shown": focusShown,
   reply,
-  distilled,
   open,
   start,
   move,
   misjudge,
-  "herdr-report": herdrReportCommand,
   title,
   "repo-match": repoMatch,
   ask,
@@ -1429,7 +1430,7 @@ const commands = {
   review: reviewEntry,
   "waiting-line": waitingLineCommand,
 };
-const OFFLINE = new Set(["asks", "report", "distilled", "herdr-report", "focus", "prompt", "prune", "stage", "review"]);
+const OFFLINE = new Set(["asks", "qa", "report", "focus", "prompt", "prune", "stage", "review"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);
 if (!OFFLINE.has(command)) manager();
 await commands[command]();

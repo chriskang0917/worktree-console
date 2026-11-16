@@ -451,14 +451,54 @@ export function proseLines(text) {
   return out;
 }
 
-// The last paragraph outside code and quotes holds a ？ or ? line that is not a table row or a heading.
+// The line the opening rules ask every stop to end with.
+const ENDING_WAIT = /^[\s*_-]*等你[:：]\s*(.*?)[\s*_]*$/;
+const ENDING_FREE = /^[\s*_-]*不用等你/;
+
+function lastLineAt(lines) {
+  let i = lines.length - 1;
+  while (i >= 0 && !lines[i].trim()) i--;
+  return i;
+}
+
+// { wait: true, what } for 「等你：…」, { wait: false } for 「不用等你」, null when the stop's last line is neither.
+export function endingOf(text) {
+  const lines = (text || "").replace(/\r\n?/g, "\n").split("\n");
+  const last = lines[lastLineAt(lines)] ?? "";
+  const wait = last.match(ENDING_WAIT);
+  if (wait) return { wait: true, what: wait[1] };
+  return ENDING_FREE.test(last) ? { wait: false, what: null } : null;
+}
+
+export function withoutEnding(text) {
+  if (!endingOf(text)) return text || "";
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  return lines.slice(0, lastLineAt(lines)).join("\n");
+}
+
+const NOTE = /^[\s*_-]*(?:備註|附註|註[:：]|補充|另外|順帶|順便一提|提醒|小提醒|PS\b|P\.S\.|※)/i;
+const HR = /^\s*(?:([-*_])\1{2,}|─{3,})\s*$/;
+const isNote = (p) => NOTE.test(p[0]) || p.every((l) => /^\s*#/.test(l) || HR.test(l));
+
+// Walks back from the last paragraph outside code and quotes, past trailing notes and the ending line, over at most four paragraphs.
+export function asksNearEnd(text, asks) {
+  const paras = [];
+  let cur = [];
+  for (const l of proseLines(withoutEnding(text))) {
+    if (l.trim()) cur.push(l);
+    else if (cur.length) (paras.push(cur), (cur = []));
+  }
+  if (cur.length) paras.push(cur);
+  for (let i = paras.length - 1; i >= Math.max(0, paras.length - 4); i--) {
+    if (asks(paras[i])) return true;
+    if (!isNote(paras[i])) return false;
+  }
+  return false;
+}
+
+// The last paragraph holds a ？ or ? line that is not a table row or a heading.
 export function asksAtEnd(text) {
-  const lines = proseLines(text);
-  let end = lines.length;
-  while (end > 0 && !lines[end - 1].trim()) end--;
-  let start = end;
-  while (start > 0 && lines[start - 1].trim()) start--;
-  return lines.slice(start, end).some((l) => /[?？]/.test(l) && !isTableRow(l) && !/^\s*#/.test(l));
+  return asksNearEnd(text, (p) => p.some((l) => /[?？]/.test(l) && !isTableRow(l) && !/^\s*#/.test(l)));
 }
 
 function askLines(text) {
@@ -1657,7 +1697,7 @@ export function childAnswer(item, text) {
 
 // ⏸: the next step the child wrote in its last paragraph as 「下一步建議…」.
 function doneEntry(tag, status) {
-  const said = (proseParagraphs(status.text).at(-1) ?? []).join("\n").match(NEXT_STEP)?.[1].trim();
+  const said = (proseParagraphs(withoutEnding(status.text)).at(-1) ?? []).join("\n").match(NEXT_STEP)?.[1].trim();
   return { entries: [{ code: tag, question: lastActivity(status), options: "—", suggest: said || "—" }] };
 }
 
