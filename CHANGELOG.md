@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.23.1
+
+- fix(waiting-line): end a finished stop with 已完成 instead of 不用等你
+
 ## 1.23.0
 
 - fix(waiting-line): catch the asks it missed: the ending line 「等你：…」/「不用等你」 a child now writes decides first, then a wider phrase list (按「…」、送出決定、審核頁＋動作、回 a／b／c …) that also looks past trailing notes
