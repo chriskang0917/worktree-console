@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.24.0
+
+- feat: run implementation sessions on omp when Claude usage is near its limit
+
 ## 1.23.1
 
 - fix(waiting-line): end a finished stop with 已完成 instead of 不用等你
