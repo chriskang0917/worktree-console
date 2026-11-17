@@ -42,6 +42,7 @@ function newPane(workspace, cwd, label) {
 // A prompt lands in the session's transcript as a user turn followed by a finished reply, like a real quick turn;
 // /rename and /remote-control are local commands that leave the session as it was.
 function converse(agent, text) {
+  if (agent.agent === "omp") return converseOmp(agent, text);
   const tdir = process.env.FAKE_HERDR_TRANSCRIPTS;
   if (!tdir || !agent.agent_session) return;
   const file = path.join(tdir, "fake-project", `${agent.agent_session.value}.jsonl`);
@@ -52,6 +53,21 @@ function converse(agent, text) {
     { type: "assistant", timestamp: ts, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "依交棒說明：好的。" }] } },
   ];
   fs.appendFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+}
+
+// An omp pane writes omp's own transcript under $OMP_AGENT_DIR/sessions, named <time>_<session id>.jsonl.
+function converseOmp(agent, text) {
+  const root = process.env.OMP_AGENT_DIR;
+  if (!root) return;
+  const id = agent.ompId;
+  const file = path.join(root, "sessions", "fake", `2026-11-17T00-00-00-000Z_${id}.jsonl`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const ts = new Date().toISOString();
+  const lines = fs.existsSync(file) ? [] : [{ type: "session", version: 3, id, timestamp: ts, cwd: agent.cwd }];
+  lines.push({ type: "message", id: `u${Date.now()}`, timestamp: ts, message: { role: "user", content: [{ type: "text", text }], attribution: "user" } });
+  lines.push({ type: "message", id: `a${Date.now()}`, timestamp: ts, message: { role: "assistant", content: [{ type: "text", text: "依交棒說明：好的。" }], model: "claude-sonnet-5-5", provider: "commandcode", stopReason: "stop", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 } } });
+  fs.appendFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  agent.agent_session = { agent: "omp", kind: "path", source: "herdr:omp", value: file };
 }
 
 // An answered menu or permission prompt: the transcript gets the result of the call it was waiting on.
@@ -130,7 +146,9 @@ if (cmd === "agent start") {
   const p = state.panes.find((x) => x.pane_id === pane);
   const argv = args.includes("--") ? args.slice(args.indexOf("--") + 1) : [];
   const resumed = argv.includes("--resume") && !process.env.FAKE_HERDR_RESUME_LOST ? argv[argv.indexOf("--resume") + 1] : null;
-  const agent = { agent: "claude", name: args[2], pane_id: pane, cwd: p?.cwd, agent_status: "idle", agent_session: { kind: "id", value: resumed ?? `sess-${pane.replace(/:/g, "-")}` }, argv };
+  const kind = opt("--kind") ?? "claude";
+  const ompId = `0000${state.seq}-0000-7000-8000-000000000000`.slice(-36);
+  const agent = { agent: kind, name: args[2], pane_id: pane, cwd: p?.cwd, agent_status: "idle", agent_session: kind === "omp" ? { agent: "omp", kind: "id", value: ompId } : { kind: "id", value: resumed ?? `sess-${pane.replace(/:/g, "-")}` }, argv, ...(kind === "omp" ? { ompId } : {}) };
   state.agents.push(agent);
   save(state);
   ok({ type: "agent_started", agent });
@@ -147,7 +165,10 @@ if (cmd === "agent prompt") {
   if (agent.agent_status === "blocked") error("agent_blocked");
   const text = args[3];
   fs.appendFileSync(path.join(dir, "sends.jsonl"), `${JSON.stringify({ via: "prompt", pane: agent.pane_id, text })}\n`);
-  if (text.startsWith("/goal ")) {
+  if (agent.agent === "omp" && text.startsWith("/goal set ")) {
+    fs.writeFileSync(screenFile(agent.pane_id), " Goal mode enabled.\n π > ◒ Sonnet 5.5 > main ▶───\n╰─\n");
+    agent.agent_status = "idle";
+  } else if (text.startsWith("/goal ")) {
     fs.writeFileSync(screenFile(agent.pane_id), process.env.FAKE_HERDR_PASTE ? "❯ [Pasted text #1 +3 lines]\n  paste again to expand\n" : "⎿ Goal set: …\n❯\n");
     agent.agent_status = process.env.FAKE_HERDR_TRANSCRIPTS ? "done" : "working";
   } else if (!/^\/(rename|remote-control)\b/.test(text)) {

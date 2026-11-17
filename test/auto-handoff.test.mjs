@@ -224,11 +224,11 @@ test("假 orca 交棒順序：開新分頁（同目錄、同 permission-mode）�
   assert.deepEqual([res.code, res.out], [0, ""]);
   assert.ok(await closed(s));
   const order = s.calls().map((c) => c.slice(0, 2).join(" "));
-  assert.deepEqual(order, ["terminal list", "terminal create", "terminal wait", "terminal send", "worktree ps", "terminal close"]);
-  const create = s.calls()[1];
+  assert.deepEqual(order, ["terminal list", "worktree ps", "terminal create", "terminal wait", "terminal send", "worktree ps", "terminal close"]);
+  const create = s.calls()[2];
   assert.equal(create[create.indexOf("--worktree") + 1], `path:${repo}`);
   assert.equal(create[create.indexOf("--command") + 1], `cd '${repo}' && claude --permission-mode 'acceptEdits'`);
-  assert.deepEqual(s.calls()[2].slice(2, 6), ["--terminal", "term_new", "--for", "tui-idle"]);
+  assert.deepEqual(s.calls()[3].slice(2, 6), ["--terminal", "term_new", "--for", "tui-idle"]);
   const [sent] = s.sends();
   assert.equal(sent.terminal, "term_new");
   assert.ok(sent.text.includes(s.note) && /依交棒說明/.test(sent.text));

@@ -29,6 +29,7 @@
 
 預定 repo 已有 worktree 用著預定的 branch（同一張母票的另一張子票）時，不建新 worktree：`orca terminal create --worktree path:<path> --command "claude --name <名稱或 KEY-n>" --json`，`orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json` 為 `satisfied:true` 後送首則指令，對這個 handle 照第 2 步跑一次 `title`，再從第 3 步接著做。該 worktree 原本綁的票不改。
 
+0. **不做需求訪談**時先問實作後端：`node "<base>/scripts/router.mjs" launch --role implement --name <名稱或 KEY-n>`，印出 JSON 的 `choice.label`／`choice.reason` 轉貼給使用者。`choice.backend` 是 `omp` 時第 1 步的 `orca worktree create` 不帶 `--agent` 與 `--prompt`，建好後改跑 `orca terminal create --worktree path:<path> --command "<JSON 的 command>" --json`，等 `tui-idle` 後送首則指令；是 `claude` 就照第 1 步。做需求訪談一律照第 1 步開 claude。herdr 與 Herdr app 模式的 `console.mjs start` 自己會問，不用跑這步。
 1. 建 worktree 並啟動子 session（不帶 `--base-branch`，用 repo 預設 base）。`--linear-issue` 有母票（對齊時使用者確認過）就綁母票號，看板代號因此顯示母票號；沒有母票或使用者否定母票就綁這張票本身；沒有票就不帶：
 
    ```bash

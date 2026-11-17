@@ -135,7 +135,7 @@ export function measure(entries) {
     const u = e.message?.usage;
     if (e.type !== "assistant" || e.isSidechain || !u || e.message.model === "<synthetic>") continue;
     const used = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-    const window = contextWindow(e.message.model, used);
+    const window = e.message.context_window ?? contextWindow(e.message.model, used);
     return { used, window, percent: Math.round((used / window) * 100), model: e.message.model };
   }
   return null;
@@ -426,7 +426,7 @@ const POLL = () => Number(process.env.AUTO_HANDOFF_POLL_MS || 2000);
 async function until(check, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const hit = check();
+    const hit = await check();
     if (hit) return hit;
     if (Date.now() >= deadline) return null;
     await sleep(POLL());
@@ -436,6 +436,47 @@ async function until(check, timeoutMs) {
 function shellQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
+
+// Which kind of session a handoff replaces: the console and an interview stay on Claude Code, an implementation session
+// (a /goal, or a worktree not opened for an interview) gets whatever the router picks now.
+export function handoffRole({ isConsole, goal, cwd, comment = null, records = readJson(path.join(consoleHome(), "herdr-worktrees.json"), {}) }) {
+  if (isConsole) return "console";
+  if (goal) return "implement";
+  if (comment === "interview") return "interview";
+  let here = cwd ?? "";
+  try {
+    here = fs.realpathSync(here);
+  } catch {}
+  const rec = Object.entries(records ?? {}).find(([p]) => here === p || here.startsWith(`${p}${path.sep}`))?.[1];
+  return rec?.interview || rec?.defineGoal ? "interview" : "implement";
+}
+
+const ROUTER = fileURLToPath(new URL("../skills/worktree-console/scripts/router.mjs", import.meta.url));
+
+// The router runs in its own process: importing it here would make this hook wait on itself through lib.mjs.
+function backendFor(ctx) {
+  const role = handoffRole(ctx);
+  const res = spawnSync(process.execPath, [ROUTER, "launch", "--role", role], { encoding: "utf8" });
+  let got = null;
+  try {
+    got = JSON.parse(res.stdout);
+  } catch {}
+  const omp = got?.choice?.backend === "omp";
+  return { choice: got?.choice ?? { backend: "claude" }, argv: ({ name = null, args = [] } = {}) => (omp ? got.argv : ["claude", ...(name ? ["--name", name] : []), ...args]) };
+}
+
+// The new omp session's conversation in Claude Code entries: the newest omp transcript in that folder started after `since`.
+async function ompTranscript(cwd, since) {
+  const omp = await import("../skills/worktree-console/scripts/omp.mjs");
+  const file = omp.newestSession(cwd, since);
+  return file ? omp.claudeEntries(readEntries(file)).filter((e) => !e.isSidechain && (e.type === "user" || e.type === "assistant")) : [];
+}
+
+async function ompGoalText(goal) {
+  return (await import("../skills/worktree-console/scripts/omp.mjs")).ompGoal(`/goal ${goal}`);
+}
+
+const OMP_GOAL_SET = /Goal mode (?:enabled|resumed)\.|Goal set\./;
 
 function findTerminal(handle) {
   const res = orca(["terminal", "list"]);
@@ -506,7 +547,13 @@ async function orcaHandoff(ctx) {
   const term = findTerminal(oldHandle);
   const worktree = term?.worktreePath || cwd;
   const name = sessionName(oldHandle, isConsole);
-  const command = `cd ${shellQuote(cwd)} && claude${name ? ` --name ${shellQuote(name)}` : ""}${mode ? ` --permission-mode ${shellQuote(mode)}` : ""}`;
+  const comment = (orca(["worktree", "ps"]).result?.worktrees ?? []).find((w) => w.path === worktree)?.comment ?? null;
+  const { choice, argv } = backendFor({ ...ctx, comment });
+  const omp = choice.backend === "omp";
+  const since = Date.now();
+  const command = omp
+    ? `cd ${shellQuote(cwd)} && ${argv({}).map(shellQuote).join(" ")}`
+    : `cd ${shellQuote(cwd)} && claude${name ? ` --name ${shellQuote(name)}` : ""}${mode ? ` --permission-mode ${shellQuote(mode)}` : ""}`;
   steps.push("開新分頁");
   const created = orca(["terminal", "create", "--worktree", `path:${worktree}`, "--command", command]);
   const newTerm = created.ok ? created.result.terminal : null;
@@ -523,18 +570,19 @@ async function orcaHandoff(ctx) {
   const sent = orca(["terminal", "send", "--terminal", newTerm.handle, "--text", instruction, "--enter"]);
   if (!sent.ok || sent.result?.send?.accepted === false) return fail("送出接手指令", sent.error?.code ?? "not-accepted");
 
-  const arrived = await until(() => {
+  const arrived = await until(async () => {
+    if (omp) return receivedIn(await ompTranscript(cwd, since), instruction);
     const a = newPane ? paneAgent(newPane) : null;
     return a && sameInstruction(a.prompt, instruction) ? a : null;
   }, Number(process.env.AUTO_HANDOFF_DELIVER_MS || 60000));
   if (!arrived) return fail("確認接手指令送達", "新 session 沒收到接手指令");
 
   if (goal) {
-    const read = await until(() => paneAgent(newPane)?.state === "done", Number(process.env.AUTO_HANDOFF_FIRST_TURN_MS || 600000));
+    const read = await until(async () => (omp ? replied(await ompTranscript(cwd, since)) : paneAgent(newPane)?.state === "done"), Number(process.env.AUTO_HANDOFF_FIRST_TURN_MS || 600000));
     if (!read) return fail("等新 session 讀完交棒說明", "逾時");
-    const goalSent = orca(["terminal", "send", "--terminal", newTerm.handle, "--text", `/goal ${goal}`, "--enter"]);
+    const goalSent = orca(["terminal", "send", "--terminal", newTerm.handle, "--text", omp ? await ompGoalText(goal) : `/goal ${goal}`, "--enter"]);
     if (!goalSent.ok || goalSent.result?.send?.accepted === false) return fail("送出 /goal", goalSent.error?.code ?? "not-accepted");
-    const set = await until(() => GOAL_SET.test(screen(newTerm.handle)), Number(process.env.AUTO_HANDOFF_GOAL_MS || 30000));
+    const set = await until(() => (omp ? OMP_GOAL_SET : GOAL_SET).test(screen(newTerm.handle)), Number(process.env.AUTO_HANDOFF_GOAL_MS || 30000));
     if (!set) {
       const pasted = /Pasted text|paste again to expand/i.test(screen(newTerm.handle));
       return fail("確認 Goal set", pasted ? "/goal 被當成貼上內容收起，請先清空新分頁的輸入框再貼" : "新分頁畫面沒出現 Goal set");
@@ -589,6 +637,11 @@ function paneTranscript(pane) {
   return { status: got.result.agent.agent_status, entries: entries.filter((e) => !e.isSidechain && (e.type === "user" || e.type === "assistant")) };
 }
 
+const replied = (entries) => {
+  const last = entries.at(-1);
+  return last?.type === "assistant" && ENDED.has(last.message?.stop_reason);
+};
+
 const received = (entries, instruction) => entries.some((e) => e.type === "user" && !e.isMeta && textOf(e.message?.content).trim() === instruction.trim());
 
 function herdrScreen(pane) {
@@ -611,27 +664,30 @@ async function herdrHandoff(ctx) {
   updateEvent(session, { status: "switching", newHandle: pane, newPaneKey: pane });
 
   const agentName = `h-${pane.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 32);
-  const argv = [...(name ? ["--name", name] : []), ...(mode ? ["--permission-mode", mode] : [])];
-  const ready = herdr(["agent", "start", agentName, "--kind", "claude", "--pane", pane, "--timeout", String(Number(process.env.AUTO_HANDOFF_READY_MS || 60000)), ...(argv.length ? ["--", ...argv] : [])]);
+  const { choice, argv: launch } = backendFor(ctx);
+  const omp = choice.backend === "omp";
+  const since = Date.now();
+  const [kind, ...argv] = launch({ name, args: !omp && mode ? ["--permission-mode", mode] : [] });
+  const ready = herdr(["agent", "start", agentName, "--kind", kind, "--pane", pane, "--timeout", String(Number(process.env.AUTO_HANDOFF_READY_MS || 60000)), ...(argv.length ? ["--", ...argv] : [])]);
   if (!ready.ok) return fail("等新分頁就緒", ready.error?.code ?? "not-ready");
 
   const instruction = takeoverInstruction({ note, question, goal, isConsole, cache });
   const sent = herdr(["agent", "prompt", pane, instruction]);
   if (!sent.ok) return fail("送出接手指令", sent.error?.code ?? "not-accepted");
 
-  const arrived = await until(() => received(paneTranscript(pane).entries, instruction), Number(process.env.AUTO_HANDOFF_DELIVER_MS || 60000));
+  const entriesOf = async () => (omp ? { status: paneTranscript(pane).status, entries: await ompTranscript(cwd, since) } : paneTranscript(pane));
+  const arrived = await until(async () => (omp ? receivedIn : received)((await entriesOf()).entries, instruction), Number(process.env.AUTO_HANDOFF_DELIVER_MS || 60000));
   if (!arrived) return fail("確認接手指令送達", "新 session 沒收到接手指令");
 
   if (goal) {
-    const read = await until(() => {
-      const t = paneTranscript(pane);
-      const last = t.entries.at(-1);
-      return ["done", "idle"].includes(t.status) && last?.type === "assistant" && ENDED.has(last.message?.stop_reason);
+    const read = await until(async () => {
+      const t = await entriesOf();
+      return ["done", "idle"].includes(t.status) && replied(t.entries);
     }, Number(process.env.AUTO_HANDOFF_FIRST_TURN_MS || 600000));
     if (!read) return fail("等新 session 讀完交棒說明", "逾時");
-    const goalSent = herdr(["agent", "prompt", pane, `/goal ${goal}`]);
+    const goalSent = herdr(["agent", "prompt", pane, omp ? await ompGoalText(goal) : `/goal ${goal}`]);
     if (!goalSent.ok) return fail("送出 /goal", goalSent.error?.code ?? "not-accepted");
-    const set = await until(() => GOAL_SET.test(herdrScreen(pane)), Number(process.env.AUTO_HANDOFF_GOAL_MS || 30000));
+    const set = await until(() => (omp ? OMP_GOAL_SET : GOAL_SET).test(herdrScreen(pane)), Number(process.env.AUTO_HANDOFF_GOAL_MS || 30000));
     if (!set) {
       const pasted = /Pasted text|paste again to expand/i.test(herdrScreen(pane)) || /<pasted_content/.test(textOf(paneTranscript(pane).entries.filter((e) => e.type === "user" && !e.isMeta).at(-1)?.message?.content));
       return fail("確認 Goal set", pasted ? "/goal 被當成貼上內容收起，請先清空新分頁的輸入框再貼" : "新分頁畫面沒出現 Goal set");
@@ -702,7 +758,11 @@ async function herdrAppHandoff(ctx) {
   if (!where) return fail("開新分頁", "找不到舊分頁所在的 space");
   const name = sessionName(oldHandle, isConsole, where.tab.name ?? null);
   const sessionId = crypto.randomUUID();
-  const argv = ["claude", ...(name ? ["--name", name] : []), "--session-id", sessionId, ...(mode ? ["--permission-mode", mode] : [])];
+  const { choice, argv: launch } = backendFor(ctx);
+  const omp = choice.backend === "omp";
+  const since = Date.now();
+  const argv = omp ? launch({}) : ["claude", ...(name ? ["--name", name] : []), "--session-id", sessionId, ...(mode ? ["--permission-mode", mode] : [])];
+  const transcript = async () => (omp ? ompTranscript(cwd, since) : appTranscript(sessionId));
   const focused = app(["status"]).result?.tab ?? null;
   const made = appDo("tab.new", { ...(name ? { name } : {}), space: where.space, folder: cwd, argv });
   const terminal = made.ok ? made.result?.terminal : null;
@@ -718,21 +778,18 @@ async function herdrAppHandoff(ctx) {
   const sent = hc(["send", terminal, "--", instruction]);
   if (!sent.ok) return fail("送出接手指令", sent.error?.code ?? "not-accepted");
 
-  const arrived = await until(() => receivedIn(appTranscript(sessionId), instruction), Number(process.env.AUTO_HANDOFF_DELIVER_MS || 60000));
+  const arrived = await until(async () => receivedIn(await transcript(), instruction), Number(process.env.AUTO_HANDOFF_DELIVER_MS || 60000));
   if (!arrived) return fail("確認接手指令送達", "新 session 沒收到接手指令");
 
   const screen = () => hc(["read", terminal], { raw: true }).text ?? "";
   if (goal) {
-    const read = await until(() => {
-      const last = appTranscript(sessionId).at(-1);
-      return ["done", "idle"].includes(appStatus(terminal)) && last?.type === "assistant" && ENDED.has(last.message?.stop_reason);
-    }, Number(process.env.AUTO_HANDOFF_FIRST_TURN_MS || 600000));
+    const read = await until(async () => ["done", "idle"].includes(appStatus(terminal)) && replied(await transcript()), Number(process.env.AUTO_HANDOFF_FIRST_TURN_MS || 600000));
     if (!read) return fail("等新 session 讀完交棒說明", "逾時");
-    const goalSent = hc(["send", terminal, "--", `/goal ${goal}`]);
+    const goalSent = hc(["send", terminal, "--", omp ? await ompGoalText(goal) : `/goal ${goal}`]);
     if (!goalSent.ok) return fail("送出 /goal", goalSent.error?.code ?? "not-accepted");
-    const set = await until(() => GOAL_SET.test(screen()), Number(process.env.AUTO_HANDOFF_GOAL_MS || 30000));
+    const set = await until(() => (omp ? OMP_GOAL_SET : GOAL_SET).test(screen()), Number(process.env.AUTO_HANDOFF_GOAL_MS || 30000));
     if (!set) {
-      const pasted = /Pasted text|paste again to expand/i.test(screen()) || /<pasted_content/.test(textOf(appTranscript(sessionId).filter((e) => e.type === "user" && !e.isMeta).at(-1)?.message?.content));
+      const pasted = /Pasted text|paste again to expand/i.test(screen()) || /<pasted_content/.test(textOf((await transcript()).filter((e) => e.type === "user" && !e.isMeta).at(-1)?.message?.content));
       return fail("確認 Goal set", pasted ? "/goal 被當成貼上內容收起，請先清空新分頁的輸入框再貼" : "新分頁畫面沒出現 Goal set");
     }
   }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { CACHE_HANDOFF_TEXT, measure, readConfig } from "../../../hooks/auto-handoff.mjs";
+import { claudeEntries, isOmpEntries, sessionIdOf } from "./omp.mjs";
 import { KEEPALIVE_REPLY, KEEPALIVE_TEXT, sessionTag, sessionTranscript, takeoverPrompt, watcherPrompt } from "./lib.mjs";
 
 // The prompt cache lives an hour from the last model call; 10 minutes are left for polling and writing the handoff note.
@@ -16,7 +17,8 @@ function keepable(session, status) {
   return status.kind === "waiting" && !status.menu && !(session.agent.toolName === MENU_TOOL && session.agent.state !== "done");
 }
 
-function entriesOf(file) {
+// An omp transcript is read in Claude Code's entries, its cacheRead／cacheWrite as the cache numbers.
+export function entriesOf(file) {
   const out = [];
   try {
     for (const line of fs.readFileSync(file, "utf8").split("\n")) {
@@ -26,7 +28,7 @@ function entriesOf(file) {
       } catch {}
     }
   } catch {}
-  return out;
+  return isOmpEntries(out) ? claudeEntries(out, sessionIdOf(file)) : out;
 }
 
 const mainUsage = (e) => e.type === "assistant" && !e.isSidechain && e.message?.usage && e.message.model !== "<synthetic>";

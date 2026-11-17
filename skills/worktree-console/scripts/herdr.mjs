@@ -8,9 +8,12 @@ import { agentStatus, claudeProjectDir, consoleHome, endingOf, readKeepalive, gi
 import { transcriptFor } from "./log.mjs";
 import { terminalError } from "./terminals.mjs";
 import { readDelegated } from "./auto-reply.mjs";
+import { claudeEntries, isOmpEntries, ompDraftOf, sessionFile, sessionIdOf } from "./omp.mjs";
+import { launchArgv } from "./router.mjs";
 import { listedAs, readBumped } from "./waiting-line.mjs";
 
 const MENU_TOOL = "AskUserQuestion";
+export const AGENTS = new Set(["claude", "omp"]);
 const REPOS = "herdr-repos.json";
 const WORKTREES = "herdr-worktrees.json";
 export const AUDIT = "herdr-audit.jsonl";
@@ -150,6 +153,13 @@ function findTranscript(sessionId) {
 
 // The session herdr reports in the pane first, then the one the console-log hook registered for it.
 function transcriptFile(agent) {
+  if (agent.agent === "omp") {
+    const own = sessionFile(agent.agent_session);
+    if (own) return own;
+    const logged = transcriptFor(agent.pane_id);
+    return logged && fs.existsSync(logged) ? logged : null;
+  }
+  if (agent.agent_session?.kind === "path" && fs.existsSync(agent.agent_session.value)) return agent.agent_session.value;
   const id = agent.agent_session?.kind === "id" ? agent.agent_session.value : null;
   if (id) {
     const direct = path.join(claudeProjectDir(agent.cwd || paneCwd(agent)), `${id}.jsonl`);
@@ -183,13 +193,14 @@ export function readTranscript(file) {
   } catch {
     return null;
   }
-  const entries = [];
+  let entries = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
       entries.push(JSON.parse(line));
     } catch {}
   }
+  if (isOmpEntries(entries)) entries = claudeEntries(entries, sessionIdOf(file));
   return entries.length > 0 ? { entries, truncated } : null;
 }
 
@@ -269,7 +280,7 @@ function waitedFor(pane, waiting, now = Date.now()) {
 
 // The turn is over when the Stop hook says so; without its record, when the transcript's last entry ends the turn.
 function turnDone(t, file) {
-  return turnOver(t.turn, turnEndAt(path.basename(file, ".jsonl"))) ?? t.phase === "replied";
+  return turnOver(t.turn, turnEndAt(sessionIdOf(file))) ?? t.phase === "replied";
 }
 
 export function promptOnScreen(lines) {
@@ -330,6 +341,14 @@ export function herdrAgent(a, readScreen = screenLines) {
   };
 }
 
+function ompPane(handle) {
+  try {
+    return (herdrSnapshot().agents ?? []).some((a) => a.pane_id === handle && a.agent === "omp");
+  } catch {
+    return false;
+  }
+}
+
 export function screenLines(handle) {
   const res = runHerdr(["pane", "read", handle, "--source", "visible"], { raw: true });
   return res.ok ? res.text.replace(/\n+$/, "").split("\n").map((l) => l.trimEnd()) : null;
@@ -337,6 +356,8 @@ export function screenLines(handle) {
 
 // What sits in Claude Code's input box, between the last two rules.
 export function draftOf(lines) {
+  const omp = ompDraftOf(lines);
+  if (omp !== null) return omp;
   const rules = lines.flatMap((l, i) => (/^─{20,}/.test(l) ? [i] : []));
   if (rules.length < 2) return "";
   const [a, b] = rules.slice(-2);
@@ -408,7 +429,7 @@ export function snapshotFrom(snap, { agents = true, split = herdrSplit, order = 
       workspace: p.workspace_id,
     };
   });
-  const claude = agents ? (snap.agents ?? []).filter((a) => a.agent === "claude") : [];
+  const claude = agents ? (snap.agents ?? []).filter((a) => AGENTS.has(a.agent)) : [];
   const where = new Map(claude.map((a) => [a.pane_id, worktreeOf(paneCwd(a), paths)]));
   const ps = worktrees.map((w) => ({ ...w, agents: claude.filter((a) => where.get(a.pane_id) === w.path).map((a) => agentOf(a)) }));
   return { repos: repos.map((r) => ({ id: r.main, displayName: r.name, path: r.main })), worktrees, ps, terminals };
@@ -441,7 +462,7 @@ export const herdrTerminals = {
   },
   agentAt(paneKey) {
     try {
-      const a = (herdrSnapshot().agents ?? []).find((x) => x.pane_id === paneKey && x.agent === "claude");
+      const a = (herdrSnapshot().agents ?? []).find((x) => x.pane_id === paneKey && AGENTS.has(x.agent));
       return a ? herdrAgent(a) : null;
     } catch {
       return null;
@@ -467,10 +488,15 @@ export const herdrTerminals = {
     const res = runHerdr(["pane", "read", handle, "--source", "visible"], { raw: true });
     if (!res.ok) return { ok: false, code: res.error?.code ?? "unknown" };
     const tail = res.text.replace(/\n+$/, "").split("\n").map((l) => l.trimEnd());
-    return { ok: true, terminal: { tail, draft: draftOf(tail) } };
+    return { ok: true, terminal: { tail, draft: draftOf(tail), ...(ompDraftOf(tail) !== null ? { omp: true } : {}) } };
   },
   // With Enter it goes through `agent prompt`, which refuses a session waiting at a permission or menu.
+  // omp's input box keeps what the user is typing: a send into one that holds a draft would be glued onto it.
   send(handle, text, { enter = false } = {}) {
+    if (enter && ompPane(handle)) {
+      const draft = ompDraftOf(screenLines(handle) ?? []);
+      if (draft) return { ok: false, code: "omp 輸入框有使用者草稿，沒有送出" };
+    }
     return ok(enter ? runHerdr(["agent", "prompt", handle, text]) : runHerdr(["pane", "send-text", handle, text]));
   },
   type(handle, text) {
@@ -480,7 +506,7 @@ export const herdrTerminals = {
     return ok(runHerdr(["pane", "send-keys", handle, key]));
   },
   // Every tab it opens has a name, the first one of a new workspace too; `name` is also the Claude Code session's.
-  create(worktreePath, { args = [], label = null, name = null, workspace = null, timeoutMs = 60000 } = {}) {
+  create(worktreePath, { args = [], label = null, name = null, workspace = null, timeoutMs = 60000, backend = null } = {}) {
     let snap;
     try {
       snap = herdrSnapshot();
@@ -495,8 +521,8 @@ export const herdrTerminals = {
     const pane = opened.ok ? opened.result?.root_pane?.pane_id : null;
     if (!pane) return { ok: false, code: opened.error?.code ?? "沒有 pane" };
     if (!ws && opened.result?.root_pane?.tab_id) runHerdr(["tab", "rename", opened.result.root_pane.tab_id, tabLabel]);
-    const argv = [...(name ? ["--name", name] : []), ...args];
-    const started = runHerdr(["agent", "start", agentName(pane), "--kind", "claude", "--pane", pane, "--timeout", String(timeoutMs), ...(argv.length ? ["--", ...argv] : [])]);
+    const [kind, ...argv] = launchArgv(backend, { name, args });
+    const started = runHerdr(["agent", "start", agentName(pane), "--kind", kind, "--pane", pane, "--timeout", String(timeoutMs), ...(argv.length ? ["--", ...argv] : [])]);
     return { ok: true, handle: pane, ready: started.ok, code: started.ok ? null : started.error?.code ?? "unknown" };
   },
   // A named workspace must already exist; without a name the repo's own one, null when it still has to be opened.
@@ -516,6 +542,7 @@ export const herdrTerminals = {
   sessionOf(handle) {
     try {
       const a = (herdrSnapshot().agents ?? []).find((x) => x.pane_id === handle);
+      if (a?.agent_session?.kind === "path") return sessionIdOf(a.agent_session.value);
       return a?.agent_session?.kind === "id" ? a.agent_session.value : null;
     } catch {
       return null;
@@ -659,7 +686,7 @@ export function tabRenames(rows, terminals, self) {
       if (t.tabLabel !== CONSOLE_TAB) out.set(t.tab, CONSOLE_TAB);
       continue;
     }
-    if (!/^\d+$/.test(String(t.tabLabel ?? "")) || t.agentIdentity !== "claude") continue;
+    if (!/^\d+$/.test(String(t.tabLabel ?? "")) || !AGENTS.has(t.agentIdentity)) continue;
     const hit = byHandle.get(t.handle);
     if (!hit) continue;
     const { row } = hit;
