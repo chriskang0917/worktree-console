@@ -24,14 +24,17 @@ type ReviewItem = {
 type ReviewSheet = { tag: string; path: string; repo: string; branch: string; pr: string | null; fresh: ReviewItem[]; past: ReviewItem[]; problems?: string[] }
 
 // `input`: the field open under an item; `asking`: questions still waiting on `review ask`, '' for an example.
-type SheetView = { sel: number | null; input: { n: number; mode: 'edit' | 'ask' } | null; expanded: Set<number>; asking: Map<number, string> }
+// `draft`: what the open field holds so far, so the field grows with it; `undo`: items settled in this sitting, newest last.
+type SheetView = { sel: number | null; input: { n: number; mode: 'edit' | 'ask' } | null; draft: string; expanded: Set<number>; asking: Map<number, string>; undo: number[] }
 
 type Paint = 'fg' | 'item' | 'title' | 'section' | 'label' | 'dim' | 'edited' | 'busy'
 type Seg = { text: string; paint: Paint }
 type SheetLine =
   | { kind: 'text'; key: string; segs: Seg[]; right?: Seg[]; n?: number }
   | { kind: 'item'; key: string; n: number; done: boolean; segs: Seg[]; right?: Seg[] }
-  | { kind: 'input'; key: string; n: number; mode: 'edit' | 'ask' }
+  | { kind: 'input'; key: string; n: number; mode: 'edit' | 'ask'; rows: number }
+  // The rows an input taller than one row covers, so the window counts them; they draw nothing.
+  | { kind: 'pad'; key: string; n: number }
 
 const FRESH_TITLE = '先看：沒有前例'
 const PAST_TITLE = '照你過去的回答'
@@ -48,6 +51,8 @@ const LABEL_GAP = 2
 
 const seg = (text: string, paint: Paint): Seg => ({ text, paint })
 const flat = (text: string) => String(text ?? '').replace(/\s+/g, ' ').trim()
+// A model's answer may come with Markdown emphasis; the pane shows the words without the marks.
+const unmark = (text: string) => String(text ?? '').replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a, b) => a ?? b)
 const pad = (text: string, width: number) => `${text}${' '.repeat(Math.max(0, width - columns(text)))}`
 
 const sheetItems = (s: ReviewSheet) => [...s.fresh, ...s.past]
@@ -82,8 +87,8 @@ function askRows(x: ReviewItem, view: SheetView, width: number): SheetLine[] {
   const rows: SheetLine[] = []
   const round = (a: ReviewAsk, i: number) =>
     isExample(a)
-      ? fieldRows(`ask:${x.n}:${i}:a`, x.n, '範例', a.a, width)
-      : [...fieldRows(`ask:${x.n}:${i}:q`, x.n, '問', a.q, width), ...fieldRows(`ask:${x.n}:${i}:a`, x.n, '答', a.a, width)]
+      ? fieldRows(`ask:${x.n}:${i}:a`, x.n, '範例', unmark(a.a), width)
+      : [...fieldRows(`ask:${x.n}:${i}:q`, x.n, '問', a.q, width), ...fieldRows(`ask:${x.n}:${i}:a`, x.n, '答', unmark(a.a), width)]
   const earlier = x.asks.slice(0, -1)
   if (earlier.length) {
     const open = view.expanded.has(x.n)
@@ -105,13 +110,24 @@ function itemRows(x: ReviewItem, past: boolean, view: SheetView, width: number):
   const right = x.status === 'edited' ? [seg('已改', 'edited')] : undefined
   const title = truncateColumns(`${x.n}. ${flat(x.question)}`, Math.max(1, room - (right ? 3 : 0)))
   const head: SheetLine = { kind: 'item', key: `item:${x.n}`, n: x.n, done, segs: [seg(title, done ? 'dim' : 'item')], right }
-  const input: SheetLine[] = view.input?.n === x.n ? [{ kind: 'input', key: `input:${x.n}`, n: x.n, mode: view.input.mode }] : []
+  const input: SheetLine[] = []
+  if (view.input?.n === x.n) {
+    const rows = inputRows(view.input.mode, view.draft, width)
+    input.push({ kind: 'input', key: `input:${x.n}`, n: x.n, mode: view.input.mode, rows }, ...Array.from({ length: rows - 1 }, (_, i) => ({ kind: 'pad' as const, key: `input-pad:${x.n}:${i}`, n: x.n })))
+  }
   if (x.status === 'passed') return [head]
   if (x.status === 'edited') return [head, ...fieldRows(`edit:${x.n}`, x.n, EDIT_LABEL, x.edit ?? '', width), ...input]
   const fields = past
     ? fieldRows(`plan:${x.n}`, x.n, '當前方案', `${flat(x.plan)}（出處：${flat(x.basis)}）`, width)
     : [...fieldRows(`plan:${x.n}`, x.n, '當前方案', x.plan, width), ...fieldRows(`basis:${x.n}`, x.n, '依據', x.basis, width), ...fieldRows(`impact:${x.n}`, x.n, '影響範圍', x.impact, width)]
   return [head, ...fields, ...askRows(x, view, width), ...input]
+}
+
+// How many rows the open field needs for what it holds: the text wraps in the field's room after its label and the Enter word beside it.
+function inputRows(mode: 'edit' | 'ask', draft: string, width: number): number {
+  const label = `${mode === 'edit' ? EDIT_LABEL : ASK_LABEL} `
+  const room = Math.max(1, width - MARK_COLS * 2 - columns(label) - columns(mode === 'edit' ? '改' : '問') - 3)
+  return Math.max(1, draft ? wrapColumns(draft.replace(/\n/g, ' '), room).length : 1)
 }
 
 // `share` of `a` mixed into `b` for hex colors; a terminal-named color (neutral) keeps `b` so it follows the terminal's palette.
@@ -135,7 +151,10 @@ function sheetLines(s: ReviewSheet, view: SheetView, width: number): SheetLine[]
   const section = (key: string, title: string, list: ReviewItem[], past: boolean) => {
     if (!list.length) return
     rows.push({ kind: 'text', key: `${key}-gap`, segs: [] }, { kind: 'text', key, segs: [seg(truncateColumns(title, width), 'section')] })
-    for (const x of list) rows.push(...itemRows(x, past, view, width))
+    list.forEach((x, i) => {
+      if (i) rows.push({ kind: 'text', key: `${key}-gap:${x.n}`, segs: [] })
+      rows.push(...itemRows(x, past, view, width))
+    })
   }
   section('sheet-fresh', FRESH_TITLE, s.fresh, false)
   section('sheet-past', PAST_TITLE, s.past, true)
@@ -145,6 +164,7 @@ function sheetLines(s: ReviewSheet, view: SheetView, width: number): SheetLine[]
 // The keys that act on the selected item, in the keys line's order.
 function sheetKeys(s: ReviewSheet, view: SheetView): string[] {
   if (view.input) return ['Enter 送出', 'Esc 取消']
+  if (allDone(s)) return ['Enter 送出審核結果', ...(view.undo.length ? ['u 退回上一件'] : []), 'Esc 返回']
   const x = itemOf(s, view.sel)
   const open = x?.status === 'pending'
   return [
@@ -154,6 +174,7 @@ function sheetKeys(s: ReviewSheet, view: SheetView): string[] {
     ...(x?.example ? ['o 開範例'] : []),
     ...(canPassAll(s, view.sel) ? ['a 全部通過'] : []),
     ...(x ? ['c 討論'] : []),
+    ...(view.undo.length ? ['u 退回'] : []),
     'Esc 返回',
   ]
 }
@@ -234,7 +255,6 @@ const TAG_MIN = 4
 const QUESTION_MIN = 8
 const SENT_MAX = 50
 const MISS_TOAST = 3
-const SHOW_LOG_MAX = 200
 // focus-show's answer when it cannot read focus.json's format; sending it again cannot help.
 const FORMAT_MISMATCH = '不認得這個檔案格式'
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
@@ -626,15 +646,6 @@ function run($: EngineInterface, args: string[], timeoutMs = 60_000) {
   return $.process.run(['node', `${$.plugin.root}/skills/worktree-console/scripts/console.mjs`, ...args], { timeoutMs })
 }
 
-// TEMP: tells what an announced /focus-show got back when a print goes missing; remove once the cause is confirmed.
-async function logShow($: EngineInterface, entry: object) {
-  const file = `${focus.home}/focus-show-debug.jsonl`
-  let text = ''
-  try { text = await $.fs.read(file) } catch {}
-  const line = JSON.stringify({ at: await $.clock.now(), ...entry })
-  await $.fs.write(file, [...text.split('\n').filter(Boolean).slice(-SHOW_LOG_MAX + 1), line].join('\n') + '\n').catch(() => {})
-}
-
 // Prints one question's full report through the focus-show mod, never through the model. A stop counts as printed only when
 // /focus-show answered with its report; anything else but the format line is sent again on the next poll, with a toast after 3 misses in a row.
 async function show($: EngineInterface, tag: string, key: string | null = null) {
@@ -644,7 +655,6 @@ async function show($: EngineInterface, tag: string, key: string | null = null) 
   const id = key && s.id
   if (id) await $.fs.write(`${focus.home}/show/${encodeURIComponent(tag)}@${id}.md`, s.report)
   const res = await $.command.run({ command: 'focus-show', args: id ? `${tag} ${id}` : tag }).catch(() => null)
-  if (key) await logShow($, { key, tag, id, turning, answer: res ? (res.text === s.report ? 'report' : res.text ?? '') : null })
   if (!key) {
     if (!res) $.ui.toast('印不出題目：需要另外安裝 focus-show')
     return
@@ -741,7 +751,7 @@ async function focusSel($: EngineInterface, at: number, gen: number) {
   if (at !== drawing) return
   const endRepin = () => void (gen === repinGen && (repin = false))
   const pane = (await $.ui.panes().catch(() => [])).find(p => p.id === PANE)
-  const want = review ? (review.view.input ? null : review.view.sel !== null ? `item:${review.view.sel}` : null) : sel ? `name:${sel}` : null
+  const want = review ? (review.view.input ? REVIEW_INPUT : review.sheet && allDone(review.sheet) ? REVIEW_FINISH : review.view.sel !== null ? `item:${review.view.sel}` : null) : sel ? `name:${sel}` : null
   if (!want || !pane?.isFocused) return endRepin()
   const res = await $.ui.focus({ requestId: PANE, key: want }).catch(() => ({ deny: 'failed' }))
   if (!res.deny && at === drawing) return void ((held = ring.indexOf(want)), endRepin())
@@ -899,7 +909,8 @@ function recapBand($: EngineInterface, e: any) {
 }
 
 const REVIEW_INPUT = 'review-input'
-const emptyView = (): SheetView => ({ sel: null, input: null, expanded: new Set(), asking: new Map() })
+const emptyView = (): SheetView => ({ sel: null, input: null, draft: '', expanded: new Set(), asking: new Map(), undo: [] })
+const REVIEW_FINISH = 'review-finish'
 
 // `console.mjs review <sub> --path <worktree>`; a failure toasts the line it printed and gives null.
 async function reviewCall($: EngineInterface, r: Review, sub: string, args: string[] = [], timeoutMs = 60_000): Promise<string | null> {
@@ -923,7 +934,8 @@ function leaveReview($: EngineInterface) {
   $.ui.invalidate('ui.render')
 }
 
-// `review data`: only the first load asks for the PR (`--json` calls gh); a sheet with nothing left pending closes the round.
+// `review data`: only the first load asks for the PR (`--json` calls gh). A sheet that opens with nothing pending closes the round;
+// one settled here waits for Enter on 送出審核結果, so u can still take the last pass back.
 async function loadSheet($: EngineInterface, r: Review, first = false) {
   const out = await reviewCall($, r, 'data', first ? ['--json'] : [])
   if (review !== r) return
@@ -935,7 +947,7 @@ async function loadSheet($: EngineInterface, r: Review, first = false) {
   if (!itemOf(sheet, r.view.sel)) r.view.sel = nextPending(sheet, null) ?? sheetItems(sheet)[0]?.n ?? null
   startRepin()
   $.ui.invalidate('ui.render')
-  if (allDone(sheet)) await finishReview($, r)
+  if (allDone(sheet) && !r.view.undo.length) await finishReview($, r)
 }
 
 async function openReview($: EngineInterface, s: Session) {
@@ -958,9 +970,10 @@ async function finishReview($: EngineInterface, r: Review) {
 }
 
 // After an item is settled the selection moves on to the next pending one.
-async function settle($: EngineInterface, r: Review, sub: string, args: string[], n: number | null) {
+async function settle($: EngineInterface, r: Review, sub: string, args: string[], n: number | null, settled: number[] = n === null ? [] : [n]) {
   if ((await reviewCall($, r, sub, args)) === null) return
   if (review !== r || !r.sheet) return
+  r.view.undo.push(...settled)
   r.view.sel = nextPending(r.sheet, n) ?? r.view.sel
   await loadSheet($, r)
 }
@@ -975,13 +988,27 @@ function passItem($: EngineInterface, r: Review, n: number) {
 
 function passPast($: EngineInterface, r: Review) {
   if (!r.sheet || r.view.input || !canPassAll(r.sheet, r.view.sel)) return
-  return settle($, r, 'pass-all', [], r.sheet.past.at(-1)?.n ?? null)
+  const left = r.sheet.past.filter(x => x.status === 'pending').map(x => x.n)
+  return settle($, r, 'pass-all', [], r.sheet.past.at(-1)?.n ?? null, left)
+}
+
+// u: the item settled last in this sitting goes back to pending and is selected; pressed again, the one before it.
+async function undoLast($: EngineInterface, r: Review) {
+  const n = r.view.undo.at(-1)
+  if (n === undefined || r.view.input || !r.sheet) return
+  if ((await reviewCall($, r, 'undo', ['--n', String(n)])) === null) return
+  if (review !== r) return
+  r.view.undo.pop()
+  r.view.sel = n
+  startRepin()
+  await loadSheet($, r)
 }
 
 function openInput($: EngineInterface, r: Review, mode: 'edit' | 'ask') {
   const x = r.sheet && itemOf(r.sheet, r.view.sel)
   if (!x || x.status !== 'pending') return
   r.view.input = { n: x.n, mode }
+  r.view.draft = ''
   startRepin()
   $.ui.invalidate('ui.render')
 }
@@ -992,6 +1019,7 @@ async function submitInput($: EngineInterface, r: Review, value: string) {
   if (!open || review !== r) return
   const text = value.trim()
   r.view.input = null
+  r.view.draft = ''
   startRepin()
   $.ui.invalidate('ui.render')
   if (open.mode === 'edit') {
@@ -1050,7 +1078,7 @@ function reviewScreen($: EngineInterface, e: any, r: Review, cols: number, theme
   const sheet = r.sheet
   const lines = sheetLines(sheet, r.view, cols)
   const keys = keyLines(sheetKeys(sheet, r.view), Math.max(1, cols - 1))
-  const room = dock ? Math.max(1, e.props.scroll.bodyRows - keys.length - 1) : lines.length
+  const room = dock ? Math.max(1, e.props.scroll.bodyRows - keys.length - 1 - (allDone(sheet) ? 2 : 0)) : lines.length
   const picked = lines.flatMap((l, i) => ('n' in l && l.n === r.view.sel ? [i] : []))
   if (picked.length && lines.length > room) {
     const [first, last] = [picked[0]!, picked.at(-1)!]
@@ -1064,7 +1092,7 @@ function reviewScreen($: EngineInterface, e: any, r: Review, cols: number, theme
     order.push(`item:${l.n}`)
     const isSel = l.n === r.view.sel
     const label = l.segs.map(s => s.text).join('')
-    return <Button key={`item:${l.n}`} label={label} plain autoFocus={isSel && !r.view.input ? true : undefined} onPress={() => void passItem($, r, l.n)}>{shown ? runs(l, `item-text:${l.n}`) : null}</Button>
+    return <Button key={`item:${l.n}`} label={label} plain autoFocus={isSel && !r.view.input && !allDone(sheet) ? true : undefined} onPress={() => void passItem($, r, l.n)}>{shown ? runs(l, `item-text:${l.n}`) : null}</Button>
   }
   const hiddenItems = (part: SheetLine[], key: string) => (
     <Box key={key} height={0} flexShrink={0} overflow="hidden">{part.flatMap(l => (l.kind === 'item' ? [itemButton(l, false)] : []))}</Box>
@@ -1073,14 +1101,30 @@ function reviewScreen($: EngineInterface, e: any, r: Review, cols: number, theme
     if (l.kind === 'input') {
       order.push(REVIEW_INPUT)
       return (
-        <Box key={`row:${l.key}`} flexDirection="row" height={1} flexShrink={0}>
+        <Box key={`row:${l.key}`} flexDirection="row" height={l.rows} flexShrink={0}>
           <Text>{' '.repeat(MARK_COLS * 2)}</Text>
-          <Box key="review-input-box" width={Math.max(1, cols - MARK_COLS * 2)} flexShrink={0}>
-            <Input key={REVIEW_INPUT} label={`${l.mode === 'edit' ? EDIT_LABEL : ASK_LABEL} `} placeholder={l.mode === 'ask' ? ASK_HINT : undefined} submitLabel={l.mode === 'edit' ? '改' : '問'} onSubmit={value => void submitInput($, r, value)} />
+          <Box key="review-input-box" width={Math.max(1, cols - MARK_COLS * 2)} height={l.rows} flexShrink={0}>
+            <Input
+              key={REVIEW_INPUT}
+              label={`${l.mode === 'edit' ? EDIT_LABEL : ASK_LABEL} `}
+              placeholder={l.mode === 'ask' ? ASK_HINT : undefined}
+              submitLabel={l.mode === 'edit' ? '改' : '問'}
+              value={r.view.draft}
+              rows={l.rows}
+              autoFocus
+              onInput={value => {
+                if (review !== r || !r.view.input) return
+                const grew = inputRows(r.view.input.mode, value, cols) !== inputRows(r.view.input.mode, r.view.draft, cols)
+                r.view.draft = value
+                if (grew) $.ui.invalidate('ui.render')
+              }}
+              onSubmit={value => void submitInput($, r, value)}
+            />
           </Box>
         </Box>
       )
     }
+    if (l.kind === 'pad') return null
     const right = l.right ? <Box key={`right:${l.key}`} flexDirection="row" flexShrink={0}>{l.right.map((s, j) => <Text key={`right:${l.key}:${j}`} {...style[s.paint]}>{s.text}</Text>)}</Box> : null
     if (l.kind === 'item') {
       const isSel = l.n === r.view.sel
@@ -1111,12 +1155,24 @@ function reviewScreen($: EngineInterface, e: any, r: Review, cols: number, theme
     ['review-open', 'o', () => openExample($, r)],
     ['review-all', 'a', () => passPast($, r)],
     ['review-talk', 'c', () => deepTalk($, r)],
+    ['review-undo', 'u', () => undoLast($, r)],
   ]
+  const done = allDone(sheet)
+  if (done) order.push(REVIEW_FINISH)
+  const finish = done ? (
+    <Box key="review-finish-row" flexDirection="row" flexShrink={0} marginTop={1}>
+      <Text color={theme.accent} bold>{` ${markGlyph()} `}</Text>
+      <Button key={REVIEW_FINISH} label="全部審完，按 Enter 送出審核結果" plain autoFocus={!r.view.input ? true : undefined} onPress={() => void finishReview($, r)}>
+        <Text color={theme.accent} bold>全部審完，按 Enter 送出審核結果</Text>
+      </Button>
+    </Box>
+  ) : null
   const tree = (
     <Box flexDirection="column" {...bg}>
       {above}
       {body}
       {below}
+      {finish}
       <Box key="review-keys" flexDirection="column" flexShrink={0} marginTop={1}>
         {keys.map((k, i) => <Text key={`review-keys:${i}`} color={theme.dim}>{k}</Text>)}
       </Box>
@@ -1167,7 +1223,7 @@ export const register: Register = on => {
     if (review) {
       // ↑↓ step one item; moving off an open field cancels it.
       const items = review.sheet ? sheetItems(review.sheet).map(x => x.n) : []
-      if (e.element === REVIEW_INPUT) return next(e)
+      if (e.element === REVIEW_INPUT || e.element === REVIEW_FINISH) return next(e)
       const hit = /^item:(\d+)$/.exec(e.element ?? '')
       const n = ring.length
       const to = ring.indexOf(e.element ?? '')

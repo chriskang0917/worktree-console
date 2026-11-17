@@ -8,7 +8,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { claudeProjectDir } from "../skills/worktree-console/scripts/lib.mjs";
 import { UNSUPPORTED, terminalKind, terminals } from "../skills/worktree-console/scripts/terminals.mjs";
-import { evaluate, conclusionLines, renderHtml } from "../skills/worktree-console/scripts/herdr-report.mjs";
 import { terminalOf } from "../hooks/auto-handoff.mjs";
 import { boardView, clock, waited } from "../herdr-app/mods/worktree-board/board.js";
 
@@ -507,7 +506,7 @@ test("搬 session：到另一個 space 開新分頁 --resume 同一段對話、�
   assert.deepEqual(appDo(typo, "tab.new"), []);
 });
 
-test("misjudge 記成 Herdr app 的人工誤判；herdr-report 把舊 herdr 與 Herdr app 的讀取次數與誤判分開列出", () => {
+test("misjudge 記成 Herdr app 的人工誤判", () => {
   const w = five();
   w.run(["board", "--repo", app()]);
   const res = w.run(["misjudge", "--repo", app(), "PROJ-204", "其實在等我授權"]);
@@ -515,35 +514,6 @@ test("misjudge 記成 Herdr app 的人工誤判；herdr-report 把舊 herdr 與 
   const m = w.audit().find((e) => e.event === "misjudge");
   assert.deepEqual([m.terminal, m.shown, m.herdr, m.actualKind], ["herdr-app", "done", "done", "permission"]);
 
-  const read = (extra) => ({ ts: ts(0), event: "read", herdr: "working", shown: "busy", inferred: "busy", mismatch: false, ticket: "T", ...extra });
-  const audit = [
-    ...Array.from({ length: 3 }, () => read({})),
-    read({ herdr: "unknown", shown: "anomaly", inferred: "unknown", mismatch: true }),
-    ...Array.from({ length: 6 }, () => read({ terminal: "herdr-app" })),
-    { ts: ts(1), event: "misjudge", terminal: "herdr", ticket: "M1", shown: "permission", actualKind: "busy", actual: "在跑" },
-    { ts: ts(1), event: "misjudge", terminal: "herdr-app", ticket: "M2", shown: "done", actualKind: "waiting", actual: "在等我回答" },
-  ];
-  const r = evaluate({ audit, events: [] });
-  assert.deepEqual(
-    r.sources.map((x) => [x.name, x.reads, x.anomaly, x.misjudges, x.missed]),
-    [
-      ["舊 herdr", 4, 1, 1, 0],
-      ["Herdr app", 6, 0, 1, 1],
-    ],
-  );
-  const lines = conclusionLines(r);
-  assert.ok(lines.includes("舊 herdr：讀取 4 次、session 異常 1 次（25.0%）、人工誤判 1 筆（該叫沒叫 0 筆）"), lines.join("\n"));
-  assert.ok(lines.includes("Herdr app：讀取 6 次、session 異常 0 次（0.0%）、人工誤判 1 筆（該叫沒叫 1 筆）"), lines.join("\n"));
-  const html = renderHtml(r);
-  assert.match(html, /舊 herdr 與 Herdr app 分開看/);
-  assert.match(html, /<td>Herdr app<\/td><td>6<\/td>/);
-  assert.match(html, /<td>Herdr app<\/td><td>M2<\/td><td>⏸ 回覆完畢<\/td>/);
-
-  const out = path.join(w.dir, "report.html");
-  const cmd = w.run(["herdr-report", "--out", out], { HC_TERMINAL_ID: "" });
-  assert.equal(cmd.code, 0, cmd.out);
-  assert.match(cmd.out, new RegExp(`Herdr app：讀取 ${w.audit().filter((e) => e.event === "read").length} 次`));
-  assert.match(cmd.out, /舊 herdr：讀取 0 次/);
 });
 
 // The auto-handoff Stop hook in a Herdr app tab: t5 hands over to a new tab in its own space.

@@ -146,6 +146,7 @@ export function fold(lines) {
     if (l.event === "correct" && it) Object.assign(it, l.fields, { corrected: true });
     if (l.event === "pass" && it) Object.assign(it, { status: "passed", edit: null });
     if (l.event === "edit" && it) Object.assign(it, { status: "edited", edit: l.to });
+    if (l.event === "undo" && it) Object.assign(it, { status: "pending", edit: null });
     if (l.event === "ask" && it) it.asks.push({ q: l.q, a: l.a, example: l.example ?? null, at: l.at });
     if (l.event === "unsent" && it) it.unsent = l.reason ?? "未送出";
     if (l.event === "done") round++;
@@ -242,12 +243,13 @@ const pad = (left, right, width) => {
   return `${l}${" ".repeat(Math.max(2, width - displayWidth(l) - displayWidth(right)))}${right}`;
 };
 
-// The order the sheet shows: the files item first, then 先看：沒有前例, then 照你過去的回答; each section in the order recorded.
+// The order the sheet shows: 先看：沒有前例 (the files item among them), then 照你過去的回答; each section by number,
+// so the numbers read top to bottom match the ones `review edit --n` takes.
 export function sections(open) {
-  const first = open.filter((x) => x.kind === "files");
-  const none = open.filter((x) => x.kind !== "files" && x.basis?.kind !== "precedent");
-  const past = open.filter((x) => x.kind !== "files" && x.basis?.kind === "precedent");
-  return { fresh: [...first, ...none], past };
+  const byN = [...open].sort((a, b) => a.n - b.n);
+  const fresh = byN.filter((x) => x.kind === "files" || x.basis?.kind !== "precedent");
+  const past = byN.filter((x) => x.kind !== "files" && x.basis?.kind === "precedent");
+  return { fresh, past };
 }
 
 const basisText = (b) => (b?.kind === "precedent" ? b.source : [NO_PRECEDENT, b?.note].filter(Boolean).join("；"));
@@ -426,7 +428,7 @@ function words(cmd) {
 
 const isFlow = (w) => /(^|\/)flow\.(mjs|py)$/.test(w) || /^\$\{?FLOW\}?$/.test(w);
 const isConsoleScript = (w) => /(^|\/)console\.mjs$/.test(w);
-export const STATE_SUBCOMMANDS = new Set(["pass", "edit", "pass-all", "done", "approve", "clear", "unlock"]);
+export const STATE_SUBCOMMANDS = new Set(["pass", "edit", "undo", "pass-all", "done", "approve", "clear", "unlock"]);
 
 // Which gate a command hits: `approve` / `confirm-spec` as the word after a flow script, `handoff-files.mjs` anywhere; `reopen` is noted for the marker.
 // `review` is set when the command starts with console.mjs review, which the gate always lets through (its state subcommands are the console's alone).

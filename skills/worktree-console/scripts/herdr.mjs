@@ -4,9 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentStatus, claudeProjectDir, consoleHome, git, gitWorktrees, goalInTranscript, lastInstruction, realpath, sessionTag, turnEndAt, turnEntry, turnOver, typedPrompt } from "./lib.mjs";
+import { agentStatus, claudeProjectDir, consoleHome, endingOf, readKeepalive, git, gitWorktrees, goalInTranscript, lastInstruction, realpath, sessionTag, turnEndAt, turnEntry, turnOver, typedPrompt } from "./lib.mjs";
 import { transcriptFor } from "./log.mjs";
 import { terminalError } from "./terminals.mjs";
+import { readDelegated } from "./auto-reply.mjs";
+import { listedAs, readBumped } from "./waiting-line.mjs";
 
 const MENU_TOOL = "AskUserQuestion";
 const REPOS = "herdr-repos.json";
@@ -571,9 +573,37 @@ export const herdrTerminals = {
   },
 };
 
-// One line per session read: herdr's state, what the console shows, and what the transcript and screen say.
-// `extra` marks whose reads they are; lines without it are old herdr's.
-export function auditRows(rows, extra = {}) {
+const AUDIT_LAST = "herdr-audit-last.json";
+
+// A missing file is a first run; anything else unreadable throws, so a broken file never passes for "nothing logged yet".
+function readAuditLast(home) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(home, AUDIT_LAST), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw error;
+  }
+  return JSON.parse(text);
+}
+
+// One line per session whenever herdr's state, what the console shows, what the transcript and screen say, or whether
+// the waiting line lists it changes from the last line written for it. `extra` marks whose reads they are; lines without it are old herdr's.
+export function auditRows(rows, extra = {}, home = consoleHome()) {
+  let last;
+  try {
+    last = readAuditLast(home);
+  } catch (error) {
+    process.stderr.write(`試跑紀錄沒寫：讀不到 ${path.join(home, AUDIT_LAST)}（${error.message}）\n`);
+    return;
+  }
+  let listed = () => null;
+  try {
+    const delegated = readDelegated();
+    const bumped = readBumped();
+    const keepalive = readKeepalive();
+    listed = (s) => listedAs(s, delegated, bumped, keepalive);
+  } catch {}
   const ts = new Date().toISOString();
   const lines = [];
   for (const row of rows) {
@@ -581,15 +611,40 @@ export function auditRows(rows, extra = {}) {
       const h = s.agent?.herdr;
       if (!h) continue;
       const shown = s.status.kind;
+      const waiting = listed(s) === "waiting";
+      const handle = s.handle ?? s.paneKey;
+      const ticket = sessionTag(row, s);
+      const key = [row.repo, ticket, handle].join("\u0000");
+      const value = [h.raw, shown, h.inferred, waiting].join("|");
+      if (last[key] === value) continue;
+      last[key] = value;
+      const ending = endingOf(s.status.text);
       lines.push(
-        JSON.stringify({ ts, event: "read", ...extra, repo: row.repo, ticket: sessionTag(row, s), handle: s.handle ?? s.paneKey, herdr: h.raw, shown, inferred: h.inferred, transcript: h.transcript, mismatch: mismatch(h.raw, shown, h.inferred) }),
+        JSON.stringify({
+          ts,
+          event: "read",
+          ...extra,
+          repo: row.repo,
+          ticket,
+          handle,
+          herdr: h.raw,
+          shown,
+          inferred: h.inferred,
+          transcript: h.transcript,
+          mismatch: mismatch(h.raw, shown, h.inferred),
+          waiting,
+          ending: ending ? (ending.wait ? "等你" : "不用等你") : null,
+        }),
       );
     }
   }
   if (lines.length === 0) return;
   try {
-    fs.mkdirSync(consoleHome(), { recursive: true });
-    fs.appendFileSync(path.join(consoleHome(), AUDIT), `${lines.join("\n")}\n`);
+    fs.mkdirSync(home, { recursive: true });
+    fs.appendFileSync(path.join(home, AUDIT), `${lines.join("\n")}\n`);
+    const tmp = path.join(home, `${AUDIT_LAST}.${process.pid}.tmp`);
+    fs.writeFileSync(tmp, JSON.stringify(last));
+    fs.renameSync(tmp, path.join(home, AUDIT_LAST));
   } catch {}
 }
 
@@ -622,22 +677,4 @@ export function mismatch(raw, shown, inferred) {
 export function recordMisjudge(fields) {
   fs.mkdirSync(consoleHome(), { recursive: true });
   fs.appendFileSync(path.join(consoleHome(), AUDIT), `${JSON.stringify({ ts: new Date().toISOString(), event: "misjudge", ...fields })}\n`);
-}
-
-export function readAudit(since = 0) {
-  let text;
-  try {
-    text = fs.readFileSync(path.join(consoleHome(), AUDIT), "utf8");
-  } catch {
-    return [];
-  }
-  const out = [];
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const e = JSON.parse(line);
-      if (Date.parse(e.ts) >= since) out.push(e);
-    } catch {}
-  }
-  return out;
 }

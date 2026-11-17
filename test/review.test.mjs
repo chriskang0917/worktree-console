@@ -231,8 +231,11 @@ for (const [name, command] of [
     assert.equal(pre(dir, { command: "ls" }, { session_id: "other" }), null, "只鎖改檔的那個 session");
     const sheet = cli(dir, "sheet").stdout.split("\n");
     assert.equal(sheet[3], "先看：沒有前例");
-    assert.match(sheet[5], /^\d+\. 規劃階段改了這些檔$/, "審核單第一件");
-    assert.match(sheet.slice(6, 9).join("\n"), /影響範圍　app\.js/);
+    const at = sheet.findIndex((l) => /^\d+\. 規劃階段改了這些檔$/.test(l));
+    assert.ok(at > 3, "在先看那區");
+    assert.match(sheet.slice(at + 1, at + 4).join("\n"), /影響範圍　app\.js/);
+    const nums = sheet.filter((l) => /^\d+\. /.test(l)).map((l) => Number(l.split(".")[0]));
+    assert.deepEqual(nums, [...nums].sort((a, b) => a - b), "編號由上往下遞增，和 review edit --n 用的一致");
   });
 }
 
@@ -283,7 +286,7 @@ test("審核通過只能由中控台與焦點面板寫：子 session 跑改狀�
   assert.equal(consoleRun, null);
 });
 
-test("SessionStart 對每個子 session 加進三條規則：10 類緊急名單、用 review add 記下推測的決定、停點五條件都成立就直接做（不等開工／OK／繼續，送出並合併仍等使用者）", () => {
+test("SessionStart 對每個子 session 加進四條規則：10 類緊急名單、用 review add 記下推測的決定、停點五條件都成立就直接做（不等開工／OK／繼續，送出並合併仍等使用者）、最後一行寫等你或不用等你", () => {
   const { dir } = repo();
   const r = spawnSync(process.execPath, [HOOK, "session-start"], { input: JSON.stringify({ cwd: dir, session_id: "s" }), encoding: "utf8", env: env() });
   const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
@@ -294,6 +297,7 @@ test("SessionStart 對每個子 session 加進三條規則：10 類緊急名單�
   assert.match(ctx, /3\. CLAUDE\.md〈停點〉的五個條件都成立，就直接做，不在結尾停下等「開工」「OK」「繼續」/);
   assert.match(ctx, /碰到第 1 條的任一類照舊先停；「送出並合併」一定等使用者本人說/);
   assert.ok(ctx.indexOf("1. 緊急名單") < ctx.indexOf("3. CLAUDE.md"), "緊急名單排在前面");
+  assert.match(ctx, /4\. 每次停下，回覆最後一行固定寫「等你：<要使用者做什麼>」或「不用等你」/);
   const hooks = JSON.parse(fs.readFileSync(path.join(root, "hooks", "hooks.json"), "utf8")).hooks;
   assert.ok(hooks.SessionStart.some((g) => g.hooks.some((h) => h.command.includes("review-gate.mjs\" session-start"))));
   assert.ok(hooks.PreToolUse.some((g) => g.matcher === "Bash|Edit|Write|MultiEdit|NotebookEdit" && g.hooks.some((h) => h.command.includes("review-gate.mjs"))));
@@ -338,4 +342,57 @@ test("x 就地問：空白要範例、打字問任意問題，回答另寫一行
   const data = JSON.parse(run("data").stdout);
   assert.deepEqual(data.fresh[0].asks.map((a) => a.q), ["（要範例）", "為什麼不用實線？"]);
   assert.ok(data.fresh[0].example.endsWith(".md"));
+});
+
+test("x 問沒有目標檔：改讀 worktree 的規劃文件與子 session 的對話回答，並要求查不到就說查不到；三樣都沒有時不問模型，直接回查不到", () => {
+  const projects = fs.mkdtempSync(path.join(tmp, "projects-"));
+  const seen = path.join(tmp, `prompt-${n}.txt`);
+  const model = path.join(tmp, `model-${n}.sh`);
+  fs.writeFileSync(model, `#!/bin/sh\ncat > "${seen}"\necho 規劃文件寫了先做 API。\n`);
+  fs.chmodSync(model, 0o755);
+  const clean = { ...env(), WORKTREE_CONSOLE_REVIEW_MODEL_CMD: model, CLAUDE_PROJECTS_DIR: projects };
+  delete clean.CLAUDE_CODE_SESSION_ID;
+  const ask = (dir, q) => spawnSync(process.execPath, [CONSOLE, "review", "ask", "--n", "1", "--q", q], { cwd: dir, encoding: "utf8", env: clean });
+
+  const bare = repo("feat/bare-ask");
+  cli(bare.dir, "add", ...good, "--session", "none-such");
+  const r0 = ask(bare.dir, "為什麼先做 API？");
+  assert.equal(r0.status, 0, r0.stderr);
+  assert.match(r0.stdout, /^查不到：這個 worktree 沒有目標檔、規劃文件，也讀不到子 session 的對話/);
+  assert.equal(fs.existsSync(seen), false, "沒問模型");
+
+  const planned = repo("feat/planned-ask");
+  fs.mkdirSync(path.join(planned.dir, "docs"), { recursive: true });
+  fs.writeFileSync(path.join(planned.dir, "docs", "plan.md"), "# 計畫\n先做 API，再做畫面。\n");
+  fs.mkdirSync(path.join(projects, "-wt"));
+  fs.writeFileSync(path.join(projects, "-wt", "s-plan.jsonl"), [
+    { type: "user", message: { content: "先做哪個？" } },
+    { type: "assistant", message: { content: [{ type: "text", text: "我建議先做 API，畫面等資料格式定了再接。" }] } },
+  ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  cli(planned.dir, "add", ...good, "--session", "s-plan");
+  const r1 = ask(planned.dir, "為什麼先做 API？");
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.equal(r1.stdout.trim(), "規劃文件寫了先做 API。");
+  const prompt = fs.readFileSync(seen, "utf8");
+  assert.match(prompt, /規劃文件：\n# docs\/plan\.md\n# 計畫\n先做 API，再做畫面。/);
+  assert.match(prompt, /子 session 的對話（最後一段）：\n使用者：先做哪個？\n\n子 session：我建議先做 API/);
+  assert.match(prompt, /查不到答案時，只回一句「查不到：<缺的是什麼>」，不要推測/);
+  assert.doesNotMatch(prompt, /目標檔：/);
+});
+
+test("review undo：通過或改過的那件退回待審（另寫一行 undo，不改舊行）；本來就待審的不能退", () => {
+  const { dir } = repo("feat/undo-card");
+  add(dir);
+  add(dir);
+  assert.equal(cli(dir, "pass", "--n", "1").status, 0);
+  assert.equal(cli(dir, "edit", "--n", "2", "--to", "改成灰色").status, 0);
+  const u2 = cli(dir, "undo", "--n", "2");
+  assert.equal(u2.status, 0, u2.stderr);
+  assert.equal(u2.stdout.trim(), "第 2 件已退回待審");
+  assert.equal(cli(dir, "undo", "--n", "1").status, 0);
+  const data = JSON.parse(cli(dir, "data").stdout);
+  assert.deepEqual(data.fresh.map((x) => [x.n, x.status, x.edit]), [[1, "pending", null], [2, "pending", null]]);
+  const again = cli(dir, "undo", "--n", "1");
+  assert.equal(again.status, 1);
+  assert.match(again.stdout + again.stderr, /第 1 件本來就是待審/);
 });

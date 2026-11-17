@@ -25,7 +25,6 @@
 | `console.mjs open --path P [--continue]` | 在沒有 claude 分頁的 worktree 開一個（`--continue` 接續上次對話），印 `terminal: <pane id>` |
 | `console.mjs move --repo R <代號>[#n] [--to <工作區名稱>]` | 使用者說「把 <代號> 搬到 <工作區>」或「把 <代號> 搬回去」時跑：在目標工作區開新分頁、`--resume` 接續同一段對話、登記到原對話檔與票號，接上後才關舊分頁。不帶 `--to` 搬回 repo 名的工作區（沒有就新開）；`--to` 的工作區不存在就拒絕、不新開；已在目的地就回一句不用搬。只搬停下來的 session（⏸、💬、💤），執行中、等授權、異常一律拒絕。輸出逐字轉貼；失敗時舊分頁保留 |
 | `console.mjs misjudge --repo R <代號>[#n] <實際狀態>` | 使用者說「<代號> 狀態錯了，其實是 X」時跑：記一筆人工誤判（看板當下顯示、herdr 原始狀態、使用者說的實際狀態），輸出逐字轉貼 |
-| `console.mjs herdr-report [--since 7d] [--out <檔案>] [--notes <試跑筆記.md>]` | 試跑評估報告（HTML），印報告路徑與結論段，原樣轉貼；`--notes` 把筆記裡每個 `- ` 開頭的行列成「試跑中發現的問題與處理」 |
 | `linear.mjs issue <票號>`、`linear.mjs todo` | 讀票（含母票與子票）、列待開工的票；加 `--json` 給程式讀 |
 
 其餘指令（`board`、`detail`、`resolve`、`answer`、`send`、`reply`、`after-send`、`close`、`await-start`、`handoff`、`archive`、`watch.mjs`）用法與 Orca 模式相同，腳本自己依環境選 herdr。〈指揮〉裡寫 `orca terminal …` 的步驟在 herdr 模式改成：讀畫面 `herdr pane read <pane id> --source visible`、送按鍵 `herdr pane send-keys <pane id> <鍵>`、開 claude 分頁 `console.mjs open`。
@@ -46,12 +45,8 @@ herdr 只回報 idle／working／blocked／done／unknown，而且常在這一�
 - 回報的原文是使用者上一則指令之後、這一輪 Claude 說的所有文字（中間跑過工具也接在一起），不只最後一段。
 - 讀不到紀錄先等 30 秒：herdr 新開的分頁還沒有對話紀錄（回 unknown），或 herdr 回 blocked 但紀錄還沒寫進那筆工具呼叫，都先顯示 🔄 執行中；30 秒內紀錄跟上就照紀錄分類，持續 30 秒以上仍讀不到（hook 沒登記、檔案損毀）才判 **⚠️ session 異常，需手動排程**：排在待回覆與專注排隊的最前面，詳情附子 session 畫面；使用者回它時原文照送（打字＋Enter，不轉成 a、b、c），送完回一行 `[代號] 已原文送出（session 異常，請到分頁確認）`。等待起點記在 `herdr-grace.json`。
 
-每次讀狀態腳本都會在 `~/.config/worktree-console/herdr-audit.jsonl` 寫一筆對照紀錄（herdr 原始狀態、中控台顯示的狀態、只從對話紀錄與畫面推出的狀態，三者不一致時標出），中控台不讀、不改它。
+每個 session 的 herdr 原始狀態、中控台顯示的狀態、只從對話紀錄與畫面推出的狀態、有沒有列入等待，四樣任一和上次不同時，腳本在 `~/.config/worktree-console/herdr-audit.jsonl` 寫一筆對照紀錄（三種狀態不一致時標出），上次的值記在同目錄的 `herdr-audit-last.json`；那份讀不到（不是不存在）就在 stderr 報錯、這次不寫。中控台不讀、不改它。
 
 ## 交棒與 `/goal`
 
 `console.mjs handoff` 與自動交棒在 herdr 一樣可用，送文字走 `herdr agent prompt`。實測 `/goal` 連同前綴超過 800 字元會被 Claude Code 收成貼上內容而不執行（800 字元以內正常），所以 `/goal` 長度規格照 `handoff.md` 不變。
-
-## 試跑與評估
-
-使用者要看 herdr 版準不準時跑 `console.mjs herdr-report`，把印出的路徑與結論段原樣貼出。結論只有兩種：「herdr 版可以放心用」（補判斷後 session 異常佔全部狀態讀取不到 5%，且人工誤判裡沒有任何一次「實際在等使用者回應或授權，看板卻顯示執行中或回覆完畢」），或「還不行＋原因」。

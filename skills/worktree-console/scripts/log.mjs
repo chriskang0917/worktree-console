@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const CLIP = 120;
 const STATE = ".state";
 const ARCHIVE = "transcripts";
-const DISTILL_EVERY = 20;
+const KEEP_COPIES_MS = 30 * 86_400_000;
 const COMMIT_EVERY = 30 * 60 * 1000;
 const DUP_WINDOW = 30 * 1000;
 const PREFIX = 20;
@@ -208,7 +208,7 @@ function realpathSafe(p) {
   }
 }
 
-function transcriptOf(sessionId) {
+export function transcriptOf(sessionId) {
   if (!sessionId) return null;
   try {
     for (const d of fs.readdirSync(projectsDir())) {
@@ -605,10 +605,34 @@ export function scrubLine(line) {
   }
 }
 
+// The newest mtime among a copy's source files, from the signature `file:size:mtime|…` recorded when it was copied.
+const sourceMtime = (sig) => Math.max(...String(sig ?? "").split("|").map((p) => Number(p.split(":").at(-1))).filter(Number.isFinite));
+
+// Deletes copies whose session has not changed for 30 days (by the source's mtime, else the copy's own);
+// `pruned` keeps one from being copied back while its source stays the same.
+function pruneCopies(state, now) {
+  let names = [];
+  try {
+    names = fs.readdirSync(archiveDir()).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const file = path.join(archiveDir(), name);
+    try {
+      const fromSource = sourceMtime(state.sources?.[name.slice(0, -".jsonl".length)]);
+      const changed = fromSource > 0 ? fromSource : fs.statSync(file).mtimeMs;
+      if (now - changed < KEEP_COPIES_MS) continue;
+      fs.rmSync(file);
+      state.pruned = { ...state.pruned, [name.slice(0, -".jsonl".length)]: true };
+    } catch {}
+  }
+}
+
 // Copies every registered session (its subagents appended) into transcripts/<sessionId>.jsonl, masked. A newer
-// copy replaces the old one; a missing source or a copy with fewer lines keeps the old one. Never deletes.
-export function archiveTranscripts(events = readEvents()) {
-  const state = readJson(archiveState(), { order: [], sources: {} });
+// copy replaces the old one; a missing source or a copy with fewer lines keeps the old one. Copies are kept 30 days.
+export function archiveTranscripts(events = readEvents(), now = Date.now()) {
+  const state = readJson(archiveState(), { sources: {} });
   const latest = new Map();
   for (const e of events.filter((e) => e.event === "session" && e.sessionId)) latest.set(e.sessionId, e.transcript ?? latest.get(e.sessionId) ?? null);
   const copied = [];
@@ -623,16 +647,17 @@ export function archiveTranscripts(events = readEvents()) {
       continue;
     }
     const out = path.join(archiveDir(), `${id}.jsonl`);
-    if (state.sources[id] === sig && fs.existsSync(out)) continue;
+    if (state.sources[id] === sig && (fs.existsSync(out) || state.pruned?.[id])) continue;
     const lines = files.flatMap((f) => fs.readFileSync(f, "utf8").split("\n").filter((l) => l.trim()));
     if (lines.length < lineCount(out)) continue;
     fs.mkdirSync(archiveDir(), { recursive: true });
     fs.writeFileSync(`${out}.tmp`, `${lines.map(scrubLine).join("\n")}\n`);
     fs.renameSync(`${out}.tmp`, out);
     state.sources[id] = sig;
-    if (!state.order.includes(id)) state.order.push(id);
+    if (state.pruned) delete state.pruned[id];
     copied.push(id);
   }
+  pruneCopies(state, now);
   writeJson(archiveState(), state);
   return copied;
 }
@@ -645,38 +670,6 @@ export function archiveAll() {
   } catch {
     return [];
   }
-}
-
-const distillState = () => path.join(logDir(), STATE, "distill.json");
-export const distillList = () => path.join(logDir(), "distill-batch.txt");
-
-function distillBatch() {
-  const order = readJson(archiveState(), { order: [] }).order;
-  const s = readJson(distillState(), { mark: 0, reminded: false });
-  return { order, s, batch: order.slice(s.mark, s.mark + DISTILL_EVERY) };
-}
-
-// One line once the copies since the last mark reach 20: when the 20th lands, and again on every console start
-// until `已蒸餾` is marked.
-export function distillReminder({ start = false } = {}) {
-  try {
-    const { order, s, batch } = distillBatch();
-    if (batch.length < DISTILL_EVERY || (s.reminded && !start)) return null;
-    fs.writeFileSync(distillList(), `${batch.map((id) => path.join(archiveDir(), `${id}.jsonl`)).join("\n")}\n`);
-    writeJson(distillState(), { ...s, reminded: true });
-    return `[蒸餾] 已保存 ${order.length - s.mark} 份對話紀錄待蒸餾，這批 ${DISTILL_EVERY} 份的路徑清單：${distillList()}；處理完打「已蒸餾」`;
-  } catch {
-    return null;
-  }
-}
-
-export function markDistilled(now = new Date()) {
-  const { order, s, batch } = distillBatch();
-  if (batch.length < DISTILL_EVERY) return `[蒸餾] 還沒累積到 ${DISTILL_EVERY} 份（目前 ${order.length - s.mark} 份），不用標記`;
-  const mark = s.mark + DISTILL_EVERY;
-  ensureLogRepo();
-  writeJson(distillState(), { mark, reminded: false, markedAt: now.toISOString() });
-  return `[蒸餾] 已標記處理到第 ${mark} 份，下一批從第 ${mark + 1} 份起算（目前累積 ${order.length - mark} 份）`;
 }
 
 // Commits when forced (console start, a ticket closed) or every 30 minutes; tokens are recounted right before.

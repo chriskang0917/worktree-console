@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { advisorHome } from "./advice.mjs";
+import { readEvents } from "./log.mjs";
+import { KEEPALIVE_TEXT } from "../../../hooks/keepalive-text.mjs";
 
 const DAY = 86400e3;
 const ASKED_SOURCES = new Set(["console", "tab"]);
@@ -110,8 +112,51 @@ const longest = (values) => (values.length ? Math.max(...values) : null);
 const ratio = (self, total) => (total ? `${Math.round((self / total) * 100)}%` : "—");
 const delta = (n) => (n > 0 ? `+${n} 次` : n < 0 ? `−${-n} 次` : "±0 次");
 
-export function asksReport({ home = advisorHome(), since = null, days = null, now = Date.now() } = {}) {
+const textOf = (e) => (e.event === "answer" ? e.answer : e.event === "prompt" ? e.text : null);
+const keepaliveTurn = (e) => /^收到[。.!！]?$/.test(String(e.question ?? "").trim());
+const SHORT_ANSWER = /^\s*(?:[a-z](?=$|[\s，,。；;：:、])|全?照建議|好|ok\b|可以|確認|同意|定稿|送審|繼續|照做|是|對|沒問題|動工|開工|合併|送出|第\s*\d+\s*題)/i;
+
+// A reply that answers the stop: an option letter, 照建議, a short yes, or one of the 「…」 words the stop asked for.
+// Anything else is a new instruction, which says nothing about whether the stop was waiting.
+export function answersStop(text, question) {
+  const t = String(text ?? "").trim();
+  if (!t || /^</.test(t) || KEEPALIVE_TEXT.startsWith(t.replace(/…$/, ""))) return false;
+  if (SHORT_ANSWER.test(t)) return true;
+  const quoted = [...String(question ?? "").matchAll(/[「『]([^」』]+)[」』]/g)].map((m) => m[1]);
+  return quoted.some((q) => t.startsWith(q));
+}
+
+// ⏸ stops in the period the waiting line left out, and how many of them the user then answered before the session stopped again.
+// Stops without a recorded `waiting` (older than this field) and the 「收到」 turn of a keepalive are not counted.
+export function missedStops(events, { start, end }) {
+  const open = new Map();
+  let shown = 0;
+  let replied = 0;
+  for (const e of [...events].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))) {
+    const key = e.paneKey ?? e.handle;
+    if (!key) continue;
+    if (e.event === "stop") {
+      if (keepaliveTurn(e)) continue;
+      const t = Date.parse(e.ts);
+      const left = e.status === "done" && e.waiting === false && t >= start && t < end;
+      if (left) shown++;
+      if (left) open.set(key, e);
+      else open.delete(key);
+    } else if (textOf(e) != null && open.has(key)) {
+      if (answersStop(textOf(e), open.get(key).question)) replied++;
+      open.delete(key);
+    }
+  }
+  return { shown, replied };
+}
+
+export function missedLine({ shown, replied }) {
+  return `等待判斷：看板顯示回覆完畢、沒列入等待 ${shown} 次，其中你接著回答了 ${replied} 次（${ratio(replied, shown)}）`;
+}
+
+export function asksReport({ home = advisorHome(), since = null, days = null, now = Date.now(), events = null } = {}) {
   const period = asksPeriod({ since, days, now });
+  const missed = missedLine(missedStops(events ?? readEvents(period.start), period));
   const records = readAnswers(home).filter((r) => r.path);
   const rootOf = rootResolver(records.map((r) => r.path));
   const at = (r) => Date.parse(r.ts ?? "") || 0;
@@ -140,7 +185,7 @@ export function asksReport({ home = advisorHome(), since = null, days = null, no
     if (waited !== null) row.waits.push(waited);
     rows.set(root, row);
   }
-  if (rows.size === 0) return [NO_RECORDS];
+  if (rows.size === 0) return [NO_RECORDS, missed];
 
   const sorted = [...rows.values()].sort((a, b) => b.asks - a.asks || b.self - a.self || a.tag.localeCompare(b.tag));
   const total = sorted.reduce((s, r) => ({ asks: s.asks + r.asks, self: s.self + r.self }), { asks: 0, self: 0 });
@@ -154,5 +199,6 @@ export function asksReport({ home = advisorHome(), since = null, days = null, no
     `本期 ${total.asks} 次（自答 ${total.self}，${ratio(total.self, total.asks)}）`,
     `前期 ${range(period.prevStart, period.start)}：${prev.asks} 次（自答 ${prev.self}，${ratio(prev.self, prev.asks)}）· ${delta(total.asks - prev.asks)}`,
     `等你的時間：本期${waitPair(waits)} · 前期${waitPair(prev.waits)}`,
+    missed,
   ];
 }
