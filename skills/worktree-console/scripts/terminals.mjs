@@ -1,8 +1,11 @@
 // The terminal manager the console runs in: Orca, herdr or the Herdr app, picked from the environment, never from a setting.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { herdrAppTerminals } from "./herdr-app.mjs";
-import { herdrTerminals } from "./herdr.mjs";
-import { NOTIFICATION, SKIP_PROMPT, promptText, readEntries, transcriptFor } from "./log.mjs";
+import { herdrAgent, herdrTerminals } from "./herdr.mjs";
+import { NOTIFICATION, SKIP_PROMPT, promptText, readEntries, readEvents, transcriptFor } from "./log.mjs";
+import { isOmpFile } from "./omp.mjs";
+import { launchArgv } from "./router.mjs";
 
 export const UNSUPPORTED =
   "worktree-console 只支援 Orca、herdr 與 Herdr app：請在 Orca、herdr 或 Herdr app 的分頁裡執行（環境裡沒有 HERDR_ENV=1、HC_TERMINAL_ID，也沒有 ORCA_TERMINAL_HANDLE）";
@@ -63,6 +66,42 @@ const shellWord = (s) => (/^[\w.#-]+$/.test(s) ? s : `'${String(s).replace(/'/g,
 const sent = (res) => (res.ok && res.result?.send?.accepted !== false ? { ok: true } : { ok: false, code: res.error?.code ?? "not-accepted" });
 const KEYS = { esc: ESC, enter: "\r" };
 
+const realPath = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+};
+
+// Orca hears only Claude's hooks: a tab whose registered transcript is omp's is an omp tab, its agent read from that transcript.
+export function withOmp(terminals, worktrees, readLines = () => []) {
+  const events = readEvents();
+  const known = new Set(worktrees.flatMap((w) => (w.agents ?? []).map((a) => a.paneKey)));
+  const found = [];
+  const rows = terminals.map((t) => {
+    if (t.agentIdentity === "claude") return t;
+    const file = transcriptFor(t.handle, events);
+    if (!file || !fs.existsSync(file) || !isOmpFile(file)) return t;
+    const paneKey = `${t.tabId}:${t.leafId}`;
+    if (!known.has(paneKey)) {
+      const a = herdrAgent({ pane_id: t.handle, agent: "omp", agent_session: { kind: "path", value: file }, agent_status: "unknown", cwd: t.worktreePath }, readLines);
+      found.push({ at: realPath(t.worktreePath), agent: { ...a, paneKey } });
+    }
+    return { ...t, agentIdentity: "omp" };
+  });
+  const out = worktrees.map((w) => {
+    const mine = found.filter((f) => f.at === realPath(w.path)).map((f) => f.agent);
+    return mine.length ? { ...w, agents: [...(w.agents ?? []), ...mine] } : w;
+  });
+  return { terminals: rows, worktrees: out };
+}
+
+const orcaLines = (handle) => {
+  const res = runOrca(["terminal", "read", "--terminal", handle, "--screen"]);
+  return res.ok ? res.result?.terminal?.tail ?? [] : [];
+};
+
 const orcaTerminals = {
   name: "orca",
   selfHandle: () => process.env.ORCA_TERMINAL_HANDLE || null,
@@ -70,11 +109,12 @@ const orcaTerminals = {
   snapshot() {
     const [repoRes, list, ps, term] = [["repo", "list"], ["worktree", "list"], ["worktree", "ps"], ["terminal", "list"]].map(runOrca);
     for (const res of [repoRes, list, ps, term]) if (!res.ok) throw terminalError("orca", res.error);
+    const omp = withOmp(term.result.terminals ?? [], ps.result.worktrees ?? [], orcaLines);
     return {
       repos: repoRes.result.repos ?? [],
       worktrees: list.result.worktrees ?? [],
-      ps: ps.result.worktrees ?? [],
-      terminals: term.result.terminals ?? [],
+      ps: omp.worktrees,
+      terminals: omp.terminals,
     };
   },
   terminalList() {
@@ -83,7 +123,10 @@ const orcaTerminals = {
   },
   ps() {
     const res = runOrca(["worktree", "ps"]);
-    return res.ok ? { ok: true, worktrees: res.result.worktrees ?? [] } : { ok: false, code: res.error?.code };
+    if (!res.ok) return { ok: false, code: res.error?.code };
+    const term = runOrca(["terminal", "list"]);
+    const worktrees = res.result.worktrees ?? [];
+    return { ok: true, worktrees: term.ok ? withOmp(term.result.terminals ?? [], worktrees, orcaLines).worktrees : worktrees };
   },
   agentAt(paneKey) {
     const ps = this.ps();
@@ -114,8 +157,8 @@ const orcaTerminals = {
   key(handle, key) {
     return this.send(handle, KEYS[key] ?? key);
   },
-  create(worktreePath, { args = [], name = null } = {}) {
-    const res = runOrca(["terminal", "create", "--worktree", `path:${worktreePath}`, "--command", ["claude", ...(name ? ["--name", shellWord(name)] : []), ...args].join(" ")]);
+  create(worktreePath, { args = [], name = null, backend = null } = {}) {
+    const res = runOrca(["terminal", "create", "--worktree", `path:${worktreePath}`, "--command", launchArgv(backend, { name, args }).map(shellWord).join(" ")]);
     const handle = res.ok ? res.result?.terminal?.handle ?? res.result?.handle : null;
     return handle ? { ok: true, handle } : { ok: false, code: res.error?.code ?? "沒有 handle" };
   },

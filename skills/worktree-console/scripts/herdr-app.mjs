@@ -11,6 +11,8 @@ import { claudeProjectDir, consoleHome, lastActivity, realpath, recycledMark, se
 import { readEvents, transcriptFor } from "./log.mjs";
 import { auditRows, draftOf, herdrAgent, isPrompt, linear, promptText, readTranscript, repoName, snapshotFrom, tabRenames, workspaceNamed } from "./herdr.mjs";
 import { terminalError } from "./terminals.mjs";
+import { launchArgv } from "./router.mjs";
+import { isOmpFile, ompDraftOf } from "./omp.mjs";
 
 export const NAME = "herdr-app";
 const SESSIONS = "herdr-app-sessions.json";
@@ -131,6 +133,14 @@ function sessionIdOf(handle, events = readEvents()) {
   return newest ? path.basename(newest, ".jsonl") : rec?.sessionId ?? null;
 }
 
+// hc names the program it runs; an omp started through a shell is known by the omp transcript the bridge registered.
+function ompTab(handle, program, events, sessions) {
+  if (program === "omp") return true;
+  if (!sessions) return false;
+  const file = transcriptFor(handle, events);
+  return !!file && fs.existsSync(file) && isOmpFile(file);
+}
+
 // The Herdr app's spaces, tabs and terminals in herdr's snapshot shape; claude is the agent that reports `claude-code`.
 function appSnapshot({ sessions = true } = {}) {
   const ls = runApp(["ls"]);
@@ -148,8 +158,14 @@ function appSnapshot({ sessions = true } = {}) {
         const h = byAddress.get(t.terminal);
         if (!h || h.state === "finished") continue;
         const claude = (h.agent ?? t.app) === "claude-code";
-        const pane = { pane_id: t.terminal, app_pane: t.pane, workspace_id: space.id, tab_id: tab.id, cwd: h.cwd || space.folder, agent: claude ? "claude" : h.agent ?? null };
+        const omp = !claude && ompTab(t.terminal, h.agent ?? t.app, events, sessions);
+        const pane = { pane_id: t.terminal, app_pane: t.pane, workspace_id: space.id, tab_id: tab.id, cwd: h.cwd || space.folder, agent: claude ? "claude" : omp ? "omp" : h.agent ?? null };
         snap.panes.push(pane);
+        if (omp) {
+          const file = sessions ? transcriptFor(t.terminal, events) : null;
+          snap.agents.push({ ...pane, agent_status: STATUS[h.status] ?? "unknown", agent_session: file ? { kind: "path", value: file } : null, name: t.name ?? null });
+          continue;
+        }
         if (!claude) continue;
         const id = sessions ? sessionIdOf(t.terminal, events) : null;
         snap.agents.push({ ...pane, agent_status: STATUS[h.status] ?? "unknown", agent_session: id ? { kind: "id", value: id } : null, name: t.name ?? null });
@@ -312,15 +328,15 @@ export const herdrAppTerminals = {
     } catch {
       return null;
     }
-    const id = a?.agent_session?.value;
-    const file = id ? transcriptOf(id, a.cwd) : null;
+    const ref = a?.agent_session;
+    const file = ref?.kind === "path" ? ref.value : ref?.value ? transcriptOf(ref.value, a.cwd) : null;
     const read = file ? readTranscript(file) : null;
     const last = (read?.entries ?? []).filter((e) => e.type === "user" && !e.isSidechain && isPrompt(e)).at(-1);
     return last ? promptText(last) : null;
   },
   readScreen(handle) {
     const tail = screenLines(handle);
-    return tail ? { ok: true, terminal: { tail, draft: draftOf(tail) } } : { ok: false, code: "unreadable" };
+    return tail ? { ok: true, terminal: { tail, draft: draftOf(tail), ...(ompDraftOf(tail) !== null ? { omp: true } : {}) } } : { ok: false, code: "unreadable" };
   },
   // With Enter it goes through `hc send`, which refuses a session waiting at a permission or menu.
   send(handle, text, { enter = false } = {}) {
@@ -342,7 +358,7 @@ export const herdrAppTerminals = {
   },
   // Every tab it opens has a name; a repo without its space gets one named after it. The session id is chosen here,
   // so its transcript is known before any hook runs.
-  create(worktreePath, { args = [], label = null, name = null, workspace = null, timeoutMs = 60000 } = {}) {
+  create(worktreePath, { args = [], label = null, name = null, workspace = null, timeoutMs = 60000, backend = null } = {}) {
     let snap;
     try {
       snap = appSnapshot({ sessions: false });
@@ -353,8 +369,9 @@ export const herdrAppTerminals = {
     const space = workspace ?? workspaceNamed(snap, repoName(worktreePath));
     const at = args.indexOf("--resume");
     const resumed = at >= 0 ? args[at + 1] ?? null : null;
-    const sessionId = resumed ?? (args.includes("--continue") ? null : crypto.randomUUID());
-    const argv = ["claude", ...(name ? ["--name", name] : []), ...(sessionId && !resumed ? ["--session-id", sessionId] : []), ...args];
+    const omp = backend?.backend === "omp";
+    const sessionId = omp ? null : resumed ?? (args.includes("--continue") ? null : crypto.randomUUID());
+    const argv = omp ? launchArgv(backend, { args }) : ["claude", ...(name ? ["--name", name] : []), ...(sessionId && !resumed ? ["--session-id", sessionId] : []), ...args];
     const made = unfocused(() =>
       space
         ? run("tab.new", { name: tabLabel, space, folder: worktreePath, argv })

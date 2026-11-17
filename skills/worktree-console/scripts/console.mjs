@@ -76,6 +76,8 @@ import { stateOf, worktreeOf } from "./review.mjs";
 import { sheetPath } from "./urgency.mjs";
 import { alreadyIn } from "./git-scene.mjs";
 import { maybeTerminals, runOrca, terminals } from "./terminals.mjs";
+import { OMP_GOAL_SET, ompGoal } from "./omp.mjs";
+import { decide, routerLine } from "./router.mjs";
 import { commitsSince, dropBranch } from "./disposable.mjs";
 import {
   archiveAll,
@@ -214,7 +216,7 @@ function board() {
   registerConsole({ handle: data.self.handle, paneKey: data.self.paneKey, repo: data.launchRepo });
   const list = pendingBlock(data.rows);
   const names = nameLines(data.rows);
-  for (const line of [...boardLines(data.rows, aligning(data)), ...(list.length > 0 ? ["", ...list] : []), ...(names.length > 0 ? ["", ...names] : [])]) console.log(line);
+  for (const line of [...boardLines(data.rows, aligning(data)), ...(list.length > 0 ? ["", ...list] : []), ...(names.length > 0 ? ["", ...names] : []), "", routerLine()]) console.log(line);
 }
 
 function afterSend() {
@@ -983,22 +985,26 @@ async function handoff() {
     if (!ok) console.log(["\/goal 原文：", "```", goal, "```"].join("\n"));
     process.exit(ok ? 0 : 1);
   };
-  const created = m.create(target, { label, name: label });
+  const backend = decide("implement");
+  if (backend.backend === "omp") console.log(`[${label}] ${backend.label}：${backend.reason}`);
+  const created = m.create(target, { label, name: label, backend });
   handle = created.ok ? created.handle : null;
   if (!handle) done(false, `[${label}] 交棒失敗：開新分頁（${created.code}），訪談分頁保留`, `開新分頁：${created.code}`);
   const idle = m.waitReady(handle, 60000);
   if (!idle.ok) done(false, `[${label}] 交棒失敗：等新分頁就緒（${idle.code}），訪談分頁保留`, "等新分頁就緒");
-  const sent = m.send(handle, goal, { enter: true });
+  const omp = backend.backend === "omp";
+  const goalSet = omp ? OMP_GOAL_SET : GOAL_SET;
+  const sent = m.send(handle, omp ? ompGoal(goal) : goal, { enter: true });
   if (!sent.ok) done(false, `[${label}] 交棒失敗：送出 \/goal（${sent.code}），訪談分頁保留`, `送出 /goal：${sent.code}`);
   let screen = "";
   for (let i = 0; i < Number(process.env.SEND_CHECK_TRIES || 5); i++) {
     await sleep(Number(process.env.SEND_CHECK_MS ?? 2000));
     screen = screenText(handle);
-    if (GOAL_SET.test(screen)) break;
+    if (goalSet.test(screen)) break;
   }
-  if (!GOAL_SET.test(screen)) {
+  if (!goalSet.test(screen)) {
     const pasted = PASTED_GOAL.test(screen) || /<pasted_content/.test(m.lastPrompt?.(handle) ?? "");
-    const why = pasted ? "被當成貼上內容收起，請先清空新分頁的輸入框再貼" : "畫面沒看到 Goal set";
+    const why = pasted ? "被當成貼上內容收起，請先清空新分頁的輸入框再貼" : `畫面沒看到 ${omp ? "Goal mode enabled" : "Goal set"}`;
     done(false, `[${label}] 交棒失敗：${why}，訪談分頁保留`, why);
   }
   const task = readTasks()[paneOf(values.from)];
@@ -1121,9 +1127,11 @@ function start() {
     recordWorktree(target, { ticket: values.ticket?.toUpperCase() ?? null, displayName: values.name ?? null, interview: values.interview, repo: path.basename(main) });
     if (given) saveName({ path: target, branch: values.branch, repo: path.basename(main) }, given);
   }
-  const opened = m.create(target, { label, name: label });
+  const backend = decide(values.interview ? "interview" : "implement");
+  const opened = m.create(target, { label, name: label, backend });
   if (!opened.ok) fail(`[${label}] 未開工：開分頁失敗（${opened.code}）`);
   console.log(`worktree: ${target}`);
+  if (backend.backend === "omp") console.log(`backend: ${backend.label}（${backend.reason}）`);
   console.log(`terminal: ${opened.handle}`);
   if (!opened.ready) fail(`[${label}] 未開工：新分頁沒就緒（${opened.code}），用 \`${screenHint(opened.handle)}\` 看畫面`);
   const sent = m.send(opened.handle, text, { enter: true });

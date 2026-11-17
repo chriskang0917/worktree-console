@@ -1170,7 +1170,7 @@ export function collect(repoArg = null, { withStage = true, withTitles = false, 
   const handoff = handoffHidden(handoffEvents());
   const hidden = new Set([self.handle, ...consoleHandles(terminalRows, self, register), ...handoff.handles].filter(Boolean));
   const hiddenPanes = new Set([...terminalRows.filter((t) => hidden.has(t.handle)).map((t) => `${t.tabId}:${t.leafId}`), ...handoff.panes]);
-  const claude = terminalRows.filter((t) => t.agentIdentity === "claude" && !hidden.has(t.handle));
+  const claude = terminalRows.filter((t) => (t.agentIdentity === "claude" || t.agentIdentity === "omp") && !hidden.has(t.handle));
 
   const orcaByPath = new Map(snap.worktrees.map((w) => [realpath(w.path), w]));
   const psByPath = new Map(snap.ps.map((w) => [realpath(w.path), w]));
@@ -1967,6 +1967,7 @@ function lastPrompt(lines) {
 export function deliveryVerdict(terminal, text) {
   const lines = terminal?.tail ?? [];
   const draft = terminal?.draft ?? "";
+  if (terminal?.omp) return ompVerdict(draft, text);
   const rules = lines.flatMap((l, i) => (RULE.test(l) ? [i] : []));
   const view = lines.slice((rules.at(-1) ?? lines.length) + 1).some((l) => VIEW_PAGE.test(l));
   const [a, b] = rules.length >= 2 ? rules.slice(-2) : [-1, -1];
@@ -1980,6 +1981,13 @@ export function deliveryVerdict(terminal, text) {
     return { verdict: queued ? "queued" : "delivered" };
   }
   if (PASTED.test(draft)) return { verdict: "failed", reason: "被當成貼上內容收起，還留在輸入框" };
+  if (needle && squash(draft).includes(needle)) return { verdict: "failed", reason: "還留在輸入框沒送出" };
+  return { verdict: "failed", reason: UNSEEN };
+}
+
+// omp's chat area has no prompt marker to find the text by, so only the input box is read; the transcript decides the rest.
+function ompVerdict(draft, text) {
+  const needle = squash(text).slice(-NEEDLE_MAX);
   if (needle && squash(draft).includes(needle)) return { verdict: "failed", reason: "還留在輸入框沒送出" };
   return { verdict: "failed", reason: UNSEEN };
 }
