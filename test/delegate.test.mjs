@@ -460,6 +460,16 @@ test("waiting-line：最後一行「等你：…」或「不用等你」先決�
   assert.equal(awaitsUser({ kind: "busy", text: "等你：x" }), false);
 });
 
+test("waiting-line：做完的回報最後一行寫「已完成」（或舊寫法「不用等你」）不列進等待；「已完成」後面還接字就不算結尾行", () => {
+  const report = "PR 已合併，遠端分支也刪了。\n\n本機分支還在，要清的話離開 worktree 後跑 git worktree remove。\n\n";
+  for (const ending of ["已完成", "已完成。", "**已完成**", "不用等你"]) {
+    const w = world({ text: `${report}請你確認改法。\n${ending}` });
+    assert.equal(awaitsUser(w.session.status), false, ending);
+    assert.equal(waitingLine(w.rows, {}, {}, NOW), "等待：無｜自動處理中：無｜在跑：無｜已跳過：無", ending);
+  }
+  assert.equal(awaitsUser(world({ text: "已完成登入頁，請你確認改法。" }).session.status), true, "已完成後面還接字就不是結尾行");
+});
+
 test("waiting-line：在焦點橫條按過延後處理（focus.json 的 bumped）的改列「已跳過」，等超過一天加時數", () => {
   const fresh = world({ text: "請你確認改法。", since: NOW - 2 * 3_600_000 });
   const old = world({ text: "請你確認改法。", since: NOW - 27 * 3_600_000 });

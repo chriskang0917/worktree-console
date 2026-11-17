@@ -633,7 +633,7 @@ export function auditRows(rows, extra = {}, home = consoleHome()) {
           transcript: h.transcript,
           mismatch: mismatch(h.raw, shown, h.inferred),
           waiting,
-          ending: ending ? (ending.wait ? "等你" : "不用等你") : null,
+          ending: ending ? (ending.wait ? "等你" : "已完成") : null,
         }),
       );
     }

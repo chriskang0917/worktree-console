@@ -286,7 +286,7 @@ test("審核通過只能由中控台與焦點面板寫：子 session 跑改狀�
   assert.equal(consoleRun, null);
 });
 
-test("SessionStart 對每個子 session 加進四條規則：10 類緊急名單、用 review add 記下推測的決定、停點五條件都成立就直接做（不等開工／OK／繼續，送出並合併仍等使用者）、最後一行寫等你或不用等你", () => {
+test("SessionStart 對每個子 session 加進四條規則：10 類緊急名單、用 review add 記下推測的決定、停點五條件都成立就直接做（不等開工／OK／繼續，送出並合併仍等使用者）、最後一行寫等你或已完成", () => {
   const { dir } = repo();
   const r = spawnSync(process.execPath, [HOOK, "session-start"], { input: JSON.stringify({ cwd: dir, session_id: "s" }), encoding: "utf8", env: env() });
   const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
@@ -297,7 +297,7 @@ test("SessionStart 對每個子 session 加進四條規則：10 類緊急名單�
   assert.match(ctx, /3\. CLAUDE\.md〈停點〉的五個條件都成立，就直接做，不在結尾停下等「開工」「OK」「繼續」/);
   assert.match(ctx, /碰到第 1 條的任一類照舊先停；「送出並合併」一定等使用者本人說/);
   assert.ok(ctx.indexOf("1. 緊急名單") < ctx.indexOf("3. CLAUDE.md"), "緊急名單排在前面");
-  assert.match(ctx, /4\. 每次停下，回覆最後一行固定寫「等你：<要使用者做什麼>」或「不用等你」/);
+  assert.match(ctx, /4\. 每次停下，回覆最後一行固定寫「等你：<要使用者做什麼>」或「已完成」/);
   const hooks = JSON.parse(fs.readFileSync(path.join(root, "hooks", "hooks.json"), "utf8")).hooks;
   assert.ok(hooks.SessionStart.some((g) => g.hooks.some((h) => h.command.includes("review-gate.mjs\" session-start"))));
   assert.ok(hooks.PreToolUse.some((g) => g.matcher === "Bash|Edit|Write|MultiEdit|NotebookEdit" && g.hooks.some((h) => h.command.includes("review-gate.mjs"))));

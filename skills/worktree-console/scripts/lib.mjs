@@ -453,7 +453,8 @@ export function proseLines(text) {
 
 // The line the opening rules ask every stop to end with.
 const ENDING_WAIT = /^[\s*_-]*等你[:：]\s*(.*?)[\s*_]*$/;
-const ENDING_FREE = /^[\s*_-]*不用等你/;
+// 「不用等你」 is the old wording; sessions opened before the rename still end with it.
+const ENDING_FREE = /^[\s*_-]*(?:已完成[\s*_。.!！]*$|不用等你)/;
 
 function lastLineAt(lines) {
   let i = lines.length - 1;
@@ -461,7 +462,7 @@ function lastLineAt(lines) {
   return i;
 }
 
-// { wait: true, what } for 「等你：…」, { wait: false } for 「不用等你」, null when the stop's last line is neither.
+// { wait: true, what } for 「等你：…」, { wait: false } for 「已完成」, null when the stop's last line is neither.
 export function endingOf(text) {
   const lines = (text || "").replace(/\r\n?/g, "\n").split("\n");
   const last = lines[lastLineAt(lines)] ?? "";
