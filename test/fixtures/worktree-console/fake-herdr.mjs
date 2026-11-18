@@ -10,7 +10,11 @@ const cmd = args.slice(0, 2).join(" ");
 const opt = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : null);
 const stateFile = path.join(dir, "state.json");
 const load = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
-const save = (s) => fs.writeFileSync(stateFile, JSON.stringify(s, null, 2));
+const save = (s) => {
+  const tmp = `${stateFile}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(s, null, 2));
+  fs.renameSync(tmp, stateFile);
+};
 const screenFile = (pane) => path.join(dir, `screen-${pane.replace(/:/g, "_")}.txt`);
 
 fs.appendFileSync(path.join(dir, "calls.log"), `${JSON.stringify(args)}\n`);
