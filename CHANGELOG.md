@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.25.0
+
+- feat: scripted status band above the prompt, no auto-switching, scripted reply endings and review unlock elsewhere
+
 ## 1.24.2
 
 - fix(handoff): open /goal with the CLAUDE.md stop-point rule and let child sessions push feature branches
