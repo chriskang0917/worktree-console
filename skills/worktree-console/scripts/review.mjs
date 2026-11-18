@@ -149,6 +149,7 @@ export function fold(lines) {
     if (l.event === "pass" && it) Object.assign(it, { status: "passed", edit: null });
     if (l.event === "edit" && it) Object.assign(it, { status: "edited", edit: l.to });
     if (l.event === "undo" && it) Object.assign(it, { status: "pending", edit: null });
+    if (l.event === "elsewhere" && it) Object.assign(it, { status: "elsewhere", edit: null });
     if (l.event === "ask" && it) it.asks.push({ q: l.q, a: l.a, example: l.example ?? null, at: l.at });
     if (l.event === "unsent" && it) it.unsent = l.reason ?? "未送出";
     if (l.event === "done") round++;
@@ -279,7 +280,7 @@ export function sheetProblems(open) {
   return open.flatMap((x) => itemProblems(x).map((p) => problemLine(x.n, p)));
 }
 
-const statusText = (x) => (x.status === "passed" ? "通過" : x.status === "edited" ? `已改：${x.edit}` : "待審");
+const statusText = (x) => (x.status === "passed" ? "通過" : x.status === "edited" ? `已改：${x.edit}` : x.status === "elsewhere" ? "在別處回覆" : "待審");
 
 // The Markdown for a draft PR／MR: the sheet's items with how each was reviewed, then what was answered during implementation.
 export function sheetMarkdown({ tag, items }) {
@@ -429,16 +430,42 @@ function words(cmd) {
 }
 
 const isFlow = (w) => /(^|\/)flow\.(mjs|py)$/.test(w) || /^\$\{?FLOW\}?$/.test(w);
+// Another command rides along: an unquoted ; & | ( ) or newline, or a $( or backtick outside single quotes.
+export function chained(cmd) {
+  let quote = null;
+  const text = String(cmd);
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (ch === "`" || (ch === "$" && text[i + 1] === "(")) return true;
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (";&|()\n".includes(ch)) return true;
+  }
+  return false;
+}
+
 const isConsoleScript = (w) => /(^|\/)console\.mjs$/.test(w);
-export const STATE_SUBCOMMANDS = new Set(["pass", "edit", "undo", "pass-all", "done", "approve", "clear", "unlock"]);
+export const STATE_SUBCOMMANDS = new Set(["pass", "edit", "undo", "pass-all", "done", "reviewed", "elsewhere", "approve", "clear", "unlock"]);
 
 // Which gate a command hits: `approve` / `confirm-spec` as the word after a flow script, `handoff-files.mjs` anywhere; `reopen` is noted for the marker.
-// `review` is set when the command starts with console.mjs review, which the gate always lets through (its state subcommands are the console's alone).
+// `review` is set when the command is console.mjs review alone, which the gate always lets through (its state subcommands are the console's alone);
+// one with another command chained on is checked like any other.
 export function classifyCommand(cmd) {
   const w = words(cmd);
   const lead = w.findIndex((x) => isConsoleScript(x));
   const start = w.slice(0, lead).every((x) => x === "node" || /(^|\/)node$/.test(x));
-  if (lead >= 0 && start && w[lead + 1] === "review") return { gate: null, review: w[lead + 2] ?? "", reopen: false };
+  if (lead >= 0 && start && w[lead + 1] === "review" && !chained(cmd)) return { gate: null, review: w[lead + 2] ?? "", reopen: false };
   let gate = null;
   let reopen = false;
   for (let i = 0; i < w.length; i++) {

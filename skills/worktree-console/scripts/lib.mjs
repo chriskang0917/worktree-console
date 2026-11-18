@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { clip, isConsoleSession, readEvents, transcriptFor, writeManaged } from "./log.mjs";
 import { CACHE_HANDOFF_TEXT, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../../../hooks/auto-handoff.mjs";
 import { maybeTerminals, terminals } from "./terminals.mjs";
+import { stopDigest } from "./summary-read.mjs";
+import { digestLayers } from "../../../hooks/digest.mjs";
 
 export { orcaBin, runOrca } from "./terminals.mjs";
 
@@ -273,7 +275,6 @@ function applyArchive(rows, source) {
 }
 
 export { KEEPALIVE_REPLY, KEEPALIVE_TEXT } from "../../../hooks/auto-handoff.mjs";
-export const RECYCLED = "♻️";
 const KEEPALIVE = "keepalive.json";
 
 export function readKeepalive() {
@@ -301,7 +302,7 @@ export function watcherPrompt(prompt) {
 export const takeoverPrompt = (prompt) => (prompt ?? "").trim().startsWith(TAKEOVER_HEAD);
 
 // From the watcher's message until you reply, the session keeps showing the stop it kept alive (same text, same place in the focus queue);
-// a permission prompt or an open menu still shows. A session that took over from an expiring cache is marked ♻️ until you reply to it.
+// a permission prompt or an open menu still shows. A session that took over from an expiring cache is flagged `recycled` until you reply to it.
 export function applyKeepalive(rows, state = readKeepalive()) {
   for (const row of rows) {
     for (const s of row.sessions) {
@@ -469,6 +470,103 @@ export function endingOf(text) {
   const wait = last.match(ENDING_WAIT);
   if (wait) return { wait: true, what: wait[1] };
   return ENDING_FREE.test(last) ? { wait: false, what: null } : null;
+}
+
+// What a stop without the ending line says when it waits on the user. 「跟我說」「告訴我」 are left out: they mostly close a report politely.
+const DECIDE = new RegExp(
+  [
+    "(?<!不用|不必|不需要|無須)等你",
+    "請你",
+    "由你",
+    "你決定",
+    "你確認",
+    "你選",
+    "請決定",
+    "請確認",
+    "請選",
+    "(?:說|回|回我|按)[「『][^」』]+[」』]",
+    "送出決定",
+    "(?:審核頁|確認頁)[^。\\n]{0,20}?(?:按|勾|選|決定|送出|確認|審)",
+    "(?<!不需|不)要你",
+    "你同意",
+    "你拍板",
+    "(?<!期)待你",
+    "回\\s*[a-zA-Z](?:\\s*[／/、,，或]\\s*[a-zA-Z])+",
+  ].join("|"),
+);
+
+export function awaitsDecision(text) {
+  return asksNearEnd(text, (p) => DECIDE.test(p.join("\n")));
+}
+
+// The fourth layer of this very stop's recap: true for 要你決定, false for 下一步, null while there is none.
+export function digestDecides(session, home = consoleHome()) {
+  if (!session?.handle) return null;
+  try {
+    const layers = digestLayers(stopDigest(home, session).text);
+    if (layers?.some((l) => l.key === "decide")) return true;
+    if (layers?.some((l) => l.key === "next")) return false;
+  } catch {}
+  return null;
+}
+
+const FINISHED_TTL_MS = 2000;
+const finishedCache = new Map();
+
+// A stop ending in 已完成: { closable, dirty, unpushed } from git, read again at most every 2 s; null for any other stop, an unreadable worktree
+// or one with no origin to push to.
+// The remote branch of the same name decides what is pushed, not the tracking branch; without one, any origin ref holding HEAD does.
+export function finishedState(row, status, now = Date.now()) {
+  if (!row?.path || !["done", "waiting"].includes(status?.kind) || endingOf(status.text)?.wait !== false) return null;
+  const hit = finishedCache.get(row.path);
+  if (hit && now - hit.at < FINISHED_TTL_MS) return hit.value;
+  let value = null;
+  const st = git(row.path, ["status", "--porcelain"]);
+  if (st.ok && git(row.path, ["remote", "get-url", "origin"]).ok) {
+    const remote = row.branch && git(row.path, ["rev-parse", "--verify", "-q", `refs/remotes/origin/${row.branch}`]).ok ? `refs/remotes/origin/${row.branch}` : null;
+    const ahead = git(row.path, remote ? ["rev-list", "--count", `${remote}..HEAD`] : ["rev-list", "--count", "HEAD", "--not", "--remotes=origin"]);
+    if (ahead.ok) {
+      const dirty = st.out ? st.out.split("\n").filter(Boolean).length : 0;
+      const unpushed = Number(ahead.out) || 0;
+      value = { closable: dirty === 0 && unpushed === 0, dirty, unpushed };
+    }
+  }
+  finishedCache.set(row.path, { at: now, value });
+  return value;
+}
+
+// The session's own ending line decides first; without one, the fourth layer of its recap; without that, 💬, a menu, 🔐 and ⚠️ wait,
+// and ⏸ waits when it asks in words. 已完成 with changes left to commit or push still waits on you.
+export function awaitsUser(status, { row = null, session = null, home } = {}) {
+  const kind = status?.kind;
+  if (kind === "permission" || kind === "anomaly" || (kind === "waiting" && status.menu)) return true;
+  if (kind !== "waiting" && kind !== "done") return false;
+  const ending = endingOf(status.text);
+  if (ending) return ending.wait || finishedState(row, status)?.closable === false;
+  const digest = session ? digestDecides(session, home) : null;
+  if (digest !== null) return digest;
+  return kind === "waiting" || awaitsDecision(status.text);
+}
+
+// 已完成, nothing to commit and the remote branch holds the last commit.
+export const closable = (row, session) => finishedState(row, session?.status)?.closable === true;
+
+export const YOUR_TURN = "輪到你";
+
+// A 💬 question or menu, or a ⏸ stop whose last line says 等你 (or, without one, whose recap says 要你決定), or 已完成 with work left to push.
+export function yourTurn(row, session) {
+  const status = session?.status;
+  if (status?.kind === "waiting") return true;
+  if (status?.kind !== "done") return false;
+  const ending = endingOf(status.text);
+  if (ending) return ending.wait || finishedState(row, status)?.closable === false;
+  return digestDecides(session) === true;
+}
+
+// How a stop shows everywhere: what yourTurn holds reads 輪到你; the kind inside stays as it was.
+export function turnLabel(row, session, { board = false } = {}) {
+  if (yourTurn(row, session)) return `${board ? "💬" : "◆"} ${YOUR_TURN}`;
+  return LABELS[session?.status?.kind];
 }
 
 export function withoutEnding(text) {
@@ -1413,19 +1511,15 @@ function boardRows(rows) {
       stage: row.stage ?? "—",
       kind: session.status.kind,
       archived: !!session.archived,
-      state: LABELS[session.status.kind],
-      activity: recycledMark(session, lastActivity(session.status)),
+      state: turnLabel(row, session, { board: true }),
+      activity: lastActivity(session.status),
     })),
   );
 }
 
-export function recycledMark(session, text) {
-  return session?.recycled ? `${RECYCLED} ${text}` : text;
-}
-
 // A ticket still being aligned in the console conversation, shown as the last row of its repo's table.
 export function aligningRow(ticket, title, repo) {
-  return { repo, tag: ticket, title: title || "—", stage: STAGE.idle, kind: "waiting", state: LABEL.waiting, activity: "等你確認開工" };
+  return { repo, tag: ticket, title: title || "—", stage: STAGE.idle, kind: "waiting", state: `💬 ${YOUR_TURN}`, activity: "等你確認開工" };
 }
 
 // The prompt the console reads when it loads: your own copy in the console home wins over the one shipped here.
@@ -1783,7 +1877,7 @@ function clipOptions(text, max) {
 
 function pendingLines(items, width = BOARD_WIDTH) {
   const rows = items.flatMap((x) =>
-    x.entries.map((e, i) => [LABELS[x.session.status.kind], e.code, i === 0 ? recycledMark(x.session, e.question) : e.question, e.options, e.suggest].map(cell)),
+    x.entries.map((e) => [turnLabel(x.row, x.session), e.code, e.question, e.options, e.suggest].map(cell)),
   );
   const widest = (i) => Math.max(displayWidth(PENDING_HEAD[i]), ...rows.map((c) => displayWidth(c[i])));
   const room = width - (3 * PENDING_HEAD.length + 1) - widest(0) - widest(1);
@@ -1864,8 +1958,9 @@ function menuLines(questions) {
 
 export function reportLines(row, status, session = null, { again = false } = {}) {
   const tag = sessionTag(row, session);
-  const title = (status.kind === "waiting" && status.menu ? TITLE.menu : TITLE[status.kind]) + (again ? "（先前已回報，尚未回覆）" : "");
-  const lines = [`### ${LABELS[status.kind].split(" ")[0]} ${tag} ${title}`, ""];
+  const repeat = again ? "（先前已回報，尚未回覆）" : "";
+  const turn = yourTurn(row, session ?? { status });
+  const lines = [turn ? `### ◆ ${tag} ${YOUR_TURN}${repeat}` : `### ${LABELS[status.kind].split(" ")[0]} ${tag} ${TITLE[status.kind]}${repeat}`, ""];
   if (status.kind === "waiting" && status.menu) return [...lines, ...(status.lead ? [...quote(status.lead), ""] : []), ...menuLines(status.menu)];
   if (status.kind === "waiting" && menuOpen(session?.agent)) {
     return [...lines, "> （讀不到選單內容，請到 Orca 分頁查看）"];

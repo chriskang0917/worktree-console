@@ -4,6 +4,7 @@ type StatusColor = 'busy' | 'waiting' | 'blocked' | 'answered' | 'dim' | 'error'
 export type StatusCell = { glyph: string; label: string; color: StatusColor; glyphColor: StatusColor }
 const STATUS_VIEW: Record<string, Omit<StatusCell, 'glyphColor'>> = {
   執行中: { glyph: '✳', label: '工作中', color: 'busy' },
+  輪到你: { glyph: '◆', label: '輪到你', color: 'waiting' },
   等待回應: { glyph: '◆', label: '待回答', color: 'waiting' },
   等待授權: { glyph: '◆', label: '待授權', color: 'blocked' },
   回覆完畢: { glyph: '↩', label: '已回覆', color: 'answered' },
@@ -15,7 +16,7 @@ export function statusCell(status: string, tick: number, { primary = false, anim
   const result = { ...cell, glyphColor: cell.color }
   if (!animated) return result
   if (status === '等待授權') return { ...result, glyphColor: Math.max(0, tick) % PULSE.period < PULSE.on ? 'blocked' : 'dim' }
-  if (primary && status === '等待回應') return { ...result, glyph: ANIMATION_FRAMES.attention[Math.floor(Math.max(0, tick) / 6) % 2]! }
+  if (primary && (status === '等待回應' || status === '輪到你')) return { ...result, glyph: ANIMATION_FRAMES.attention[Math.floor(Math.max(0, tick) / 6) % 2]! }
   return result
 }
 export const columns = (text: string) => [...text].reduce((n, c) => n + (c.codePointAt(0)! > 0x2e80 || /\p{Emoji_Presentation}/u.test(c) ? 2 : 1), 0)

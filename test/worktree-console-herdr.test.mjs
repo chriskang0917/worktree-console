@@ -169,7 +169,7 @@ test("blocked 依對話紀錄分類：選單→💬（選項讀自紀錄）、�
   const res = w.run(["board", "--repo", app()]);
   assert.equal(res.code, 0, res.out + res.err);
   const row = (tag) => res.out.split("\n").find((l) => l.includes(`| ${tag} |`));
-  assert.match(row("PROJ-201"), /💬 等待回應.*要用哪個色？/);
+  assert.match(row("PROJ-201"), /💬 輪到你.*要用哪個色？/);
   assert.match(row("PROJ-202"), /🔐 等待授權.*Bash mkdir -p \/tmp\/x/);
   assert.match(row("PROJ-203"), /⚠️ session 異常，需手動排程/);
   const pending = res.out.split("### 📋 待回覆")[1].split("\n").filter((l) => /^\| (?!狀態|---)/.test(l));
@@ -180,7 +180,7 @@ test("blocked 依對話紀錄分類：選單→💬（選項讀自紀錄）、�
 
 test("unknown 先讀對話紀錄補判斷：回完話→⏸／💬；工具在跑→🔄、畫面有授權框→🔐；讀不到→⚠️", () => {
   const replied = standard().run(["board", "--repo", app()]);
-  assert.match(replied.out.split("\n").find((l) => l.includes("| PROJ-204 |")), /💬 等待回應.*要我 push 嗎？/);
+  assert.match(replied.out.split("\n").find((l) => l.includes("| PROJ-204 |")), /💬 輪到你.*要我 push 嗎？/);
   const tool = (screen) =>
     world([{ cwd: wt("proj-204-unknown"), status: "unknown", session: "s" }], {
       transcripts: { s: { cwd: wt("proj-204-unknown"), entries: [user("建"), call("t9", "Bash", { command: "rm -rf build" })] } },
@@ -872,7 +872,7 @@ test("Stop hook 還沒記下這一輪結束時，herdr 說 done／idle 也算執
     assert.equal(band.sessions[0].status, "執行中");
     endTurn(w, "s1", 4);
     const after = w.run(["board", "--repo", app()]).out;
-    assert.match(boardRow(after, "PROJ-201"), /💬 等待回應.*要 push 嗎？/, after);
+    assert.match(boardRow(after, "PROJ-201"), /💬 輪到你.*要 push 嗎？/, after);
     assert.match(bandOf(w).current ?? "", /^w1:p2@/, "這一輪結束後才出題");
   }
 });
@@ -970,7 +970,7 @@ test("選單與授權框不等 Stop hook：Stop hook 紀錄還是上一輪的，
   endTurn(w, "m", 0);
   endTurn(w, "p", 0);
   const out = w.run(["board", "--repo", app()]).out;
-  assert.match(boardRow(out, "PROJ-201"), /💬 等待回應.*要用哪個色？/);
+  assert.match(boardRow(out, "PROJ-201"), /💬 輪到你.*要用哪個色？/);
   assert.match(boardRow(out, "PROJ-202"), /🔐 等待授權.*mkdir -p \/tmp\/x/);
 });
 
@@ -1022,7 +1022,7 @@ test("對話紀錄停在還沒回覆的選單：herdr 回 working、idle、done�
       transcripts: { m: { cwd: wt("proj-201-menu"), entries: [user("挑顏色"), call("t1", "AskUserQuestion", { questions: MENU })] } },
     });
     const out = w.run(["board", "--repo", app()]).out;
-    assert.match(boardRow(out, "PROJ-201"), /💬 等待回應.*要用哪個色？/, `${status}: ${out}`);
+    assert.match(boardRow(out, "PROJ-201"), /💬 輪到你.*要用哪個色？/, `${status}: ${out}`);
     assert.ok(pendingOf(out).some((l) => /PROJ-201.*a 紅／b 藍／其他/.test(l)), `${status}: ${pendingOf(out).join("\n")}`);
     const res = w.run(["reply", "--", "PROJ-201 b"], { FAKE_HERDR_UNBLOCK: "1", AWAIT_INTERVAL_MS: "10" });
     assert.equal(res.out, "[PROJ-201] 已選擇：顏色→藍", `${status}: ${res.out}${res.err}`);
@@ -1040,7 +1040,7 @@ test("herdr 回 blocked 但對話紀錄還沒寫進那筆工具呼叫：30 秒�
   assert.doesNotMatch(first, /⚠️/);
   const file = path.join(claudeProjectDirIn(w, wt("proj-201-menu")), "m.jsonl");
   fs.appendFileSync(file, `${JSON.stringify(call("t1", "AskUserQuestion", { questions: MENU }, 2))}\n`);
-  assert.match(boardRow(w.run(["board", "--repo", app()], slow).out, "PROJ-201"), /💬 等待回應.*要用哪個色？/, "紀錄跟上就是選單");
+  assert.match(boardRow(w.run(["board", "--repo", app()], slow).out, "PROJ-201"), /💬 輪到你.*要用哪個色？/, "紀錄跟上就是選單");
 
   const late = world([{ cwd: wt("proj-201-menu"), status: "blocked", session: "m" }], {
     transcripts: { m: { cwd: wt("proj-201-menu"), entries: [user("挑顏色", 0), said("我問一下", 1, null)] } },

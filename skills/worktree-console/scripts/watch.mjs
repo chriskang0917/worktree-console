@@ -38,7 +38,7 @@ import { awaitsUser, judgedStatus } from "./waiting-line.mjs";
 const stopSince = (x) => x.since ?? x.agent?.stateStartedAt ?? null;
 
 // The git scene goes with each stop.
-const stopEvent = (row, x) => ({ ...stopFields(row, x), since: stopSince(x), scene: gitScene(row.path, row.baseRef), waiting: awaitsUser(judgedStatus(x, readKeepalive())) });
+const stopEvent = (row, x) => ({ ...stopFields(row, x), since: stopSince(x), scene: gitScene(row.path, row.baseRef), waiting: awaitsUser(judgedStatus(x, readKeepalive()), { row, session: x }) });
 
 // A finalised interview hands off or asks whether to start, so in focus mode its stop still wakes the console instead of waiting on the band.
 const finalized = (x) => /^\s*定稿完成(（動工）)?[：:]/m.test(x.status.text ?? "");
@@ -242,7 +242,7 @@ for (;;) {
         : data.rows.flatMap((row) =>
             row.sessions.filter((x) => x.agent && !x.archived && !fresh.has(x) && ["waiting", "permission"].includes(x.status.kind)).map((x) => ({ row, x })),
           );
-      // Without the band the watcher prints the report itself, so it waits for the recaps being written, like the band does.
+      // Without the band the watcher prints the report itself, so it waits for the recaps being written.
       const until = Date.now() + DIGEST_WAIT_MS;
       while (!focused && Date.now() < until && wake.some(({ x }) => stopDigestLines(x).pending)) await new Promise((r) => setTimeout(r, DIGEST_POLL_MS));
       const reports = [

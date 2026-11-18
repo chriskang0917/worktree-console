@@ -15,7 +15,7 @@ type ReviewItem = {
   basis: string
   precedent: boolean
   impact: string
-  status: 'pending' | 'passed' | 'edited'
+  status: 'pending' | 'passed' | 'edited' | 'elsewhere'
   edit: string | null
   asks: ReviewAsk[]
   example: string | null
@@ -107,15 +107,15 @@ function askRows(x: ReviewItem, view: SheetView, width: number): SheetLine[] {
 function itemRows(x: ReviewItem, past: boolean, view: SheetView, width: number): SheetLine[] {
   const room = Math.max(1, width - MARK_COLS)
   const done = x.status !== 'pending'
-  const right = x.status === 'edited' ? [seg('已改', 'edited')] : undefined
-  const title = truncateColumns(`${x.n}. ${flat(x.question)}`, Math.max(1, room - (right ? 3 : 0)))
+  const right = x.status === 'edited' ? [seg('已改', 'edited')] : x.status === 'elsewhere' ? [seg('在別處回覆', 'dim')] : undefined
+  const title = truncateColumns(`${x.n}. ${flat(x.question)}`, Math.max(1, room - (x.status === 'edited' ? 3 : right ? columns(right[0]!.text) + 1 : 0)))
   const head: SheetLine = { kind: 'item', key: `item:${x.n}`, n: x.n, done, segs: [seg(title, done ? 'dim' : 'item')], right }
   const input: SheetLine[] = []
   if (view.input?.n === x.n) {
     const rows = inputRows(view.input.mode, view.draft, width)
     input.push({ kind: 'input', key: `input:${x.n}`, n: x.n, mode: view.input.mode, rows }, ...Array.from({ length: rows - 1 }, (_, i) => ({ kind: 'pad' as const, key: `input-pad:${x.n}:${i}`, n: x.n })))
   }
-  if (x.status === 'passed') return [head]
+  if (x.status === 'passed' || x.status === 'elsewhere') return [head]
   if (x.status === 'edited') return [head, ...fieldRows(`edit:${x.n}`, x.n, EDIT_LABEL, x.edit ?? '', width), ...input]
   const fields = past
     ? fieldRows(`plan:${x.n}`, x.n, '當前方案', `${flat(x.plan)}（出處：${flat(x.basis)}）`, width)
@@ -195,7 +195,7 @@ function deepTalkText(s: ReviewSheet, x: ReviewItem): string {
   return [`討論審核單 ${s.tag} 第 ${x.n} 件：`, `題目：${flat(x.question)}`, `當前方案：${flat(x.edit ?? x.plan)}`, `依據：${flat(x.basis)}`, `影響範圍：${flat(x.impact)}`].join('\n')
 }
 
-type Status = '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
+type Status = '輪到你' | '等待回應' | '等待授權' | '回覆完畢' | '執行中' | '閒置'
 
 type Session = {
   key: string
@@ -204,7 +204,6 @@ type Session = {
   repo: string
   status: Status
   summary: string
-  question: string
   options: string[]
   advice?: Advice | null
   brief?: Brief | null
@@ -224,15 +223,21 @@ type Advice = { state: 'pending' | 'ready'; text: string; answer?: string; reaso
 // The tab's newest plain-language recap, written in the background after each stop.
 type Brief = { text: string | null; pending: boolean }
 
+// The status band as `console.mjs focus` composed it: each row's forms widest first (the first that fits is drawn) and the keys on its right.
+// Colors are names: see bandColor.
+export type BandRun = { text: string; color?: string; bold?: boolean }
+export type BandKey = { key: string; label: string; action: 'later' | 'next' | 'show' | 'pane' }
+export type BandRow = { variants: BandRun[][]; keys?: BandKey[] }
+export type Band = { title: string; rail: string; rows: BandRow[] }
+
 type Focus = {
   active: boolean
   home?: string
   current?: string | null
-  announce?: string | null
-  announceKey?: string | null
   notice?: string | null
-  waiting?: { tag: string | null; seconds: number } | null
-  queue?: { key: string; isNew: boolean }[]
+  waiting?: { tag: string | null } | null
+  queue?: { key: string }[]
+  band?: Band | null
   sessions?: Session[]
 }
 
@@ -245,18 +250,9 @@ const PANE_TITLE = '中控台'
 const BRIEF_EMPTY = '還沒有摘要'
 const BRIEF_PENDING = '摘要產生中…'
 const BRIEF_KEYS = 'd 收起 · p 印出完整回報'
-const QUEUE_MAX = 5
-const TOAST_MAX = 30
 const CORNER_GAP = 2
-// A long 代號 is cut before the question on its header row drops below QUESTION_MIN (and a branch before the repo drops below REPO_MIN);
-// where the row cannot hold both, the 代號 keeps TAG_MIN.
+// A branch is cut before the repo on a card's second row drops below REPO_MIN.
 const REPO_MIN = 8
-const TAG_MIN = 4
-const QUESTION_MIN = 8
-const SENT_MAX = 50
-const MISS_TOAST = 3
-// focus-show's answer when it cannot read focus.json's format; sending it again cannot help.
-const FORMAT_MISMATCH = '不認得這個檔案格式'
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
 const FOOTER = 'qwe 切分頁 · 1-9,0/↑↓ 選卡片'
 // Rows of the pane above the cards: the tab row and its underline.
@@ -280,101 +276,55 @@ const TABS: { id: Tab; key: string; label: string; pick: (s: Session) => boolean
   { id: 'hidden', key: 'e', label: '封存', pick: s => s.archived },
 ]
 const EMPTY = '目前沒有符合條件的 session'
-// The band header's right side: `9: 顯示問題`, led by `8: 延後處理 · ` while the queue has one; four cells per hotkey decoration.
-const SHOW_WIDTH = 4 + 8
-const LATER_WIDTH = 4 + 8 + 3
-// The band header's status cell: glyph, a space, the label padded to 6 cells, two spaces.
-const BAND_STATUS = 10
+// Between two keys on the band's first row.
+const KEY_GAP = 3
+const HOTKEY_NAME: Record<BandKey['action'], string> = { later: 'later', next: 'later', show: 'show', pane: 'pane' }
 
-export function focusBandRows({ cols, maxRows, question, queue, hiddenCount, hasCurrent = true, advice = null, options = [] }: {
-  cols: number
-  maxRows: number
-  question: string
-  queue: { tag: string; isNew: boolean }[]
-  hiddenCount: number
-  hasCurrent?: boolean
-  advice?: Advice | null
-  options?: string[]
-}) {
-  const inner = Math.max(1, cols - 6)
-  const nameLimit = Math.max(1, cols < 60 ? cols - 26 : 20)
-  const visible = queue.slice(0, cols < 60 ? 1 : QUEUE_MAX)
-  const hidden = hiddenCount + queue.length - visible.length
-  const queueLabels = visible.map(q => `${truncateColumns(q.tag, nameLimit)}${q.isNew ? ' ✨' : ''}`)
-  // Reserve four cells for the hotkey decoration, independent of its terminal style.
-  const keyWidths = [2, ...(visible.length ? [5] : []), ...queueLabels.map(label => columns(label) + 7), ...(hidden ? [columns(`＋${hidden} · `)] : []), 8]
-  const keyLines: { index: number; width: number }[][] = [[]]
-  let used = 0
-  for (const [index, size] of keyWidths.entries()) {
-    if (used > 0 && used + size > cols - 2) {
-      keyLines.push([])
-      used = 0
-    }
-    keyLines[keyLines.length - 1]!.push({ index, width: size })
-    used += size
-  }
-  const keys = keyLines.length
-  // 9 and 8 sit on the header row, so no row of their own.
-  const actions = 0
-  const margin = 1
-  const separator = 1
-  const header = 1
-  const available = Math.max(0, maxRows - margin - separator - header - keys)
-  const questionRows = hasCurrent ? Math.min(1, available) : 0
-  const questionText = questionRows ? truncateColumns(question.replace(/\s+/g, ' ').trim(), inner) : ''
-  const adviceRows = hasCurrent && advice ? Math.max(0, Math.min(1, available - questionRows)) : 0
-  const adviceParts = adviceRows ? fitParts(adviceSegments(advice!, options), inner) : []
-  return { margin, separator, header, actions, keys, question: questionRows, questionText, advice: adviceRows, adviceParts, queueLabels, keyLines }
-}
+const runsWidth = (runs: BandRun[]) => runs.reduce((n, r) => n + columns(r.text), 0)
 
-type AdvicePart = { role: 'label' | 'answer' | 'option' | 'reason' | 'note' | 'pending'; text: string }
-
-// A bare a／b／c answer carries its option's own words, so the row reads without pressing 9.
-function optionWords(answer: string, options: string[]): string {
-  if (!/^[a-z](?:\s*[、,，]\s*[a-z])*$/i.test(answer)) return ''
-  const words = [...answer.toLowerCase().matchAll(/[a-z]/g)].map(m => options[m[0].charCodeAt(0) - 97]?.split(/[：:]/)[0]?.trim()).filter(Boolean)
-  return words.length ? ` ${words.join('、')}` : ''
-}
-
-function adviceSegments(advice: Advice, options: string[] = []): AdvicePart[] {
-  if (advice.state === 'pending' || !advice.answer) return [{ role: 'pending', text: advice.text }]
-  const answer = advice.answer.replace(/\s+/g, ' ').trim()
-  const words = optionWords(answer, options)
-  const reason = (advice.reason ?? '').replace(/\s+/g, ' ').trim()
-  return [
-    { role: 'label', text: '建議：' },
-    { role: 'answer', text: answer },
-    ...(words ? [{ role: 'option' as const, text: words }] : []),
-    ...(reason ? [{ role: 'reason' as const, text: `，${reason}` }] : []),
-    ...(advice.principle ? [{ role: 'note' as const, text: `（原則性：${advice.principle}）` }] : []),
-  ]
-}
-
-// Fits the parts in `width` columns: the reason gives way first (cut with …), then the option words; the answer and the principle note stay.
-function fitParts(parts: AdvicePart[], width: number): AdvicePart[] {
-  const total = (list: AdvicePart[]) => list.reduce((n, p) => n + columns(p.text), 0)
-  let out = parts
-  for (const role of ['reason', 'option'] as const) {
-    const over = total(out) - width
-    if (over <= 0) return out
-    const part = out.find(p => p.role === role)
-    if (!part) continue
-    const room = columns(part.text) - over
-    out = room >= 3 ? out.map(p => (p === part ? { ...p, text: truncateColumns(p.text, room) } : p)) : out.filter(p => p !== part)
-  }
-  if (total(out) <= width) return out
-  const cut: AdvicePart[] = []
+// The runs cut to `width` columns from the end, the last kept piece ending in ….
+function cutRuns(runs: BandRun[], width: number): BandRun[] {
+  if (runsWidth(runs) <= width) return runs
+  const out: BandRun[] = []
   let left = width
-  for (const p of out) {
-    if (columns(p.text) <= left) {
-      cut.push(p)
-      left -= columns(p.text)
+  for (const r of runs) {
+    const w = columns(r.text)
+    if (w < left) {
+      out.push(r)
+      left -= w
       continue
     }
-    if (left > 0) cut.push({ ...p, text: truncateColumns(p.text, left) })
+    if (left > 0) out.push({ ...r, text: truncateColumns(r.text, left) })
     break
   }
-  return cut
+  return out
+}
+
+// The first of a row's forms that fits `width`; when none does, the last one cut.
+export function fitRow(variants: BandRun[][], width: number): BandRun[] {
+  return variants.find(v => runsWidth(v) <= width) ?? cutRuns(variants.at(-1) ?? [], width)
+}
+
+// A key reads `8 延後處理`; where the row is too narrow for that, only its digit.
+const keyText = (k: BandKey, compact: boolean) => (compact ? k.key : `${k.key} ${k.label}`)
+export const keysWidth = (keys: BandKey[], compact = false) => keys.reduce((n, k, i) => n + columns(keyText(k, compact)) + (i ? (compact ? 1 : KEY_GAP) : 0), 0)
+// The row keeps this much room left of its keys before they shrink to digits.
+const KEYS_ROOM = 12
+
+function bandColor(theme: ConsoleTheme, name: string | undefined): string | undefined {
+  const map: Record<string, string | undefined> = {
+    fg: theme.fg,
+    dim: theme.dim,
+    accent: theme.accent,
+    waiting: theme.waiting,
+    auto: theme.answered,
+    running: theme.busy,
+    skipped: theme.dim,
+    closable: theme.closable,
+    blocked: theme.blocked,
+    error: theme.error,
+  }
+  return name ? map[name] ?? theme.fg : theme.fg
 }
 
 type Run = { text: string; color?: string; bold?: boolean }
@@ -476,15 +426,6 @@ function popoverBox($: EngineInterface, e: any, p: Popover, at: { start: number;
   )
 }
 
-const advicePaint = (theme: ConsoleTheme): Record<AdvicePart['role'], { color: string | undefined; bold?: boolean }> => ({
-  label: { color: theme.accent },
-  answer: { color: theme.fg, bold: true },
-  option: { color: theme.fg },
-  reason: { color: theme.muted ?? theme.dim },
-  note: { color: theme.waiting },
-  pending: { color: theme.dim },
-})
-
 // The text centred across `cols` between runs of ─, at least 2 on each side with a space next to the text, the text cut first.
 function ruledLine(text: string, cols: number) {
   const shown = truncateColumns(text, Math.max(1, cols - 6))
@@ -500,15 +441,12 @@ let follow = true
 let frame: { avail: number } | null = null
 let ring: string[] = []
 let held: number | null = null
-let known: Set<string> | null = null
 let tick = 0
 let sessionId = ''
 // Names this band instance; the newest one claims the band, so a band left over from a reload or an older console stops.
 let owner = ''
-// The console's own model turn: a /focus-show sent during it would wait in the input queue, so announces hold until it ends.
+// The console's own model turn: the band takes no new stop while it runs (`--turn 1`).
 let turning = false
-const sent: string[] = []
-const misses = new Map<string, number>()
 let appearance: Appearance = { theme: 'neutral', motion: true }
 let animation: { cancel(): void } | null = null
 let animationTick = 0
@@ -548,7 +486,7 @@ function visibleAnimationFrame(tick: number): number {
     if (session.status === '等待授權') {
       frame |= 4
       if (statusCell(session.status, tick).glyphColor === 'dim') frame |= 1
-    } else if (session.status === '等待回應' && session.key === primary) {
+    } else if ((session.status === '等待回應' || session.status === '輪到你') && session.key === primary) {
       frame |= 8
       if (statusCell(session.status, tick, { primary: true }).glyph === '◇') frame |= 2
     }
@@ -574,11 +512,12 @@ function syncAnimation($: EngineInterface) {
 const sessions = () => focus.sessions ?? []
 const tabCount = (t: Tab) => rowsOf(t).length
 const byKey = (key: string | null | undefined) => sessions().find(s => s.key === key) ?? null
-const queueOf = () => (focus.queue ?? []).flatMap(q => (byKey(q.key) ? [{ ...byKey(q.key)!, isNew: q.isNew }] : []))
+const queueOf = () => (focus.queue ?? []).flatMap(q => (byKey(q.key) ? [byKey(q.key)!] : []))
+const asks = (s: Session | null | undefined) => s?.status === '輪到你' || s?.status === '等待回應' || s?.status === '等待授權'
 const primaryKey = () => {
   const current = byKey(focus.current)
-  if (current?.status === '等待回應' || current?.status === '等待授權') return current.key
-  return queueOf().find(s => s.status === '等待回應' || s.status === '等待授權')?.key ?? null
+  if (asks(current)) return current!.key
+  return queueOf().find(asks)?.key ?? null
 }
 
 // 待回覆 always follows the band: the question on screen first, then the queue in order.
@@ -646,8 +585,7 @@ function run($: EngineInterface, args: string[], timeoutMs = 60_000) {
   return $.process.run(['node', `${$.plugin.root}/skills/worktree-console/scripts/console.mjs`, ...args], { timeoutMs })
 }
 
-// Prints one question's full report through the focus-show mod, never through the model. A stop counts as printed only when
-// /focus-show answered with its report; anything else but the format line is sent again on the next poll, with a toast after 3 misses in a row.
+// Prints one question's full report through the focus-show mod, never through the model; only a press (9, or p on a recap) prints.
 async function show($: EngineInterface, tag: string, key: string | null = null) {
   const s = sessions().find(x => x.tag === tag)
   if (!s || !focus.home) return
@@ -655,74 +593,32 @@ async function show($: EngineInterface, tag: string, key: string | null = null) 
   const id = key && s.id
   if (id) await $.fs.write(`${focus.home}/show/${encodeURIComponent(tag)}@${id}.md`, s.report)
   const res = await $.command.run({ command: 'focus-show', args: id ? `${tag} ${id}` : tag }).catch(() => null)
-  if (!key) {
-    if (!res) $.ui.toast('印不出題目：需要另外安裝 focus-show')
-    return
-  }
-  if (res?.text === s.report) {
-    misses.delete(key)
-    await run($, ['focus-shown', key]).catch(() => {})
-    return
-  }
-  if (res?.text?.includes(FORMAT_MISMATCH)) return
-  const n = (misses.get(key) ?? 0) + 1
-  misses.set(key, n)
-  // Each resent 略過 line lands in the conversation, so a stop answered with one 3 times is left to 9.
-  if (!res?.text || n < MISS_TOAST) {
-    const i = sent.indexOf(key)
-    if (i >= 0) sent.splice(i, 1)
-  }
-  if (n !== MISS_TOAST) return
-  const installed = res || (await $.command.list().catch(() => [])).some(c => c.name === 'focus-show')
-  $.ui.toast(installed ? `[${tag}] 題目沒印出，按 9 印` : '印不出題目：需要另外安裝 focus-show')
+  if (!res) return void $.ui.toast('印不出題目：需要另外安裝 focus-show')
+  if (key && res.text === s.report) await run($, ['focus-shown', key]).catch(() => {})
 }
 
-// A poll repeats an announce until `focus-shown` lands; while the console's turn runs only a press prints, and once it
-// ends the question then on the band is the one printed.
-async function announce($: EngineInterface, next: Focus, pressed: boolean) {
-  const key = next.announceKey ?? null
-  if (!next.announce || (!pressed && turning) || (key && !pressed && sent.includes(key))) return
-  if (key && !sent.includes(key)) {
-    sent.push(key)
-    if (sent.length > SENT_MAX) sent.shift()
-  }
-  void show($, next.announce, key)
-}
-
-async function apply($: EngineInterface, next: Focus, pressed = false) {
+async function apply($: EngineInterface, next: Focus) {
   // Only the console reads config.json, so another tab never toasts about it.
   if (next.active && !focus.active) await loadPreferences($)
-  if (next.active) {
-    const live = [next.current, ...(next.queue ?? []).map(q => q.key)].filter((k): k is string => !!k)
-    for (const q of next.queue ?? []) {
-      const s = next.sessions?.find(x => x.key === q.key)
-      if (known && s && !known.has(q.key)) $.ui.toast(`${s.tag} 進排隊：${truncateColumns(s.question.replace(/\s+/g, ' '), TOAST_MAX)}`)
-    }
-    known = new Set(live)
-    // A stop that left the band before /focus-show ran was not printed; the console announces it again once it is back.
-    for (let i = sent.length - 1; i >= 0; i--) if (sent[i] !== next.current) sent.splice(i, 1)
-    for (const k of misses.keys()) if (k !== next.current) misses.delete(k)
-  }
   focus = next
   if (next.active && next.notice) $.ui.toast(next.notice)
   syncAnimation($)
-  if (next.active) await announce($, next, pressed)
   $.ui.invalidate('ui.render')
 }
 
-// `--typing`: while the console's prompt holds a draft the server answers no question for the user.
+// `--typing`: a draft in the console's prompt; `--turn`: the console's turn still runs. Either holds a new stop off the band.
 async function poll($: EngineInterface, claim = false) {
   let next: Focus = { active: false }
   const typing = !!(await $.prompt.read().catch(() => null))?.text?.trim()
   try {
-    next = JSON.parse((await run($, ['focus', ...(sessionId ? ['--session', sessionId] : []), '--owner', owner, '--typing', typing ? '1' : '0', ...(claim ? ['--claim'] : [])])).stdout)
+    next = JSON.parse((await run($, ['focus', ...(sessionId ? ['--session', sessionId] : []), '--owner', owner, '--typing', typing ? '1' : '0', '--turn', turning ? '1' : '0', ...(claim ? ['--claim'] : [])])).stdout)
   } catch {}
   await apply($, next)
 }
 
 async function act($: EngineInterface, args: string[]) {
   try {
-    await apply($, JSON.parse((await run($, args)).stdout), true)
+    await apply($, JSON.parse((await run($, args)).stdout))
   } catch {}
 }
 
@@ -773,23 +669,21 @@ async function openPane($: EngineInterface) {
   $.ui.invalidate('ui.render')
 }
 
-// A card's number, Enter on it or a click on its nickname: a card with decisions to review opens its review sheet; on a card waiting on you
-// that switches the band to it (and the switch prints it); any other card is only chosen.
+// A card's number, Enter on it or a click on its nickname: a card with decisions to review opens its review sheet; any other card is
+// only chosen, and the band keeps its stop.
 async function pickCard($: EngineInterface, s: Session) {
   sel = s.key
   follow = true
   if ((s.review ?? 0) > 0 && s.path) return openReview($, s)
-  if (s.pending && s.key !== focus.current) await act($, ['focus-pick', s.key])
   $.ui.invalidate('ui.render')
   const res = await $.ui.focus({ requestId: PANE, key: `name:${s.key}` }).catch(() => ({ deny: 'failed' }))
   if (!res.deny) held = ring.indexOf(`name:${s.key}`)
 }
 
-// The recap popover's p: a card waiting on you that is not on the band switches first (the switch prints it).
+// The recap popover's p: prints the card's full report; the band keeps its stop.
 async function printCard($: EngineInterface, s: Session) {
   sel = s.key
-  if (s.pending && s.key !== focus.current) await act($, ['focus-pick', s.key])
-  else void show($, s.tag, s.key === focus.current ? s.key : null)
+  void show($, s.tag, s.key === focus.current ? s.key : null)
   $.ui.invalidate('ui.render')
 }
 
@@ -1402,9 +1296,7 @@ export const register: Register = on => {
       // The number, status and its gap left of the 代號, plus 取消封存 and its gap after it on 封存; one blank column before the right end.
       const lead = 13 + (hidden ? 10 : 0)
       const room = head - lead - (rightWidth ? rightWidth + 1 : 0)
-      const tag = truncateColumns(r.tag, Math.max(1, room - CORNER_GAP - QUESTION_MIN, Math.min(TAG_MIN, room - 1)))
-      const questionWidth = Math.max(0, room - columns(tag) - CORNER_GAP)
-      const question = questionWidth >= 2 ? truncateColumns(r.question.replace(/\s+/g, ' ').trim(), questionWidth) : ''
+      const tag = truncateColumns(r.tag, Math.max(1, room))
       const name = <Text color={isSel ? theme.accent : theme.fg} bold>{tag}</Text>
       const inner = Math.max(1, head - 3)
       const branch = auto ? `已代回：${auto}` : (r.branch ?? '').trim()
@@ -1423,8 +1315,6 @@ export const register: Register = on => {
                 {hidden && name}
                 {hidden && <Text>  </Text>}
                 {hidden ? <Button key={`name:${r.key}`} label="取消封存" plain autoFocus={isSel ? true : undefined} onPress={() => press(r)} /> : <Button key={`name:${r.key}`} label={tag} plain autoFocus={isSel ? true : undefined} onPress={() => press(r)}>{name}</Button>}
-                {question && <Text>  </Text>}
-                {question && <Box key={`question:${r.key}`} width={questionWidth} flexShrink={0} overflow="hidden"><Text color={theme.dim} wrap="truncate-end">{question}</Text></Box>}
               </Box>
               {rightWidth > 0 && (
                 <Box key={`right:${r.key}`} flexDirection="row" flexShrink={0}>
@@ -1508,67 +1398,62 @@ export const register: Register = on => {
     )
   })
 
+  // The status band: a rule, then the rows `console.mjs focus` composed, each led by a rail in the band's color; the keys on the first row's right.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (!focus.active || e.props.hasSurvey) {
+    const band = focus.band
+    if (!focus.active || e.props.hasSurvey || !band?.rows?.length) {
       bandKey = null
       syncAnimation($)
       return (!focus.active && recapBand($, e)) || next(e)
     }
-    const cur = byKey(focus.current)
-    const fullQueue = queueOf()
-    const queue = fullQueue.slice(0, QUEUE_MAX)
-    if (!cur && queue.length === 0 && !focus.waiting) {
-      bandKey = null
-      syncAnimation($)
-      return next(e)
-    }
     const { Box, Text, Button } = $.ui.resolve(e)
     const theme = THEMES[appearance.theme]
+    const cur = byKey(focus.current)
     bandKey = cur?.key ?? null
     syncAnimation($)
     const cols = e.props.bodyColumns
-    const cell = cur && statusCell(cur.status, animationTick, { primary: cur.key === primaryKey(), animated: appearance.motion })
-    const others = queue.slice(0, cols < 60 ? 1 : QUEUE_MAX)
-    const budget = focusBandRows({ cols, maxRows: e.props.maxRows, question: cur?.question ?? '', queue, hiddenCount: fullQueue.length - queue.length, hasCurrent: !!cur, advice: cur?.advice ?? null, options: cur?.options ?? [] })
-    const paint = advicePaint(theme)
-    const rail = <Text color={cell ? theme[cell.color] : theme.dim}>│ </Text>
-    const label = `── 待回覆 ${cur ? 1 : 0}/${fullQueue.length + (cur ? 1 : 0)} `
-    const head = Math.max(1, cols - 4)
-    const actionsWidth = SHOW_WIDTH + (queue.length > 0 ? LATER_WIDTH : 0)
-    const keyItems = [
-      rail,
-      ...(others.length ? [<Text color={theme.dim}>其他 </Text>] : []),
-      ...others.map((q, i) => <Box key={`other:${i}`} flexDirection="row"><Button key={`queue:${i}`} hotkey={String(i + 1)} label={budget.queueLabels[i]!} plain dimColor onPress={() => act($, ['focus-pick', q.key])} /><Text color={theme.dim}> · </Text></Box>),
-      ...(fullQueue.length > others.length ? [<Text color={theme.dim}>{`＋${fullQueue.length - others.length} · `}</Text>] : []),
-      <Button key="pane" hotkey="0" label="面板" plain onPress={() => void openPane($)} />,
-    ]
+    const inner = Math.max(1, cols - 4)
+    const rail = <Text color={bandColor(theme, band.rail)}>│ </Text>
+    const title = `── ${band.title} `
+    const press = (k: BandKey) => {
+      if (k.action === 'pane') return void openPane($)
+      if (k.action === 'show') return void (cur && show($, cur.tag, cur.key))
+      return void act($, ['focus-later'])
+    }
+    const rows = band.rows.slice(0, Math.max(1, e.props.maxRows - 2))
+    const keys = rows.flatMap(r => r.keys ?? [])
     return (
       <Box flexDirection="column" marginTop={1}>
-        <Box flexDirection="row"><Text color={theme.dim}>{label}</Text><Text color={theme.border}>{'─'.repeat(Math.max(0, cols - columns(label)))}</Text></Box>
-        <Box flexDirection="row" paddingLeft={2} height={1} flexShrink={0}>
-          {rail}
-          {cur && cell ? (
-            <Box key="band-head" flexDirection="row" width={head} flexShrink={0} justifyContent="space-between">
-              <Box flexDirection="row" flexShrink={1} overflow="hidden">
-                <Text color={theme[cell.glyphColor]}>{cell.glyph}</Text>
-                <Text color={theme[cell.color]}>{` ${cell.label}${' '.repeat(Math.max(0, 6 - columns(cell.label)))}  `}</Text>
-                <Box key="band-name" flexShrink={0}><Text bold color={theme.fg}>{truncateColumns(cur.tag, Math.max(1, head - BAND_STATUS - actionsWidth - 1))}</Text></Box>
-              </Box>
-              <Box key="band-actions" flexDirection="row" width={actionsWidth} flexShrink={0} justifyContent="flex-end">
-                {queue.length > 0 && <Box flexDirection="row"><Button key="later" hotkey="8" label="延後處理" plain onPress={() => act($, ['focus-later'])}><Text color={theme.dim}>延後處理</Text></Button><Text color={theme.dim}> · </Text></Box>}
-                <Button key="show" hotkey="9" label="顯示問題" plain onPress={() => void show($, cur.tag, cur.key)}><Text color={theme.dim}>顯示問題</Text></Button>
+        <Box flexDirection="row"><Text color={theme.dim}>{title}</Text><Text color={theme.border}>{'─'.repeat(Math.max(0, cols - columns(title)))}</Text></Box>
+        {rows.map((row, i) => {
+          const compact = !!row.keys?.length && keysWidth(row.keys) + 2 + KEYS_ROOM > inner
+          const kw = row.keys?.length ? keysWidth(row.keys, compact) : 0
+          const runs = fitRow(row.variants, Math.max(1, inner - (kw ? kw + 2 : 0)))
+          return (
+            <Box key={`band:${i}`} flexDirection="row" paddingLeft={2} height={1} flexShrink={0}>
+              {rail}
+              <Box key={`band-row:${i}`} flexDirection="row" width={inner} flexShrink={0} justifyContent="space-between">
+                <Box flexDirection="row" flexShrink={1} overflow="hidden">
+                  {runs.map((r, j) => <Text key={`band-run:${i}:${j}`} color={bandColor(theme, r.color)} bold={r.bold || undefined}>{r.text}</Text>)}
+                </Box>
+                {kw > 0 && (
+                  <Box key={`band-keys:${i}`} flexDirection="row" width={kw} flexShrink={0}>
+                    {row.keys!.map((k, j) => (
+                      <Box key={`band-key:${k.key}`} flexDirection="row">
+                        {j > 0 && <Text>{' '.repeat(compact ? 1 : KEY_GAP)}</Text>}
+                        <Text bold>{k.key}</Text>
+                        {!compact && <Text color={theme.dim}>{` ${k.label}`}</Text>}
+                      </Box>
+                    ))}
+                  </Box>
+                )}
               </Box>
             </Box>
-          ) : <Text color={theme.dim}>{`等 ${focus.waiting?.tag ?? '—'} 回應中…`}</Text>}
+          )
+        })}
+        <Box key="band-hotkeys" height={0} overflow="hidden">
+          {keys.map(k => <Button key={HOTKEY_NAME[k.action]} hotkey={k.key} label="" plain onPress={() => press(k)} />)}
         </Box>
-        {cur && budget.question > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.question} flexShrink={0} overflow="hidden">{rail}<Box key="question" width={Math.max(1, cols - 6)} flexShrink={0}><Text color={theme.fg} wrap="truncate-end">{budget.questionText}</Text></Box></Box>}
-        {cur && budget.advice > 0 && <Box flexDirection="row" paddingLeft={2} height={budget.advice} flexShrink={0} overflow="hidden">{rail}<Box key="advice" flexDirection="row" width={Math.max(1, cols - 6)} flexShrink={0}>{budget.adviceParts.map(p => <Text key={`advice:${p.role}`} color={paint[p.role].color} bold={paint[p.role].bold}>{p.text}</Text>)}</Box></Box>}
-        <Box key="keys" flexDirection="column" height={budget.keys} flexShrink={0}>
-          {budget.keyLines.map((items, row) => <Box key={`keys:${row}`} flexDirection="row" paddingLeft={2} height={1} flexShrink={0}>
-            {items.map(item => <Box key={`key:${item.index}`} width={item.width} flexShrink={0}>{keyItems[item.index]}</Box>)}
-          </Box>)}
-        </Box>
-        <Box height={0} overflow="hidden">{queue.slice(others.length).map((q, j) => <Button key={`queue:${others.length + j}`} hotkey={String(others.length + j + 1)} label="" plain onPress={() => act($, ['focus-pick', q.key])} />)}</Box>
       </Box>
     )
   })

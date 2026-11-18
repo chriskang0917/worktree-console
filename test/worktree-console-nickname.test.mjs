@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { collect } from "../skills/worktree-console/scripts/lib.mjs";
-import { emptyFocus, focusPayload, focusReplied, focusStep, markReported, syncFocus } from "../skills/worktree-console/scripts/focus.mjs";
+import { focusPayload, syncFocus } from "../skills/worktree-console/scripts/focus.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = path.join(root, "skills", "worktree-console", "scripts");
@@ -147,10 +147,10 @@ test("暱稱：沒票也沒暱稱的 worktree 取名前代號是拿掉類型前�
   }
   const cards = cardTags(dir, home);
   assert.ok(cards.tags.includes("cmnt") && !cards.tags.some((t) => t.startsWith("backend")), cards.tags.join(","));
-  assert.ok(cards.reports.includes("### 💬 cmnt 等你回應"), `/focus-show 印的報告標題用暱稱：${cards.reports.join(" | ")}`);
+  assert.ok(cards.reports.includes("### ◆ cmnt 輪到你"), `/focus-show 印的報告標題用暱稱：${cards.reports.join(" | ")}`);
   const baseline = Object.keys(TREES).map((id) => `${pane(id)}=busy`).join(",");
   const watched = run(dir, home, "watch.mjs", ["--baseline", baseline]);
-  assert.ok(watched.lines.includes("### 💬 cmnt 等你回應"), watched.out);
+  assert.ok(watched.lines.includes("### ◆ cmnt 輪到你"), watched.out);
   assert.ok(!watched.out.includes("backend…"), watched.out);
 });
 
@@ -206,24 +206,3 @@ test("暱稱：console.mjs ask --nickname 與 nickname 只接受 3～5 個英文
   assert.ok(t.includes("cleanups") && t.includes("spike"), t.join(","));
 });
 
-test("漏印重送：回完答案後 60 秒內同一 session 又出題，中控台每輪都 announce 新題直到 focus-shown；after-send 也不會把它算成已回覆或已印", () => {
-  const entry = (key, paneKey, since) => ({ key, paneKey, handle: `h-${paneKey}`, tag: paneKey, kind: "done", since, item: {} });
-  const t0 = 1_791_256_000_000;
-  const asked = entry(`w9:p1@${t0}`, "w9:p1", t0);
-  const other = entry(`w7:p2@${t0 - 5_000}`, "w7:p2", t0 - 5_000);
-  const announced = (view) => (view.current && !view.state.reported.includes(view.current.key) ? view.current.key : null);
-  let view = focusStep(emptyFocus(), [asked, other], t0);
-  view = { ...view, state: markReported(view.state, asked.key) };
-  const sentAt = t0 + 60_000;
-  view = focusStep(focusReplied(view.state, [asked, other], [{ paneKey: "w9:p1", handle: "h-w9:p1", tag: "w9:p1", at: sentAt }], sentAt), [other], sentAt);
-  assert.deepEqual([view.current, view.wait?.tag], [null, "w9:p1"]);
-  const again = entry(`w9:p1@${sentAt + 15_000}`, "w9:p1", sentAt + 15_000);
-  view = focusStep(view.state, [other, again], sentAt + 16_000);
-  assert.equal(announced(view), again.key, "同 session 15 秒後又問：直接上橫條並 announce");
-  view = focusStep(view.state, [other, again], sentAt + 21_000);
-  assert.equal(announced(view), again.key, "沒收到 focus-shown 就每輪再 announce");
-  view = focusStep(focusReplied(view.state, [other, again], [{ paneKey: "w9:p1", handle: "h-w9:p1", tag: "w9:p1" }], sentAt + 25_000), [other, again], sentAt + 25_000);
-  assert.deepEqual([view.current?.key, announced(view), view.state.answered.includes(again.key), view.state.reported.includes(again.key)], [again.key, again.key, false, false], "after-send 晚到也不吃掉新題");
-  view = { ...view, state: markReported(view.state, again.key) };
-  assert.equal(announced(focusStep(view.state, [other, again], sentAt + 30_000)), null, "focus-shown 之後才算印過");
-});

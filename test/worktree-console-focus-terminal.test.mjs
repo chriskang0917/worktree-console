@@ -35,8 +35,7 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
         const expectedContent = frame => {
           const content = panel(frame).join("\n");
           if (!counts[index]) return content.includes("目前沒有符合條件的 session");
-          // 封存 below 46 columns keeps 4 cells of 代號 beside its repo.
-          return content.includes(index === 2 && cols < 46 ? "arc…  取消封存" : `${["reply", "reply", "archive"][index]}0`)
+          return content.includes(`${["reply", "reply", "archive"][index]}0`)
             && (index !== 1 || content.includes("── fixture"));
         };
         const frame = await terminal.press(key, expectedContent);
@@ -61,10 +60,11 @@ for (const [cols, counts] of [[39, [6, 12, 0, 0]], [39, [12, 24, 10, 11]], [46, 
         assert.ok(Math.max(...gaps) - Math.min(...gaps) <= 1, `分頁間距平均：${JSON.stringify(lines[row])}`);
         if (counts[index]) {
           const prefix = ["reply", "reply", "archive"][index];
-          const name = index === 2 && cols < 46 ? "arc…" : `${prefix}0`;
+          const name = `${prefix}0`;
           const header = lines.find(line => line.includes(name) && /^ [·✢✳✶✻✽] /.test(line));
           assert.ok(header, lines.join("\n"));
-          assert.match(header, new RegExp(`^ [·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${name}${index === 2 ? '  取消封存' : ''}  假資[料問題]*…?$`), "首卡標頭：狀態、代號後接題目，沒有覆畫的數字、不畫階段");
+          assert.match(header, new RegExp(`^ [·✢✳✶✻✽] (?:\\d: | {3})↩ 已回覆  ${name}${index === 2 ? '  取消封存' : ''}$`), "首卡標頭：狀態、代號，不畫題目、沒有覆畫的數字、不畫階段");
+          assert.ok(!lines.join("\n").includes("假資料問題"), "卡片不畫題目");
           const second = lines[lines.indexOf(header) + 1];
           assert.match(second, / +(?:fixture|fix[a-z]*…)$/, "第二行右端是 repo");
           assert.equal([...second].reduce((n, c) => n + (/[\u3000-\u9fff\uff00-\uffef]/u.test(c) ? 2 : 1), 0), cols - 1, `repo 右端貼齊卡片右緣：${JSON.stringify(second)}`);
@@ -109,7 +109,7 @@ const fgOf = (line, text) => {
   return at < 0 ? undefined : cells.slice(at, at + [...text].length).map(c => c.fg);
 };
 
-test("真實終端：neutral 卡片不放票名；題目與第二行的 repo 都是灰色，只有代號用前景色", { timeout: 30_000 }, async () => {
+test("真實終端：neutral 卡片不放票名與題目；第二行的 repo 是灰色，只有代號用前景色", { timeout: 30_000 }, async () => {
   const terminal = await terminalFixture({ counts: [2, 2, 0, 0], summaries: ["1 未核對", "面板 v2 改版"], columns: 151 });
   try {
     await terminal.open();
@@ -118,8 +118,8 @@ test("真實終端：neutral 卡片不放票名；題目與第二行的 repo 都
       const lines = terminal.tmux("capture-pane", "-p", "-e", "-t", "fixture:0.0").split("\n");
       const text = lines.map(l => l.replace(/\x1b\[[0-9;:]*m/g, "")).join("\n");
       assert.ok(!text.includes("未核對") && !text.includes("面板 v2 改版"), "卡片不再畫票名");
-      const header = lines.find(line => line.includes("reply1") && line.includes("假資料問題"));
-      assert.ok(fgOf(header, "假資料問題").every(fg => fg !== "default"), `題目是灰色：${JSON.stringify(header)}`);
+      assert.ok(!text.includes("假資料問題"), "卡片不畫題目");
+      const header = lines.find(line => line.includes("reply1") && line.includes("已回覆"));
       const second = lines[lines.indexOf(header) + 1];
       assert.ok(fgOf(second, "fixture").every(fg => fg !== "default"), `repo 是灰色：${JSON.stringify(second)}`);
     }
@@ -200,15 +200,15 @@ test("真實終端：r 不是分頁鍵，按了分頁列與底線都不動", { t
   }
 });
 
-test("真實終端：橫條標題列左邊狀態與代號、右邊「8: 延後處理 · 9: 顯示問題」，右端與分隔線同寬，沒有獨立按鈕列", { timeout: 30_000 }, async () => {
+test("真實終端：狀態區第一行左邊「◆ 輪到你 <代號>」、右邊「8 延後處理   9 顯示問題   0 面板」，右端與分隔線同寬，沒有獨立按鈕列", { timeout: 30_000 }, async () => {
   const terminal = await terminalFixture({ counts: [4, 6, 0, 0], columns: 120 });
   try {
-    const frame = await terminal.waitFor(f => f.includes("0: 面板") && f.includes("9: 顯示問題"), "等待橫條");
+    const frame = await terminal.waitFor(f => f.includes("0 面板") && f.includes("9 顯示問題"), "等待狀態區");
     const lines = frame.split("\n").map(line => line.trimEnd());
-    const rule = lines.findIndex(line => line.startsWith("── 待回覆"));
+    const rule = lines.findIndex(line => line.startsWith("── 狀態"));
     const head = lines[rule + 1];
     const width = text => [...text].reduce((sum, char) => sum + (char.codePointAt(0) > 0x2e80 ? 2 : 1), 0);
-    assert.match(head, /^ {2}│ ↩ 已回覆 {2}reply0 +8: 延後處理 · 9: 顯示問題$/, head);
+    assert.match(head, /^ {2}│ ◆ 輪到你 {2}reply0 +8 延後處理 {3}9 顯示問題 {3}0 面板$/, head);
     assert.equal(width(head), width(lines[rule]), `${head}\n${lines[rule]}`);
     assert.equal(lines.filter(line => line.includes("顯示問題")).length, 1);
   } finally {
@@ -231,8 +231,8 @@ test("真實終端：選中卡片按 d 跳出摘要浮層、蓋在下方卡片�
     assert.equal(lines[title + 3].trim(), "d 收起 · p 印出完整回報", lines.join("\n"));
     terminal.tmux("send-keys", "-t", "fixture:0.0", "Escape");
     const closed = await terminal.waitFor(frame => !open(frame), "Esc 後浮層應收起");
-    assert.ok(panel(closed).some(line => /^ {3}1: ↩ 已回覆  reply1  假資料問題$/.test(line)), panel(closed).join("\n"));
-    assert.ok(panel(closed).some(line => /^ ✻ {4}↩ 已回覆  reply0  假資料問題$/.test(line)), panel(closed).join("\n"));
+    assert.ok(panel(closed).some(line => /^ {3}1: ↩ 已回覆  reply1$/.test(line)), panel(closed).join("\n"));
+    assert.ok(panel(closed).some(line => /^ ✻ {4}↩ 已回覆  reply0$/.test(line)), panel(closed).join("\n"));
   } finally {
     await terminal.close();
   }

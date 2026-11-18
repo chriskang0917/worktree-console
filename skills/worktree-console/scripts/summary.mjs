@@ -6,12 +6,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pendingFile, readJson, readSummary, stopDigest, summaryFile, summaryHome, timeoutMs, usageFile } from "./summary-read.mjs";
+
+export { pendingFile, readSummary, stopDigest, summaryFile, summaryHome, usageFile };
 
 const SELF = fileURLToPath(import.meta.url);
 const DEFAULT_MODEL = "sonnet";
-const DEFAULT_TIMEOUT_MS = 120_000;
-// A worker that died without clearing its marker stops counting as running after its timeout and this much more.
-const PENDING_SLACK_MS = 60_000;
 const INPUT_MAX = 40_000;
 const TAIL_BYTES = 2 * 1024 * 1024;
 const REPLY_WAIT_MS = 5_000;
@@ -34,22 +34,6 @@ export const SYSTEM_PROMPT = [
   "5. 不加標題、前言或結語，不用 Markdown；不要自己替開發者選，回覆沒有建議就不寫建議。",
   "只輸出這幾行。",
 ].join("\n");
-
-export const summaryHome = () => process.env.WORKTREE_CONSOLE_HOME || path.join(os.homedir(), ".config", "worktree-console");
-const dirOf = (home) => path.join(home, "summaries");
-const slug = (handle) => encodeURIComponent(handle);
-export const summaryFile = (home, handle) => path.join(dirOf(home), `${slug(handle)}.json`);
-export const pendingFile = (home, handle) => path.join(dirOf(home), `${slug(handle)}.pending.json`);
-export const usageFile = (home) => path.join(home, "summary-usage.jsonl");
-const timeoutMs = () => Number(process.env.WORKTREE_CONSOLE_SUMMARY_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
-
-function readJson(file, fallback = null) {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
 
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -81,25 +65,6 @@ export function modelCommand(model) {
       "--settings", '{"disableAllHooks":true}',
     ],
   };
-}
-
-// The tab's newest recap and whether a newer one is being written: { text, at, sessionId, pending }.
-export function readSummary(home, handle, now = Date.now()) {
-  if (!handle) return { text: null, at: null, sessionId: null, pending: false };
-  const saved = readJson(summaryFile(home, handle));
-  const marker = readJson(pendingFile(home, handle));
-  const pending = !!marker && now - (marker.since ?? 0) < (marker.timeoutMs ?? timeoutMs()) + PENDING_SLACK_MS;
-  return { text: saved?.text ?? null, at: saved?.at ?? null, sessionId: saved?.sessionId ?? null, replyAt: saved?.replyAt ?? null, pending };
-}
-
-// The recap of the stop a card shows, or null: only a recap whose replyAt matches the stop counts; herdr and the Herdr app read
-// the stop time from the same transcript entry, Orca's own clock is not compared. A recap still being written for it is `pending`.
-export function stopDigest(home, session, now = Date.now()) {
-  const { text, pending, replyAt } = readSummary(home, session?.handle, now);
-  const since = session?.since ?? session?.agent?.stateStartedAt ?? null;
-  const comparable = !!session?.agent?.herdr && typeof replyAt === "number" && typeof since === "number";
-  const matches = comparable ? replyAt === since : !pending;
-  return { text: text && matches ? text : null, pending };
 }
 
 function textOf(content) {

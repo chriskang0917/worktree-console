@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { autoReplyOf, readDelegated } from "./auto-reply.mjs";
-import { claudeProjectDir, consoleHome, lastActivity, realpath, recycledMark, sessionTag, stageOf } from "./lib.mjs";
+import { yourTurn, claudeProjectDir, consoleHome, lastActivity, realpath, sessionTag, stageOf } from "./lib.mjs";
 import { readEvents, transcriptFor } from "./log.mjs";
 import { auditRows, draftOf, herdrAgent, isPrompt, linear, promptText, readTranscript, repoName, snapshotFrom, tabRenames, workspaceNamed } from "./herdr.mjs";
 import { terminalError } from "./terminals.mjs";
@@ -235,9 +235,10 @@ export function boardState(rows, now = Date.now(), stage = stageOf, delegated = 
     return shown.map((s) => ({
       repo: r.repo,
       tag: sessionTag(r, s),
-      kind: s.status.kind,
+      // A ⏸ stop waiting on you draws as 💬, the same 輪到你 as a question.
+      kind: s.status.kind === "done" && yourTurn(r, s) ? "waiting" : s.status.kind,
       stage: label ?? null,
-      activity: recycledMark(s, lastActivity(s.status)) || null,
+      activity: lastActivity(s.status) || null,
       since: s.agent?.stateStartedAt ?? null,
       terminal: s.handle,
       autoReply: autoReplyOf(s, delegated),

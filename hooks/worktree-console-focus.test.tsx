@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { columns, statusCell, wrapColumns } from './status-view.ts'
-import { focusBandRows, MARK_SPIN, MARK_STILL } from './worktree-console-focus.tsx'
+import { MARK_SPIN, MARK_STILL, fitRow, keysWidth } from './worktree-console-focus.tsx'
 import { THEMES } from './console-theme.ts'
 
 const PLUGIN = 'worktree-console'
@@ -64,21 +64,34 @@ type World = { focus: any; sheet?: any; opens?: string[]; askGate?: Promise<void
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
 const appearanceConfig = new WeakMap<World, AppearanceConfig | string>()
 
+// The band rows `console.mjs focus` composes for this current stop and queue, as band.mjs writes them.
+const bandOf = (current: string | null, queue: string[]) => {
+  const [label, color] = SESSIONS.find(s => s.tag === current)?.status === '等待授權' ? ['等待授權', 'blocked'] : ['輪到你', 'waiting']
+  return {
+  title: '狀態',
+  rail: current ? color : 'dim',
+  rows: [
+    current
+      ? { variants: [[{ text: '◆', color }, { text: ` ${label}  `, color, bold: true }, { text: current, bold: true }]], keys: [...(queue.length ? [{ key: '8', label: '延後處理', action: 'later' }] : []), { key: '9', label: '顯示問題', action: 'show' }, { key: '0', label: '面板', action: 'pane' }] }
+      : { variants: [[{ text: '等待  ', color: 'waiting' }, ...queue.map(t => ({ text: t, color: 'waiting', bold: true }))]], keys: [{ key: '0', label: '面板', action: 'pane' }] },
+  ],
+  }
+}
+
 const focusOf = (current: string, queue: string[], extra: object = {}) => ({
   active: true,
   home: HOME,
   current: keyOf(current),
-  announce: null,
   waiting: null,
-  queue: queue.map(t => ({ key: keyOf(t), isNew: false })),
-  stats: STATS,
+  queue: queue.map(t => ({ key: keyOf(t) })),
+  band: bandOf(current, queue),
   sessions: SESSIONS,
   ...extra,
 })
 
 const pending = () => focusOf('perm', ['focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
 
-// Answers `node console.mjs <sub>` from the world: focus-pick puts that key on the band, focus-later sends the current one to the back, unarchive clears that tag's archived flag.
+// Answers `node console.mjs <sub>` from the world: focus-later sends the current one to the back, unarchive clears that tag's archived flag.
 function fakeConsole(on: On, world: World) {
   on('process.run', async (_$, e) => {
     if (e.argv[0] === 'open') {
@@ -92,12 +105,11 @@ function fakeConsole(on: On, world: World) {
     const args = e.argv.slice(2)
     world.calls.push([...args])
     const f = world.focus
-    if (args[0] === 'focus-pick' && f.active) {
-      const keys = [f.current, ...f.queue.map((q: any) => q.key)]
-      world.focus = { ...f, current: args[1], queue: keys.filter(k => k !== args[1]).map(key => ({ key, isNew: false })), announce: f.sessions.find((s: Card) => s.key === args[1]).tag }
-    } else if (args[0] === 'focus-later' && f.active) {
+    if (args[0] === 'focus-later' && f.active && f.current) {
       const [next, ...rest] = f.queue
-      world.focus = { ...f, current: next.key, queue: [...rest, { key: f.current, isNew: false }], announce: f.sessions.find((s: Card) => s.key === next.key).tag }
+      const tagOf = (key: string) => f.sessions.find((s: Card) => s.key === key).tag
+      const queue = [...rest, { key: f.current }]
+      world.focus = { ...f, current: next.key, queue, band: bandOf(tagOf(next.key), queue.map((q: any) => tagOf(q.key))) }
     } else if (args[0] === 'review') {
       return { value: await fakeReview(world, args) }
     } else if (args[0] === 'unarchive') {
@@ -105,7 +117,6 @@ function fakeConsole(on: On, world: World) {
       return { value: { exitCode: 0, stdout: `[${args[1]}] 已取消封存\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     const stdout = JSON.stringify(world.focus)
-    if (args[0] === 'focus' && !world.sticky) world.focus = { ...world.focus, announce: null }
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
 }
@@ -254,436 +265,149 @@ const arrowTo = ($: any, tag: string) => $.ui.focus({ component: 'Pane', request
 const texts = async (ui: any) => (await ui.findAll({ type: 'Text' })).map((x: any) => x.text)
 const labels = async (ui: any) => (await ui.findAll({ type: 'Button' })).map((b: any) => `${b.props.hotkey ? `${b.props.hotkey}: ` : ''}${b.props.label}`)
 
-const headRow = async (ui: any) => {
+// Each band row as `│ <left>`, with ` ‖ <keys>` when the row carries keys on its right.
+const bandText = async (ui: any) => {
   const root = await ui.drawn()
-  return findKey(root, 'band-head')
+  const rows: string[] = []
+  for (let i = 0; ; i++) {
+    const row = findKey(root, `band-row:${i}`)
+    if (!row) break
+    const keys = findKey(row, `band-keys:${i}`)
+    rows.push(`│ ${textOf(row.children[0])}${keys ? ` ‖ ${textOf(keys)}` : ''}`)
+  }
+  return rows
 }
-
-test('band header: status icon, status word and 代號 on the left, 8 延後處理 · 9 顯示問題 on the right in the dim colour; the whole question; 0 面板 and queue 1–5 below', async ($, on) => {
-  const w = world(pending())
-  await start($, on, w)
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...band(), surface })
-    const head = await headRow(ui)
-    expect(head.props.width).toBe(160 - 4)
-    expect(head.props.justifyContent).toBe('space-between')
-    const [left, right] = head.children
-    expect(textOf(left)).toBe('◆ 待授權  perm')
-    expect(right.props.key).toBe('band-actions')
-    expect(drawnText(right)).toBe('8: 延後處理 · 9: 顯示問題')
-    expect((await ui.find({ key: 'show' }))?.props).toMatchObject({ hotkey: '9', label: '顯示問題' })
-    expect((await ui.find({ key: 'later' }))?.props).toMatchObject({ hotkey: '8', label: '延後處理' })
-    expect(paintOf(await ui.drawn(), '顯示問題')?.color).toBe(THEMES.neutral.dim)
-    expect(paintOf(await ui.drawn(), '延後處理')?.color).toBe(THEMES.neutral.dim)
-    expect((await ui.find({ key: 'question' }))?.text).toBe('Bash rm -rf build')
-    expect(await labels(ui)).toEqual(['8: 延後處理', '9: 顯示問題', '1: focusui', '2: logging', '3: PROJ-6668', '4: upgrade#2', '0: 面板'])
-    expect((await ui.find({ key: 'queue:0' }))?.props.dimColor).toBe(true)
-    await ui.unmount()
-  }
-})
-
-test('band header: an empty queue leaves only 9 顯示問題, still on the right; the old row of buttons is gone and its row goes to the question', async ($, on) => {
-  const w = world(focusOf('perm', []))
-  await start($, on, w)
-  const ui = await $.ui.mount({ ...band(80, 20), surface: 'terminal' })
-  const head = await headRow(ui)
-  expect(drawnText(head.children[1])).toBe('9: 顯示問題')
-  expect(await ui.find({ key: 'later' })).toBeUndefined()
-  const root = await ui.drawn()
-  expect(root.children.filter((c: any) => typeof c !== 'string').map((c: any) => c.props.key ?? null)).toEqual([null, null, null, 'keys', null])
-  expect(focusBandRows({ cols: 80, maxRows: 20, question: 'q', queue: [], hiddenCount: 0 }).actions).toBe(0)
-  expect(focusBandRows({ cols: 80, maxRows: 20, question: 'q', queue: [{ tag: 'a', isNew: false }], hiddenCount: 0 }).actions).toBe(0)
-  await ui.unmount()
-})
-
-test('band header at 40 columns: a long 代號 is cut with …, both buttons stay whole, and the header is one row', async ($, on) => {
-  const long = 'feat/backend-api-request-comment'
-  const w = world({ ...focusOf(long, ['focusui']), sessions: [card(long), ...SESSIONS] })
-  await start($, on, w)
-  for (const cols of [40, 46, 60]) {
-    const ui = await $.ui.mount({ ...band(cols, 20), surface: 'terminal' })
-    const head = await headRow(ui)
-    const name = (await ui.find({ key: 'band-name' }))!.text
-    expect(name.endsWith('…')).toBe(true)
-    expect(long.startsWith(name.slice(0, -1))).toBe(true)
-    expect(drawnText(head.children[1])).toBe('8: 延後處理 · 9: 顯示問題')
-    const used = cardWidth(textOf(head.children[0])) + cardWidth(drawnText(head.children[1]))
-    expect(used).toBeLessThanOrEqual(cols - 4)
-    expect(cardLines(head, cols - 4).filter(line => line.trim())).toHaveLength(1)
-    await ui.unmount()
-  }
-})
-
-test('band: the queue shows at most 5 (1–5) and a new one is marked ✨; nothing sits on 6 or 7; 8 延後處理 only while the queue has one', async ($, on) => {
-  const many = Array.from({ length: 9 }, (_, i) => card(`t${i}`))
-  const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [...SESSIONS, ...many] })
-  w.focus.queue[1].isNew = true
-  const clock = await start($, on, w)
-  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  expect(await labels(ui)).toEqual(['8: 延後處理', '9: 顯示問題', '1: t0', '2: t1 ✨', '3: t2', '4: t3', '5: t4', '0: 面板'])
-  expect((await ui.findAll({ type: 'Button' })).filter((b: any) => ['6', '7'].includes(b.props.hotkey))).toEqual([])
-  await ui.unmount()
-  w.focus = focusOf('perm', [])
-  await clock.advance(5_000)
-  const alone = await $.ui.mount({ ...band(), surface: 'terminal' })
-  expect(await labels(alone)).toEqual(['9: 顯示問題', '0: 面板'])
-  await alone.unmount()
-})
-
-test('band: the question takes one line, cut with … past the line; the header and key rows keep their rows and places', async ($, on) => {
-  const long = '這是一題很長的問題，'.repeat(30)
-  const shortQ = '要刪掉 build 嗎？'
-  const withQuestion = (question: string) => ({ ...pending(), sessions: SESSIONS.map(s => (s.tag === 'perm' ? { ...s, question } : s)) })
-  const w = world(withQuestion(long))
-  const clock = await start($, on, w)
-  const shape = (n: any): any => (typeof n === 'string' ? 's' : { type: n.type, height: n.props?.height, key: n.props?.key, children: (n.children ?? []).map(shape) })
-  const layout = async (ui: any) => shape(await ui.drawn()).children.map((row: any) => ({ ...row, children: row.key === undefined && row.height === 1 ? row.children.length : row.children }))
-  for (const cols of [160, 40]) {
-    w.focus = withQuestion(long)
-    await clock.advance(5_000)
-    const ui = await $.ui.mount({ ...band(cols, 20), surface: 'terminal' })
-    const cut = (await ui.find({ key: 'question' }))!.text
-    expect(cut.endsWith('…')).toBe(true)
-    expect(long.startsWith(cut.slice(0, -1))).toBe(true)
-    expect(columns(cut)).toBeLessThanOrEqual(cols - 6)
-    expect((await ui.find({ type: 'Text', text: '這是一題' }))?.props.wrap).toBe('truncate-end')
-    const before = await layout(ui)
-    await ui.unmount()
-    w.focus = withQuestion(shortQ)
-    await clock.advance(5_000)
-    const short = await $.ui.mount({ ...band(cols, 20), surface: 'terminal' })
-    expect((await short.find({ key: 'question' }))?.text).toBe(shortQ)
-    expect(await layout(short)).toEqual(before)
-    await short.unmount()
-  }
-})
 
 const withAdvice = (advice: any, tag = 'focusui') => ({ ...focusOf(tag, ['logging']), sessions: SESSIONS.map(s => (s.tag === tag ? { ...s, advice } : s)) })
 const READY = { state: 'ready', text: '建議：b，兩邊都改才一致', answer: 'b', reason: '兩邊都改才一致', principle: null }
-const rowKeys = async (ui: any) => (await ui.drawn()).children.filter((c: any) => typeof c !== 'string').map((c: any) => (c.children ?? []).map((x: any) => x?.props?.key).find((k: any) => k === 'question' || k === 'advice') ?? c.props?.key ?? null)
+const r = (text: string, color?: string, bold?: boolean) => ({ text, ...(color ? { color } : {}), ...(bold ? { bold: true } : {}) })
+const PANE_KEY = { key: '0', label: '面板', action: 'pane' }
+// What band.mjs composes for flow on the band with an advisor suggestion, tidy waiting, unit answered for you, advisor-loop running, polish closable.
+const DESIGN = {
+  title: '狀態',
+  rail: 'waiting',
+  rows: [
+    { variants: [[r('◆', 'waiting'), r(' 輪到你  ', 'waiting', true), r('flow', undefined, true)]], keys: [{ key: '8', label: '延後處理', action: 'later' }, { key: '9', label: '顯示問題', action: 'show' }, PANE_KEY] },
+    { variants: [[r('  建議  ', 'accent'), r('a', undefined, true), r(' 全照建議並動工'), r('  7 題都照建議就能定稿', 'dim')]] },
+    {
+      variants: [[r('  '), r('等待  ', 'waiting'), r('flow', 'waiting', true), r('  '), r('tidy', 'waiting', true), r('     '), r('自動處理中  ', 'auto'), r('unit'), r('     '), r('在跑  ', 'running'), r('advisor-loop'), r('     '), r('可關閉  ', 'closable'), r('polish', 'closable', true)]],
+    },
+  ],
+}
 
-test('band advice: 建議產生中… under the question while the advisor runs, then 建議：<答案>，<理由> on the next poll; the keys row stays below', async ($, on) => {
-  const w = world(withAdvice({ state: 'pending', text: '建議產生中…' }))
-  const clock = await start($, on, w)
-  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
-  expect(textOf(await ui.find({ key: 'advice' }))).toBe('建議產生中…')
-  expect(paintOf(await ui.drawn(), '建議產生中…')?.color).toBe(THEMES.neutral.dim)
-  expect(await rowKeys(ui)).toEqual([null, null, 'question', 'advice', 'keys', null])
+test('狀態區：照方案 D 畫腳本給的每一行——◆ 輪到你 加代號、建議、分組；按鍵行是 8 延後處理   9 顯示問題   0 面板（數字粗體、說明暗色、隔三格）；不畫題目', async ($, on) => {
+  const w = world(focusOf('logging', ['perm'], { band: DESIGN }))
+  await start($, on, w)
+  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
+  const rows = await bandText(ui)
+  expect(rows[0]).toBe('│ ◆ 輪到你  flow ‖ 8 延後處理   9 顯示問題   0 面板')
+  const head = findKey(await ui.drawn(), 'band-row:0')
+  expect(head.props).toMatchObject({ width: 160 - 4, justifyContent: 'space-between' })
+  expect(rows[1]).toBe('│   建議  a 全照建議並動工  7 題都照建議就能定稿')
+  expect(rows[2]).toBe('│   等待  flow  tidy     自動處理中  unit     在跑  advisor-loop     可關閉  polish')
+  expect(rows).toHaveLength(3)
+  const root = await ui.drawn()
+  expect(textOf(root)).toContain('── 狀態 ')
+  expect(paintOf(root, '8')).toEqual({ color: undefined, bold: true })
+  expect(paintOf(root, ' 延後處理')?.color).toBe(THEMES.neutral.dim)
+  expect(paintOf(root, ' 面板')?.color).toBe(THEMES.neutral.dim)
+  expect(paintOf(root, ' 輪到你  ')).toEqual({ color: THEMES.neutral.waiting, bold: true })
+  expect(paintOf(root, '等待  ')).toEqual({ color: THEMES.neutral.waiting, bold: undefined })
+  expect(paintOf(root, 'tidy')).toEqual({ color: THEMES.neutral.waiting, bold: true })
+  expect(paintOf(root, '自動處理中  ')?.color).toBe(THEMES.neutral.answered)
+  expect(paintOf(root, 'unit')).toEqual({ color: THEMES.neutral.fg, bold: undefined })
+  expect(paintOf(root, '在跑  ')?.color).toBe(THEMES.neutral.busy)
+  expect(paintOf(root, '可關閉  ')?.color).toBe('blueBright')
+  expect(paintOf(root, 'polish')).toEqual({ color: 'blueBright', bold: true })
+  expect(paintOf(root, '  7 題都照建議就能定稿')?.color).toBe(THEMES.neutral.dim)
+  for (const s of SESSIONS) expect(textOf(root)).not.toContain(s.question)
   await ui.unmount()
-  w.focus = withAdvice(READY)
-  await clock.advance(5_000)
-  const ready = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
-  expect(textOf(await ready.find({ key: 'advice' }))).toBe('建議：b 橫條也改清單，兩邊都改才一致')
-  const root = await ready.drawn()
-  expect(paintOf(root, '建議：')?.color).toBe(THEMES.neutral.accent)
-  expect(paintOf(root, 'b')).toMatchObject({ bold: true })
-  expect(paintOf(root, ' 橫條也改清單')?.bold).toBeFalsy()
-  await ready.unmount()
 })
 
-test('band advice: no row when the prediction failed, for 🔐 or when nothing was predicted; the band keeps its old shape', async ($, on) => {
-  const w = world(withAdvice(null))
-  const clock = await start($, on, w)
-  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
-  expect(await ui.find({ key: 'advice' })).toBeUndefined()
-  expect(await rowKeys(ui)).toEqual([null, null, 'question', 'keys', null])
-  await ui.unmount()
-  w.focus = withAdvice(READY, 'perm')
-  w.focus.sessions = w.focus.sessions.map((s: any) => (s.tag === 'perm' ? { ...s, advice: null } : s))
-  w.focus.current = keyOf('perm')
-  await clock.advance(5_000)
-  const perm = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
-  expect(await perm.find({ key: 'advice' })).toBeUndefined()
-  await perm.unmount()
-})
-
-test('band advice: a principle question says its class in the waiting colour; a long reason is cut first with … and the answer, its option and the class stay', async ($, on) => {
-  const w = world(withAdvice({ ...READY, text: '建議：b，兩邊都改才一致（原則性：產品行為與 UX）', principle: '產品行為與 UX' }))
-  const clock = await start($, on, w)
-  const ui = await $.ui.mount({ ...band(120, 20), surface: 'terminal' })
-  expect(textOf(await ui.find({ key: 'advice' }))).toBe('建議：b 橫條也改清單，兩邊都改才一致（原則性：產品行為與 UX）')
-  expect(paintOf(await ui.drawn(), '（原則性：產品行為與 UX）')?.color).toBe(THEMES.neutral.waiting)
-  await ui.unmount()
-  const reason = '這個理由寫得非常非常長，'.repeat(10)
-  w.focus = withAdvice({ ...READY, text: `建議：b，${reason}`, reason, principle: '不可逆或對外動作' })
-  await clock.advance(5_000)
-  for (const cols of [120, 60]) {
-    const cut = await $.ui.mount({ ...band(cols, 20), surface: 'terminal' })
-    const text = textOf(await cut.find({ key: 'advice' }))
-    expect(text.slice(0, 13)).toBe('建議：b 橫條也改清單，這')
-    expect(text.slice(-15)).toBe('…（原則性：不可逆或對外動作）')
-    expect(columns(text)).toBeLessThanOrEqual(cols - 6)
-    await cut.unmount()
+test('狀態區：放不下時畫腳本給的下一種寫法（第一種放得下的），都放不下時把最後一種以 … 截短；不另起一行、不超出寬度', async ($, on) => {
+  const variants = [
+    '  等待  flow  tidy  cards     自動處理中  unit     在跑  advisor-loop  polish2     延後處理  later1     可關閉  polish',
+    '  等待  flow  tidy  cards     自動處理中  unit     在跑 2     延後處理 1     可關閉  polish',
+    '  等待  flow  tidy  cards     自動處理中 1     在跑 2     延後處理 1     可關閉 1',
+    '  等待  flow  +2     自動處理中 1     在跑 2     延後處理 1     可關閉 1',
+    '  等待  +3     自動處理中 1     在跑 2     延後處理 1     可關閉 1',
+  ]
+  const design = { title: '狀態', rail: 'waiting', rows: [DESIGN.rows[0]!, { variants: variants.map(v => [r(v)]) }] }
+  const w = world(focusOf('logging', [], { band: design }))
+  await start($, on, w)
+  for (const [cols, want] of [[160, 0], [100, 1], [86, 2], [78, 3], [72, 4]] as const) {
+    const ui = await $.ui.mount({ ...band(cols), surface: 'terminal' })
+    const rows = await bandText(ui)
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toBe(`│ ${variants[want]}`)
+    await ui.unmount()
   }
-  const narrow = await $.ui.mount({ ...band(40, 20), surface: 'terminal' })
-  const tight = textOf(await narrow.find({ key: 'advice' }))
-  expect(tight.slice(0, 4)).toBe('建議：b')
-  expect(columns(tight)).toBeLessThanOrEqual(34)
-  await narrow.unmount()
-  expect(focusBandRows({ cols: 80, maxRows: 4, question: 'q', queue: [], hiddenCount: 0, advice: READY as any }).advice).toBe(0)
-  const exact = focusBandRows({ cols: 29, maxRows: 20, question: 'q', queue: [], hiddenCount: 0, advice: { ...READY, answer: 'b', reason: '一二三四五六七' } as any })
-  expect(exact.adviceParts.map(p => p.text).join('')).toBe('建議：b，一二三四五六七')
-  const longOption = '兩個通知下拉選單底部都加「通知設定」'
-  const roomy = focusBandRows({ cols: 110, maxRows: 20, question: 'q', queue: [], hiddenCount: 0, options: [longOption, '開關'], advice: { ...READY, answer: 'a', reason: '一鍵到設定頁最順手' } as any })
-  expect(roomy.adviceParts.map(p => p.text).join('')).toBe(`建議：a ${longOption}，一鍵到設定頁最順手`)
-  const bare = focusBandRows({ cols: 80, maxRows: 20, question: 'q', queue: [], hiddenCount: 0, advice: { ...READY, answer: '先跑測試', reason: '' } as any })
-  expect(bare.adviceParts.map(p => p.text).join('')).toBe('建議：先跑測試')
+  const ui = await $.ui.mount({ ...band(30), surface: 'terminal' })
+  const rows = await bandText(ui)
+  expect(rows[1]!.endsWith('…')).toBe(true)
+  expect(rows[0]).toBe('│ ◆ 輪到你  flow ‖ 8 9 0')
+  for (const row of rows) expect(columns(row.replace(' ‖ ', ''))).toBeLessThanOrEqual(30 - 2)
+  expect(fitRow([[r('abc'), r('defgh')]], 6).map(x => x.text)).toEqual(['abc', 'de…'])
+  expect(keysWidth(DESIGN.rows[0]!.keys as any)).toBe(columns('8 延後處理   9 顯示問題   0 面板'))
+  await ui.unmount()
 })
 
-test('band keys: 1–5 switch to that question and print it, 8 (延後處理) sends it behind the queue and prints the next, 9 (顯示問題) prints the one on screen, 0 opens the pane with the keyboard', async ($, on) => {
+test('狀態區：等某個 session 回應時第一行是 ◌ 等 <代號> 回應中…（代號粗體），有別題在等時右邊是 8 先處理下一件   0 面板；什麼都沒有時不畫狀態區', async ($, on) => {
+  const waitBand = {
+    title: '狀態',
+    rail: 'dim',
+    rows: [
+      { variants: [[r('◌ 等 ', 'dim'), r('flow', undefined, true), r(' 回應中…', 'dim'), r('　你回了  ', 'dim'), r('4 b、10 a，其他照建議')]], keys: [{ key: '8', label: '先處理下一件', action: 'next' }, PANE_KEY] },
+      { variants: [[r('  '), r('等待  ', 'waiting'), r('tidy', 'waiting', true), r('     '), r('在跑  ', 'running'), r('flow')]] },
+    ],
+  }
+  const w = world(focusOf('logging', ['perm'], { current: null, waiting: { tag: 'flow' }, band: waitBand }))
+  const clock = await start($, on, w)
+  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
+  const rows = await bandText(ui)
+  expect(rows[0]).toBe('│ ◌ 等 flow 回應中…　你回了  4 b、10 a，其他照建議 ‖ 8 先處理下一件   0 面板')
+  expect(rows[1]).toBe('│   等待  tidy     在跑  flow')
+  expect(paintOf(findKey(await ui.drawn(), 'band-row:0'), 'flow')?.bold).toBe(true)
+  expect((await ui.find({ key: 'show' }))).toBeUndefined()
+  await ui.press({ key: 'later' })
+  expect(w.calls.at(-1)).toEqual(['focus-later'])
+  await ui.unmount()
+  w.focus = { ...w.focus, band: { title: '狀態', rail: 'dim', rows: [] } }
+  await clock.advance(5_000)
+  const empty = await $.ui.mount({ ...band(), surface: 'terminal' })
+  expect(await bandText(empty)).toEqual([])
+  expect(textOf(await empty.drawn())).not.toContain('狀態')
+  await empty.unmount()
+})
+
+test('狀態區按鍵：8 跑 focus-later、9 印目前這件、0 開面板；1–5 不是狀態區的鍵（輸入框空白時照常打字）', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  await ui.press({ key: 'queue:2' })
-  expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('PROJ-6668')])
-  expect(w.shown).toEqual(['PROJ-6668'])
-  expect(w.writes[`${HOME}/show/PROJ-6668.md`]).toContain('### 💬 PROJ-6668 等你回應')
-  expect(await labels(ui)).toEqual(['8: 延後處理', '9: 顯示問題', '1: perm', '2: focusui', '3: logging', '4: upgrade#2', '0: 面板'])
+  const hotkeys = (await ui.findAll({ type: 'Button' })).map((b: any) => b.props.hotkey).filter(Boolean)
+  expect(hotkeys).toEqual(['8', '9', '0'])
   await ui.press({ key: 'later' })
   expect(w.calls.at(-1)).toEqual(['focus-later'])
-  expect(w.shown.at(-1)).toBe('perm')
-  expect(await labels(ui)).toEqual(['8: 延後處理', '9: 顯示問題', '1: focusui', '2: logging', '3: upgrade#2', '4: PROJ-6668', '0: 面板'])
-  await ui.press({ key: 'queue:3' })
-  expect((await ui.find({ key: 'band-name' }))?.text).toBe('PROJ-6668')
-  expect((await ui.find({ key: 'show' }))?.props).toMatchObject({ hotkey: '9', label: '顯示問題' })
-  expect(await labels(ui)).not.toContain('9: 題目')
+  expect(w.shown).toEqual([])
+  expect(await bandText(ui)).toEqual(['│ ◆ 輪到你  focusui ‖ 8 延後處理   9 顯示問題   0 面板'])
   await ui.press({ key: 'show' })
-  await ui.press({ key: 'show' })
-  expect(w.shown.slice(-2)).toEqual(Array(2).fill(`PROJ-6668 ${idOf(keyOf('PROJ-6668'))}`))
-  expect(w.writes[`${HOME}/show/PROJ-6668.md`]).toBe(SESSIONS.find(s => s.tag === 'PROJ-6668')!.report)
+  expect(w.shown).toEqual([`focusui ${idOf(keyOf('focusui'))}`])
+  expect(w.writes[`${HOME}/show/focusui.md`]).toBe(SESSIONS.find(s => s.tag === 'focusui')!.report)
   await ui.press({ key: 'pane' })
   expect(w.opened.at(-1)).toMatchObject({ id: PANE, focus: true })
   await ui.unmount()
 })
 
-test('a new question elsewhere: the band keeps its question, the queue grows with ✨, a toast says so and nothing reaches the conversation', async ($, on) => {
+test('不主動跳題：目前這件換人（換題、回完輪到下一件）時不送 /focus-show、不跳浮動通知；別的 session 有新題也不跳「進排隊」通知', async ($, on) => {
   const w = world(focusOf('perm', ['focusui']))
   const clock = await start($, on, w)
-  expect(w.toasts).toEqual([])
-  w.focus = { ...focusOf('perm', ['focusui', 'logging']), stats: STATS.replace('等待回應 3', '等待回應 4') }
-  w.focus.queue[1].isNew = true
+  w.focus = focusOf('focusui', ['logging', 'perm'])
   await clock.advance(5_000)
-  expect(w.toasts).toEqual(['logging 進排隊：照建議在真實中控台驗過了嗎？'])
+  w.focus = focusOf('focusui', ['logging', 'perm', 'PROJ-6668'])
+  await clock.advance(5_000)
   expect(w.shown).toEqual([])
-  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  expect((await ui.find({ key: 'band-name' }))?.text).toBe('perm')
-  expect(await labels(ui)).toContain('2: logging ✨')
-  await ui.unmount()
-  await clock.advance(5_000)
-  expect(w.toasts).toHaveLength(1)
-})
-
-test('the question on screen changing by itself is printed once through /focus-show, never through the model', async ($, on) => {
-  const w = world({ ...focusOf('perm', ['focusui']), announce: 'perm' })
-  const clock = await start($, on, w)
-  expect(w.shown).toEqual(['perm'])
-  await clock.advance(5_000)
-  expect(w.shown).toEqual(['perm'])
-  w.focus = { ...focusOf('focusui', []), announce: 'focusui' }
-  await clock.advance(5_000)
-  expect(w.shown).toEqual(['perm', 'focusui'])
-  expect(w.writes[`${HOME}/show/focusui.md`]).toContain('### 💬 focusui 等你回應')
-})
-
-test('an announce is printed once though polls repeat it, then reported with focus-shown; the poll carries the session id', async ($, on) => {
-  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true }
-  const clock = await start($, on, w)
-  await clock.advance(5_000)
-  await clock.advance(5_000)
-  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-  const [first, ...rest] = w.calls.filter(c => c[0] === 'focus')
-  expect(first!.slice(1)).toEqual(['--session', 'console-session', '--owner', 'console-session@1000', '--typing', '0', '--claim'])
-  expect(rest[0]!.slice(1)).toEqual(['--session', 'console-session', '--owner', 'console-session@1000', '--typing', '0'])
-})
-
-test('每次輪詢都帶 --typing：中控台輸入框有字時是 --typing 1（伺服器這時不代回），清空或只有空白後回到 --typing 0', async ($, on) => {
-  const w = world(pending())
-  let draft = ''
-  on('prompt.read', async () => ({ value: { text: draft, cursor: draft.length } }))
-  const clock = await start($, on, w)
-  const typing = () => w.calls.filter(c => c[0] === 'focus').map(c => c[c.indexOf('--typing') + 1])
-  expect(typing()).toEqual(['0'])
-  draft = 'perm 先'
-  await clock.advance(5_000)
-  draft = '   '
-  await clock.advance(5_000)
-  draft = ''
-  await clock.advance(5_000)
-  expect(typing()).toEqual(['0', '1', '0', '0'])
-  expect(w.calls.filter(c => c[0] === 'focus').every(c => c.filter(x => x === '--typing').length === 1)).toBe(true)
-})
-
-test('a stop that left the band and came back is announced again, so a print skipped while it was away is not lost', async ($, on) => {
-  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true }
-  const clock = await start($, on, w)
-  w.focus = { ...focusOf('focusui', ['perm']), announce: 'focusui', announceKey: keyOf('focusui') }
-  await clock.advance(5_000)
-  w.focus = { ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }
-  await clock.advance(5_000)
-  await clock.advance(5_000)
-  const id = idOf(keyOf('perm'))
-  expect(w.shown).toEqual([`perm ${id}`, `focusui ${idOf(keyOf('focusui'))}`, `perm ${id}`])
-})
-
-test('an announced stop is printed with its id from a file of its own, and the plain 代號 file stays fresh for a hand-typed /focus-show', async ($, on) => {
-  const w = world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') })
-  await start($, on, w)
-  const id = idOf(keyOf('perm'))
-  expect(w.shown).toEqual([`perm ${id}`])
-  expect(w.writes[`${HOME}/show/perm@${id}.md`]).toBe(SESSIONS.find(s => s.tag === 'perm')!.report)
-  expect(w.writes[`${HOME}/show/perm.md`]).toBe(SESSIONS.find(s => s.tag === 'perm')!.report)
-})
-
-test('漏印重送: a /focus-show the console drops (it answers without the report) is not reported as shown and goes again on the next poll; printed once, then focus-shown once', async ($, on) => {
-  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, lost: 1 }
-  const clock = await start($, on, w)
-  const id = idOf(keyOf('perm'))
-  expect(w.dropped).toEqual([`perm ${id}`])
-  expect(w.shown).toEqual([])
+  expect(w.toasts).toEqual([])
   expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
-  await clock.advance(5_000)
-  expect(w.shown).toEqual([`perm ${id}`])
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-  await clock.advance(5_000)
-  await clock.advance(5_000)
-  expect(w.shown).toEqual([`perm ${id}`])
-  expect(w.toasts).toEqual([])
-})
-
-test('漏印重送: three misses in a row toast 「[perm] 題目沒印出，按 9 印」 once; it keeps trying and prints once the console takes it', async ($, on) => {
-  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, lost: 4 }
-  const clock = await start($, on, w)
-  const id = idOf(keyOf('perm'))
-  await clock.advance(5_000)
-  expect(w.toasts).toEqual([])
-  await clock.advance(5_000)
-  expect(w.toasts).toEqual(['[perm] 題目沒印出，按 9 印'])
-  await clock.advance(5_000)
-  expect(w.toasts).toEqual(['[perm] 題目沒印出，按 9 印'])
-  expect(w.shown).toEqual([])
-  await clock.advance(5_000)
-  expect(w.dropped).toEqual(Array(4).fill(`perm ${id}`))
-  expect(w.shown).toEqual([`perm ${id}`])
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-  await clock.advance(5_000)
-  expect(w.shown).toEqual([`perm ${id}`])
-})
-
-test('漏印重送: after the toast, d on the card and 印出完整回報 print the question and reports it shown, so the next poll does not print it again', async ($, on) => {
-  const lone = { ...world({ ...focusOf('perm', []), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, lost: 3 }
-  const clock = await start($, on, lone)
-  const id = idOf(keyOf('perm'))
-  await clock.advance(5_000)
-  await clock.advance(5_000)
-  expect(lone.toasts).toEqual(['[perm] 題目沒印出，按 9 印'])
-  await openPane($)
-  const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
-  await printFromBrief($, ui, keyOf('perm'))
-  expect(lone.shown).toEqual([`perm ${id}`])
-  expect(lone.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-  await ui.unmount()
-  lone.focus = { ...lone.focus, announce: null, announceKey: null }
-  await clock.advance(5_000)
-  expect(lone.shown).toEqual([`perm ${id}`])
-})
-
-test('漏印重送: a rejected /focus-show is never reported as shown; it is tried every poll and after 3 tries the toast says focus-show is missing', async ($, on) => {
-  const w = { ...world({ ...focusOf('perm', []), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, showFails: true }
-  const clock = await start($, on, w)
-  await clock.advance(5_000)
-  expect(w.toasts).toEqual([])
-  await clock.advance(5_000)
-  await clock.advance(5_000)
-  expect(w.toasts).toEqual(['印不出題目：需要另外安裝 focus-show'])
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
-})
-
-for (const skip of ['[perm] 這題已不在橫條上，略過', '[perm] 這題已回覆或已交棒，略過']) {
-  test(`漏印重送（回略過不重送）: a /focus-show answering 「${skip}」 is not reported as shown and goes again on the next poll; printed once, then focus-shown once`, async ($, on) => {
-    const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, skips: [skip] }
-    const clock = await start($, on, w)
-    const id = idOf(keyOf('perm'))
-    expect(w.shown).toEqual([`perm ${id}`])
-    expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
-    await clock.advance(5_000)
-    expect(w.shown).toEqual([`perm ${id}`, `perm ${id}`])
-    expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-    await clock.advance(5_000)
-    await clock.advance(5_000)
-    expect(w.shown).toHaveLength(2)
-    expect(w.toasts).toEqual([])
-  })
-}
-
-test('漏印重送: three 略過 answers in a row toast 「[perm] 題目沒印出，按 9 印」 once and stop sending it by itself; 9 still prints it and reports it shown', async ($, on) => {
-  const skip = '[perm] 這題已不在橫條上，略過'
-  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, skips: [skip, skip, skip] }
-  const clock = await start($, on, w)
-  const id = idOf(keyOf('perm'))
-  await clock.advance(5_000)
-  expect(w.toasts).toEqual([])
-  await clock.advance(5_000)
-  expect(w.toasts).toEqual(['[perm] 題目沒印出，按 9 印'])
-  for (let i = 0; i < 3; i++) await clock.advance(5_000)
-  expect(w.shown).toEqual(Array(3).fill(`perm ${id}`))
-  expect(w.toasts).toEqual(['[perm] 題目沒印出，按 9 印'])
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
-  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  await ui.press({ key: 'show' })
-  await ui.unmount()
-  expect(w.shown).toEqual(Array(4).fill(`perm ${id}`))
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-})
-
-test('漏印重送: the report coming back between 略過 answers resets the count, so two more misses after it do not toast', async ($, on) => {
-  const skip = '[perm] 這題已不在橫條上，略過'
-  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, skips: [skip, skip] }
-  const clock = await start($, on, w)
-  const id = idOf(keyOf('perm'))
-  await clock.advance(5_000)
-  await clock.advance(5_000)
-  expect(w.shown).toEqual(Array(3).fill(`perm ${id}`))
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-  w.skips = [skip, skip]
-  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  await ui.press({ key: 'show' })
-  await ui.press({ key: 'show' })
-  await ui.unmount()
-  expect(w.shown).toEqual(Array(5).fill(`perm ${id}`))
-  expect(w.toasts).toEqual([])
-})
-
-test('a /focus-show that cannot read focus.json\'s format answers one line: polls never send it again, and it is not reported as shown', async ($, on) => {
-  const answer = '[perm] 印不出題目：focus-show 太舊，不認得這個檔案格式，請更新 focus-show'
-  const w = { ...world({ ...focusOf('perm', ['focusui']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true, answer }
-  const clock = await start($, on, w)
-  for (let i = 0; i < 4; i++) await clock.advance(5_000)
-  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([])
-  expect(w.toasts).toEqual([])
-})
-
-test('漏印重送: 回完答案後 60 秒內同一 session 又出題 while the console is still on its turn; /focus-show <代號> <編號> of the new stop is sent again and printed once', async ($, on) => {
-  const first = focusOf('perm', ['focusui'])
-  const w = { ...world({ ...first, announce: 'perm', announceKey: keyOf('perm') }), sticky: true }
-  const clock = await start($, on, w)
-  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
-  w.focus = { ...first, current: null, waiting: { tag: 'perm', seconds: 60 }, announce: null, announceKey: null }
-  await clock.advance(5_000)
-  const next = 'perm@2'
-  const report = '### 🔐 perm 等你授權\n\n> Bash rm -rf dist'
-  const sessions = SESSIONS.map(s => (s.tag === 'perm' ? { ...s, key: next, id: idOf(next), question: 'Bash rm -rf dist', report } : s))
-  w.focus = { ...first, current: next, sessions, waiting: null, announce: 'perm', announceKey: next }
-  w.lost = 1
-  await clock.advance(5_000)
-  expect(w.dropped).toEqual([`perm ${idOf(next)}`])
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')]])
-  await clock.advance(5_000)
-  await clock.advance(5_000)
-  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`, `perm ${idOf(next)}`])
-  expect(w.writes[`${HOME}/show/perm@${idOf(next)}.md`]).toBe(report)
-  expect(w.calls.filter(c => c[0] === 'focus-shown')).toEqual([['focus-shown', keyOf('perm')], ['focus-shown', next]])
 })
 
 test('the console\'s prompt hint is the engine\'s own: nothing is added after auto mode on, with sessions working, answered or none', async ($, on) => {
@@ -765,7 +489,7 @@ test('pane groups by repo outside 待回覆: `── <repo> ── 共 N 個` co
   await ui.unmount()
 })
 
-test('cards: number (none on the question on screen) and nickname button, status icon and word, then the question in grey on the first row; branch and repo on the second; no stage on any tab, no options, never 建議; no frame and no rail: the status colour sits on the status icon, the chosen card leads with an accent ✻ mark and its name in the accent', async ($, on) => {
+test('cards: number (none on the question on screen) and nickname button, status icon and word on the first row, never the question; branch and repo on the second; no stage on any tab, no options, never 建議; no frame and no rail: the status colour sits on the status icon, the chosen card leads with an accent ✻ mark and its name in the accent', async ($, on) => {
   const w = world(focusOf('focusui', ['perm', 'logging', 'PROJ-6668', 'upgrade#2']))
   await start($, on, w)
   await openPane($)
@@ -784,7 +508,9 @@ test('cards: number (none on the question on screen) and nickname button, status
     expect((await ui.find({ type: 'Text', text: 'focusui' }))?.props).toMatchObject({ color: THEMES.neutral.accent, bold: true })
     expect([(await ui.find({ type: 'Text', text: 'perm' }))?.props.color, (await ui.find({ type: 'Text', text: 'perm' }))?.props.bold]).toEqual([THEMES.neutral.fg, true])
     const head = (await ui.find({ key: `card-head:${keyOf('focusui')}` }))!.text
-    expect(head).toContain('◆ 待回答  focusui  展示 mod 的樣式要套在哪裡？')
+    expect(head.trim()).toBe(`${MARK_STILL}    ◆ 待回答  focusui`)
+    expect(textOf(root)).not.toContain('展示 mod')
+    expect(textOf(root)).not.toContain('Bash rm')
     expect(head).not.toContain('agent-skills')
     const b = await bottomOf(ui, keyOf('focusui'))
     expect([b.branchText, b.repoText]).toEqual(['feat/focusui', 'agent-skills'])
@@ -792,14 +518,10 @@ test('cards: number (none on the question on screen) and nickname button, status
     expect(first?.text).not.toContain('建議：')
     expect(first?.text).not.toContain('規劃中')
     expect(first?.text).not.toMatch(/💬|🔐|⏸/)
-    expect((await ui.find({ type: 'Text', text: '展示 mod' }))?.props).toMatchObject({ color: THEMES.neutral.dim, wrap: 'truncate-end' })
-    expect((await ui.find({ type: 'Text', text: '展示 mod' }))?.props.bold).toBeFalsy()
     expect(await ui.find({ key: `num:${keyOf('focusui')}` })).toBeUndefined()
     expect((await ui.find({ key: `num:${keyOf('perm')}` }))?.props).toMatchObject({ hotkey: '1', label: '', plain: true })
     expect((await ui.find({ key: `name:${keyOf('focusui')}` }))?.props).toMatchObject({ label: 'focusui', plain: true })
     expect((await ui.find({ key: `name:${keyOf('focusui')}` }))?.props.hotkey).toBeUndefined()
-    expect((await ui.find({ type: 'Text', text: 'Bash rm' }))?.props).toMatchObject({ color: THEMES.neutral.dim })
-    expect((await ui.find({ type: 'Text', text: 'Bash rm' }))?.props.bold).toBeFalsy()
     expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
     await ui.press({ key: 'tab:all' })
     const permCell = statusCell('等待授權', 0)
@@ -815,7 +537,7 @@ test('cards: number (none on the question on screen) and nickname button, status
 const findKey = (node: any, key: string): any => (node?.props?.key === key ? node : (node?.children ?? []).map((c: any) => (typeof c === 'object' ? findKey(c, key) : null)).find(Boolean))
 const textOf = (node: any): string => (typeof node === 'string' ? node : (node?.children ?? []).map(textOf).join(''))
 
-test('cards on 待回覆, 全部 (idle ones too) and 封存: no frame, two rows and a blank row above; the first row ends in the question in grey, cut with … to the row and never wrapped; the second holds the branch; options never show', async ($, on) => {
+test('cards on 待回覆, 全部 (idle ones too) and 封存: no frame, two rows and a blank row above; no question text at any width; the second holds the branch; options never show', async ($, on) => {
   const long = '這是一個非常長的題目，會遠遠超過卡片的內寬，\n而且還有第二行與第三行的內容，需要被截短成一行並以刪節號結尾'
   const opts = { question: long, options: ['第一個選項', '第二個選項'] }
   const four = [
@@ -838,20 +560,8 @@ test('cards on 待回覆, 全部 (idle ones too) and 封存: no frame, two rows 
       expect(box.children.length).toBe(2)
       for (const child of box.children) expect([child.props.height, child.props.marginTop ?? 0]).toEqual([1, 0])
       expect(box.props.marginTop).toBe(1)
-      const qbox = findKey(box.children[0], `question:${keyOf(tag)}`)
-      const q = qbox.children[0]
-      expect(q.type).toBe('Text')
-      expect(q.props).toMatchObject({ color: THEMES.neutral.dim, wrap: 'truncate-end' })
-      expect(q.props.bold).toBeFalsy()
-      const line = textOf(q)
-      expect(line.startsWith('這是一個')).toBe(true)
-      expect(line.endsWith('…')).toBe(true)
-      expect(line).not.toContain('\n')
-      // The number, status and their gap, 取消封存 on 封存, the 代號 and 2 cells before the question.
-      const room = cols - 4 - 13 - (tabKey === 'tab:hidden' ? 10 : 0) - cells(tag) - 2
-      expect(qbox.props.width).toBe(room)
-      expect(cells(line)).toBeLessThanOrEqual(room)
-      expect(cells(line)).toBeGreaterThan(room - 2)
+      expect(findKey(box, `question:${keyOf(tag)}`)).toBeUndefined()
+      expect(textOf(box)).not.toContain('這是一個')
       expect(textOf(findKey(box, `branch:${keyOf(tag)}`)).trim()).toBe(`feat/${tag}`)
       expect(textOf(box)).not.toMatch(/a\. |第一個選項|第二個選項/)
     }
@@ -942,34 +652,6 @@ test('卡片第二行寬度：branch 與 repo 之間至少 2 格；放得下就�
   }
 })
 
-test('卡片題目寬度＝標題列寬 − 代號前面各欄 − 代號 − 2 格 − 右端（✓ 建議、需審核 N 件與它前面 1 格）；面板越寬題目顯示越長', async ($, on) => {
-  const q = '這題很長，'.repeat(30)
-  const repos = { perm: { question: q }, focusui: { question: q, review: 3 }, logging: { question: q, advice: { state: 'ready', text: '', answer: 'a', reason: '' } }, 'PROJ-6668': { question: q, review: 12, advice: { state: 'ready', text: '', answer: 'a', reason: '' } } }
-  const w = world(withRepos(repos as any))
-  appearanceConfig.set(w, { motion: false })
-  await start($, on, w)
-  await openPane($)
-  const shown = w.focus.sessions.filter((x: any) => repos[x.tag as keyof typeof repos])
-  const seen: Record<string, number[]> = {}
-  for (const cols of [46, 60, 80, 120]) {
-    const ui = await $.ui.mount({ ...pane(cols), surface: 'terminal' })
-    for (const r of shown) {
-      const h = await headerOf(ui, r.key)
-      const tag = (await ui.find({ key: `name:${r.key}` }))!.props.label as string
-      const hint = r.advice ? (cols >= 46 ? 6 : 1) : 0
-      const label = r.review ? cells(`需審核 ${r.review} 件`) : 0
-      const right = hint + label + (hint && label ? 1 : 0)
-      expect(h.question.props.width).toBe(cols - 4 - 13 - cells(tag) - 2 - (right ? right + 1 : 0))
-      expect(h.gap).toBe(right ? 1 : 0)
-      ;(seen[r.tag] ??= []).push(h.question.props.width)
-      expect(h.questionText.endsWith('…')).toBe(true)
-      expect(cells(h.questionText)).toBeLessThanOrEqual(h.question.props.width)
-    }
-    await ui.unmount()
-  }
-  for (const list of Object.values(seen)) for (let i = 1; i < list.length; i++) expect(list[i]!).toBeGreaterThan(list[i - 1]!)
-})
-
 test('待審核卡片：review > 0 的卡片狀態字換成「待審核」（待回答色），第一行右端靠右寫「需審核 N 件」；review 0 的卡片照原狀態、沒有這段；卡片仍是兩行', async ($, on) => {
   const w = world(withRepos({ focusui: { review: 3 }, tune: { review: 1 } }))
   appearanceConfig.set(w, { motion: false })
@@ -987,7 +669,7 @@ test('待審核卡片：review > 0 的卡片狀態字換成「待審核」（待
       expect(h.right.children.at(-1).props.key).toBe(`card-review:${keyOf(tag)}`)
       expect(textOf(h.right)).toBe(`需審核 ${n} 件`)
       expect(paintOf(h.right, `需審核 ${n} 件`)?.color).toBe(THEMES.neutral.waiting)
-      expect(widthOf(h.left) + 1 + widthOf(h.right)).toBe(cols - 4)
+      expect(widthOf(h.left) + 1 + widthOf(h.right)).toBeLessThanOrEqual(cols - 4)
       expect(findKey(root, `card:${keyOf(tag)}`).children).toHaveLength(2)
     }
     expect(textOf(findKey(root, `status:${keyOf('logging')}`))).toBe('◆ 待回答')
@@ -1014,7 +696,7 @@ test('代回中卡片：autoReply 有值的卡片狀態寫「↻ 代回中」（
 })
 
 for (const tabKey of ['tab:pending', 'tab:all', 'tab:hidden'] as const) {
-  test(`卡片代號（${tabKey.slice(4)}）：代號太長時題目仍留 8 格、代號以 … 截短，代號與題目之間固定 2 格；標題列永遠一行、不超出面板`, async ($, on) => {
+  test(`卡片代號（${tabKey.slice(4)}）：代號太長時以 … 截短，標題列不畫題目、永遠一行、不超出面板`, async ($, on) => {
     const huge = 'x'.repeat(60)
     const hidden = tabKey === 'tab:hidden'
     const sessions = [
@@ -1033,21 +715,13 @@ for (const tabKey of ['tab:pending', 'tab:all', 'tab:hidden'] as const) {
         expect(findKey(await ui.drawn(), `card-head:${r.key}`).props.height).toBe(1)
         const tagText = hidden ? textOf(h.left.children[2]) : (await ui.find({ key: `name:${r.key}` }))!.props.label as string
         const hint = (r as any).advice ? (cols >= 46 ? 6 : 1) : 0
-        // 取消封存 can leave 封存 no room for 8 cells of question and 4 of 代號: the 代號 keeps 4, the question the rest.
-        const room = cols - 4 - 23 - (hint ? hint + 1 : 0)
+        expect(h.question).toBeUndefined()
+        expect(textOf(h.left)).not.toContain('一個相當長的題目')
         expect(widthOf(h.left) + (hint ? 1 + widthOf(h.right) : 0)).toBeLessThanOrEqual(cols - 4)
-        if (hidden && room - 2 - 8 < 4) {
-          expect(cells(tagText)).toBe(4)
-          continue
-        }
-        expect(h.question).toBeDefined()
-        expect(widthOf(h.left) + (hint ? 1 + widthOf(h.right) : 0)).toBe(cols - 4)
-        if (r.tag === huge || cols < 60) {
-          expect(h.question.props.width).toBe(8)
+        if (r.tag === huge) {
           expect(tagText.endsWith('…')).toBe(true)
           expect(r.tag.startsWith(tagText.slice(0, -1))).toBe(true)
         }
-        expect(cells(h.questionText)).toBeLessThanOrEqual(h.question.props.width)
       }
       await ui.unmount()
     }
@@ -1209,7 +883,7 @@ test('面板背景：0 開面板時要求 Claude Code 不畫面板底色（backg
   await ui.unmount()
 })
 
-test('more than 10 cards on 待回覆: all drawn, the question on screen unnumbered, the queue 1–9 and 0, none after; arrows reach the 11th and 印出完整回報 switches to it and prints it', async ($, on) => {
+test('more than 10 cards on 待回覆: all drawn, the question on screen unnumbered, the queue 1–9 and 0, none after; arrows reach the 11th and 印出完整回報 prints it without changing the band', async ($, on) => {
   const many = Array.from({ length: 12 }, (_, i) => card(`t${i}`))
   const w = world({ ...focusOf('t0', many.slice(1).map(c => c.tag)), sessions: many })
   await start($, on, w)
@@ -1222,42 +896,40 @@ test('more than 10 cards on 待回覆: all drawn, the question on screen unnumbe
   expect((await ui.find({ key: `card:${keyOf('t10')}` }))?.text.startsWith(` ${MARK_STILL}`)).toBe(true)
   expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
   await printFromBrief($, ui, keyOf('t10'))
-  expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('t10')])
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  expect(w.focus.current).toBe(keyOf('t0'))
   expect(w.shown.at(-1)).toBe('t10')
   await ui.unmount()
 })
 
-test('on 待回覆 a number switches the band to that card and the pane reorders with it; the card then has no number; d, then 印出完整回報, prints it again', async ($, on) => {
+test('拿掉切題：待回覆分頁按數字、Enter 或點暱稱只選中卡片，不跑 focus-pick、不換橫條上的題目、不印題目；d 再按印出完整回報才印', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
   expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
-  expect((await ui.find({ key: `card:${keyOf('perm')}` }))?.text.startsWith(` ${MARK_STILL}`)).toBe(true)
   expect((await ui.find({ key: `num:${keyOf('PROJ-6668')}` }))?.props.hotkey).toBe('3')
   await ui.press({ key: `num:${keyOf('PROJ-6668')}` })
-  expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('PROJ-6668')])
-  expect(w.shown).toEqual(['PROJ-6668'])
-  expect(await cardTags(ui)).toEqual(['PROJ-6668', 'perm', 'focusui', 'logging', 'upgrade#2'])
-  expect(await ui.find({ key: `num:${keyOf('PROJ-6668')}` })).toBeUndefined()
-  expect((await ui.find({ key: `num:${keyOf('perm')}` }))?.props.hotkey).toBe('1')
-  expect((await ui.find({ key: `card:${keyOf('PROJ-6668')}` }))?.text.startsWith(` ${MARK_STILL}`)).toBe(true)
-  expect(w.calls.filter(c => c[0] === 'focus-pick')).toHaveLength(1)
+  await ui.press({ key: `name:${keyOf('logging')}` })
+  await ui.press({ key: `num:${keyOf('focusui')}` })
+  expect(w.calls.filter(c => c[0].startsWith('focus-') && c[0] !== 'focus-shown')).toEqual([])
+  expect(w.focus.current).toBe(keyOf('perm'))
+  expect(w.shown).toEqual([])
+  expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'logging', 'PROJ-6668', 'upgrade#2'])
+  expect((await ui.find({ key: `card:${keyOf('focusui')}` }))?.text.startsWith(` ${MARK_STILL}`)).toBe(true)
   await printFromBrief($, ui, keyOf('PROJ-6668'))
-  expect(w.shown).toEqual(['PROJ-6668', `PROJ-6668 ${idOf(keyOf('PROJ-6668'))}`])
+  expect(w.shown).toEqual(['PROJ-6668'])
   await ui.unmount()
 })
 
-test('the pane follows the band while it is open: a switch, a defer or a new question on the band reorders 待回覆 at once', async ($, on) => {
+test('the pane follows the band while it is open: a defer or a new stop on the band reorders 待回覆 at once', async ($, on) => {
   const w = world(pending())
   const clock = await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
   const b = await $.ui.mount({ ...band(), surface: 'terminal' })
-  await b.press({ key: 'queue:1' })
-  expect(await cardTags(ui)).toEqual(['logging', 'perm', 'focusui', 'PROJ-6668', 'upgrade#2'])
   await b.press({ key: 'later' })
-  expect(await cardTags(ui)).toEqual(['perm', 'focusui', 'PROJ-6668', 'upgrade#2', 'logging'])
+  expect(await cardTags(ui)).toEqual(['focusui', 'logging', 'PROJ-6668', 'upgrade#2', 'perm'])
   w.focus = focusOf('upgrade#2', ['perm', 'focusui'])
   await clock.advance(5_000)
   expect(await cardTags(ui)).toEqual(['upgrade#2', 'perm', 'focusui'])
@@ -1282,7 +954,7 @@ test('arrow keys land on the nickname and the chosen card follows them without s
   await ui.unmount()
 })
 
-test('on the other tabs a number only chooses the card, d then 印出完整回報 prints it; a card that also waits on you switches the band', async ($, on) => {
+test('on the other tabs a number only chooses the card, d then 印出完整回報 prints it; a card that also waits on you does not switch the band', async ($, on) => {
   const w = world(pending())
   await start($, on, w)
   await openPane($)
@@ -1296,7 +968,8 @@ test('on the other tabs a number only chooses the card, d then 印出完整回�
   await printFromBrief($, ui, keyOf('tune'))
   expect(w.shown).toEqual(['tune'])
   await ui.press({ key: `num:${keyOf('logging')}` })
-  expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('logging')])
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  expect(w.focus.current).toBe(keyOf('perm'))
   await ui.unmount()
 })
 
@@ -1333,7 +1006,7 @@ test('封存 tab cards carry 取消封存 instead of the nickname button: it run
   expect((await ui.find({ key: `card:${keyOf('PROJ-6650')}` }))?.text).toContain('PROJ-6650')
   await ui.press({ key: `name:${keyOf('PROJ-6650')}` })
   expect(w.calls.at(-2)).toEqual(['unarchive', 'PROJ-6650'])
-  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session', '--owner', 'console-session@1000', '--typing', '0'])
+  expect(w.calls.at(-1)).toEqual(['focus', '--session', 'console-session', '--owner', 'console-session@1000', '--typing', '0', '--turn', '0'])
   expect(w.shown).toEqual([])
   expect(await cardTags(ui)).toEqual([])
   expect((await ui.find({ key: 'tab:hidden' }))?.props.label).toBe('封存 0')
@@ -1356,7 +1029,7 @@ test('outside Orca, or in a session that is not the console, nothing is drawn', 
 })
 
 const EMPTY = '目前沒有符合條件的 session'
-const nothing = () => ({ active: true, home: HOME, current: null, announce: null, waiting: { tag: 'perm', seconds: 3 }, queue: [], stats: STATS, sessions: [] })
+const nothing = () => ({ active: true, home: HOME, current: null, waiting: { tag: 'perm' }, queue: [], band: { title: '狀態', rail: 'dim', rows: [{ variants: [[{ text: '◌ 等 ', color: 'dim' }, { text: 'perm', bold: true }, { text: ' 回應中…', color: 'dim' }]], keys: [{ key: '0', label: '面板', action: 'pane' }] }] }, sessions: [] })
 const cells = (t: string) => [...t].reduce((n, c) => n + (c.codePointAt(0)! > 0x2e80 ? 2 : 1), 0)
 
 test('empty pane: every tab says 目前沒有符合條件的 session, never a bare 目前沒有', async ($, on) => {
@@ -1466,8 +1139,8 @@ test('卡片寬度: a ticketless worktree (backend…) keeps 代號, status and 
     for (const r of w.focus.sessions.filter((x: Card) => x.pending)) {
       const label = (await ui.find({ key: `name:${r.key}` }))?.props.label
       if (r.tag === 'backend…') expect(label).toBe('backend…')
-      // The rail and the right margin, the number and status columns, the stage on the right from 46 columns.
-      const room = cols - 3 - 13 - (cols >= 46 ? 7 : 0)
+      // The mark and the right margin, the number and status columns; no question takes room after the 代號.
+      const room = cols - 4 - 13
       if (r.tag === long) expect(cardWidth(long) <= room ? label === long : label.endsWith('…') && long.startsWith(label.slice(0, -1))).toBe(true)
       expect(cardWidth(label)).toBeLessThanOrEqual(room)
     }
@@ -1491,8 +1164,6 @@ test('cards on 全部 and 封存 show their repo on the second row and never the
     await ui.press({ key: 'tab:hidden' })
     expect((await ui.find({ key: `card:${keyOf('PROJ-6650')}` }))?.text).not.toMatch(/規劃中|實作中|已推送|建議：/)
     expect((await ui.find({ key: `card-repo:${keyOf('PROJ-6650')}` }))?.text).toMatch(/^proj-v2/)
-    // 取消封存 takes 10 cells: below 46 columns the row cannot hold 8 cells of question and 4 of 代號, so the 代號 keeps 4.
-    if (cols < 46) expect((await ui.find({ key: `card-head:${keyOf('PROJ-6650')}` }))?.text).toContain('PRO…')
     await ui.press({ key: 'tab:pending' })
     await ui.unmount()
   }
@@ -1587,49 +1258,38 @@ for (const tabKey of ['tab:pending', 'tab:all', 'tab:hidden'] as const) {
   })
 }
 
-test('待回覆 numbers: the question on screen has none; the queue is 1, 2, … in order, the first 5 the same session as the band, and the same number picks the same session in the pane and on the band', async ($, on) => {
+test('待回覆 numbers: the question on screen has none; the queue is 1, 2, … in order; a number only chooses that card and never switches the band', async ($, on) => {
   const many = queued(7)
   const start0 = { ...focusOf('perm', many.map(c => c.tag)), sessions: [...SESSIONS, ...many] }
   const w = world(start0)
-  const clock = await start($, on, w)
+  await start($, on, w)
   await openPane($)
   const ui = await $.ui.mount({ ...pane(), surface: 'terminal' })
-  const b = await $.ui.mount({ ...band(), surface: 'terminal' })
   expect(await ui.find({ key: `num:${keyOf('perm')}` })).toBeUndefined()
   const paneNums = (await ui.findAll({ type: 'Button' })).filter((x: any) => x.key.startsWith('num:')).map((x: any) => [x.props.hotkey, x.key.slice(4)])
   expect(paneNums).toEqual(many.map((c, i) => [String(i + 1), c.key]))
-  const bandNums = (await b.findAll({ type: 'Button' })).filter((x: any) => x.key.startsWith('queue:')).map((x: any) => [x.props.hotkey, keyOf(x.props.label)])
-  expect(bandNums).toEqual(paneNums.slice(0, 5))
   for (const n of [1, 3, 5]) {
-    const paneKey = paneNums[n - 1]![1]
-    await ui.press({ key: `num:${paneKey}` })
-    const fromPane = w.calls.at(-1)
-    w.focus = start0
-    await clock.advance(5_000)
-    await b.press({ key: `queue:${n - 1}` })
-    const fromBand = w.calls.at(-1)
-    expect(fromPane).toEqual(['focus-pick', paneKey])
-    expect(fromBand).toEqual(fromPane)
-    w.focus = start0
-    await clock.advance(5_000)
+    await ui.press({ key: `num:${paneNums[n - 1]![1]}` })
+    expect(await chosenTag(ui)).toBe(`q${n - 1}`)
   }
-  await b.unmount()
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  expect(w.focus.current).toBe(keyOf('perm'))
   await ui.unmount()
 })
 
-test('band: with 6 or more queued it lists 1–5 only; 6 and 7 are no band key, so in an empty prompt they type as usual and switch nothing', async ($, on) => {
+test('狀態區只有 8、9、0 三個鍵：排隊再多，1–7 都不是狀態區的鍵，輸入框空白時照常打進輸入框、不換題', async ($, on) => {
   const many = queued(7)
   const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [...SESSIONS, ...many] })
   await start($, on, w)
   const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
   const hotkeys = (await ui.findAll({ type: 'Button' })).map((x: any) => x.props.hotkey).filter(Boolean)
-  expect(hotkeys).toEqual(['8', '9', '1', '2', '3', '4', '5', '0'])
-  expect((await ui.findAll({ type: 'Button' })).filter((x: any) => x.key.startsWith('queue:')).map((x: any) => x.props.label)).toEqual(['q0', 'q1', 'q2', 'q3', 'q4'])
-  for (const text of ['6', '7']) {
+  expect(hotkeys).toEqual(['8', '9', '0'])
+  for (const text of ['1', '5', '6', '7']) {
     const res = await $.prompt.submit({ text, wait: false, origin: { kind: 'user' } } as any)
     expect(res.text).toBe(text)
   }
   expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  expect(w.focus.current).toBe(keyOf('perm'))
   await ui.unmount()
 })
 
@@ -1644,7 +1304,7 @@ test('待回覆 cards past the 5th go on 6, 7, …; the pane picks them by that 
   expect((await ui.find({ key: `num:${keyOf('q6')}` }))?.props.hotkey).toBe('7')
   expect((await ui.find({ key: `num:${keyOf('q7')}` }))?.props.hotkey).toBe('8')
   await ui.press({ key: `num:${keyOf('q6')}` })
-  expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('q6')])
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
   expect(await chosenTag(ui)).toBe('q6')
   await ui.unmount()
   w.focus = start0
@@ -1656,7 +1316,7 @@ test('待回覆 cards past the 5th go on 6, 7, …; the pane picks them by that 
   const off = await small.find({ key: `num:${keyOf('q6')}` })
   expect(off?.props.hotkey).toBe('7')
   await small.press({ key: `num:${keyOf('q6')}` })
-  expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('q6')])
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
   expect(await chosenTag(small)).toBe('q6')
   expect(await drawnTags(small)).toContain('q6')
   await small.unmount()
@@ -1997,12 +1657,12 @@ for (const cols of [36, 46, 70, 80]) {
     expect(line).toMatch(/… *frontend$/)
     expect(line).not.toContain('實作中')
     expect(cardWidth(line)).toBeLessThanOrEqual(cols - 1)
-    expect(textOf(drawn!.children![0]!)).toContain('要怎麼做？')
+    expect(textOf(drawn!.children![0]!)).not.toContain('要怎麼做？')
     await ui.unmount()
   })
 
   for (const options of [[], ['繼續', '停止']]) {
-    test(`refined：${cols} 欄${options.length ? '有選項' : '無選項'}未選卡與選中卡等高（上方空行＋兩行）、問題在標題列代號後只佔一行、第二行是 branch、不顯示選項、編號後留一格`, async ($, on) => {
+    test(`refined：${cols} 欄${options.length ? '有選項' : '無選項'}未選卡與選中卡等高（上方空行＋兩行）、標題列不畫問題、第二行是 branch、不顯示選項、編號後留一格`, async ($, on) => {
       const cards = ['甲', '乙'].map(tag => card(tag, { repo: 'frontend', status: '回覆完畢', question: '要繼續嗎？', options }))
       const w = world({ ...focusOf('甲', ['乙']), sessions: cards })
       appearanceConfig.set(w, { motion: false })
@@ -2013,13 +1673,13 @@ for (const cols of [36, 46, 70, 80]) {
       const a = cardLines(selected!, cols)
       const b = cardLines(other!, cols)
       expect(b).toHaveLength(a.length)
-      // The blank row above, the header with the question, the branch row.
+      // The blank row above, the header, the branch row.
       expect(a).toHaveLength(3)
       expect(a[0]).toBe('')
       expect(a[1]!.startsWith(` ${MARK_STILL}`)).toBe(true)
       expect(b[1]!.startsWith('   ')).toBe(true)
-      expect(a[1]).toContain('甲  要繼續嗎？')
-      expect(a[1]!.indexOf('要繼續嗎？')).toBe(b[1]!.indexOf('要繼續嗎？'))
+      expect(a[1]).not.toContain('要繼續嗎？')
+      expect(a[1]!.indexOf('甲')).toBe(b[1]!.indexOf('乙'))
       expect(a[2]!.trimStart().startsWith('feat/甲')).toBe(true)
       expect(a[2]!.indexOf('feat/')).toBe(b[2]!.indexOf('feat/'))
       expect(a.join('\n')).not.toContain('繼續 ·')
@@ -2034,7 +1694,7 @@ for (const cols of [36, 46, 70, 80]) {
   }
 }
 
-test('refined：每張卡的暱稱加粗（選中的用強調色），選中的標記加粗；題目、branch、repo 與狀態字都不加粗；橫條只有代號加粗', async ($, on) => {
+test('refined：每張卡的暱稱加粗（選中的用強調色），選中的標記加粗；題目、branch、repo 與狀態字都不加粗；狀態區只有狀態字、代號與按鍵數字加粗', async ($, on) => {
   const cards = [card('甲', { repo: 'frontend', branch: '1 未核對', status: '等待授權' }), card('乙', { repo: 'frontend', branch: '面板 v2 改版', status: '回覆完畢' }), card('丙', { branch: '123456789012345678901234 項', archived: true, pending: false })]
   const w = world({ ...focusOf('甲', ['乙']), sessions: cards })
   appearanceConfig.set(w, { motion: false })
@@ -2052,7 +1712,7 @@ test('refined：每張卡的暱稱加粗（選中的用強調色），選中的�
   await ui.unmount()
   const focusBand = await $.ui.mount({ ...band(80), surface: 'terminal' })
   const bandTexts = await focusBand.findAll({ type: 'Text' })
-  expect(bandTexts.filter((x: any) => x.props.bold).map((x: any) => x.text)).toEqual(['甲'])
+  expect(bandTexts.filter((x: any) => x.props.bold).map((x: any) => x.text)).toEqual([' 輪到你  ', '甲', '8', '9', '0'])
   expect(await focusBand.find({ key: 'show-tag' })).toBeUndefined()
   await focusBand.press({ key: 'show' })
   expect(w.shown.at(-1)).toMatch(/^甲/)
@@ -2173,14 +1833,11 @@ for (const [name, blocked, dim, border] of [
       await clock.advance(elapsed)
       expect(findKey(await ui.drawn(), 'status:perm@1').children[0].props.color).toBe(glyphColor)
       expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe(blocked)
-      expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe(glyphColor)
-      expect((await focusBand.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe(blocked)
+      expect((await focusBand.find({ type: 'Text', text: ' 等待授權  ' }))?.props.color).toBe(blocked)
+      expect((await focusBand.find({ type: 'Text', text: '│ ' }))?.props.color).toBe(blocked)
     }
-    expect((await focusBand.find({ type: 'Text', text: '── 待回覆 1/2 ' }))?.props.color).toBe(dim)
-    expect((await focusBand.find({ type: 'Text', text: '─'.repeat(66) }))?.props.color).toBe(border)
-    if (name === 'neutral') {
-      expect((await texts(focusBand)).join('')).toContain(`── 待回覆 1/2 ${'─'.repeat(66)}`)
-    }
+    expect((await focusBand.find({ type: 'Text', text: '── 狀態 ' }))?.props.color).toBe(dim)
+    expect((await focusBand.find({ type: 'Text', text: '─'.repeat(80 - columns('── 狀態 ')) }))?.props.color).toBe(border)
     await focusBand.unmount()
     await ui.unmount()
   })
@@ -2222,13 +1879,10 @@ test('refined：所有可見待授權同拍呼吸，文字不變暗，關閉 mot
   for (const tag of ['perm', '另一授權']) expect((await ui.find({ key: `status:${keyOf(tag)}` }))?.text).toContain('◆ 待授權')
   const glyphColor = async (tag: string) => findKey(await ui.drawn(), `status:${keyOf(tag)}`).children[0].props.color
   expect([await glyphColor('perm'), await glyphColor('另一授權'), await glyphColor('focusui')]).toEqual(['gray', 'gray', 'yellow'])
-  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('gray')
-  expect((await focusBand.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
   expect((await focusBand.find({ type: 'Text', text: '│ ' }))?.props.color).toBe('magentaBright')
   expect((await ui.find({ type: 'Text', text: ' 待授權' }))?.props.color).toBe('magentaBright')
   await clock.advance(600)
   expect(invalidations).toBe(before + 2)
-  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('magentaBright')
   config.motion = false
   await openPane($)
   await ui.press({ key: 'tab:all' })
@@ -2236,7 +1890,6 @@ test('refined：所有可見待授權同拍呼吸，文字不變暗，關閉 mot
   await clock.advance(900)
   expect(invalidations).toBe(stopped)
   expect((await ui.find({ key: 'status:perm@1' }))?.text).toContain('◆ 待授權')
-  expect((await focusBand.find({ type: 'Text', text: '◆' }))?.props.color).toBe('magentaBright')
   await focusBand.unmount()
   await ui.unmount()
 })
@@ -2335,15 +1988,15 @@ test('refined：主要題目不可見時，可見待授權仍呼吸', async ($, 
   await ui.unmount()
 })
 
-test('refined：焦點框待回覆分隔線、授權色左線、不重複階段，單題沒有延後', async ($, on) => {
+test('refined：狀態區分隔線、授權色左線、不畫階段，沒有別題在等時沒有 8', async ($, on) => {
   const w = world(focusOf('perm', ['focusui']))
   appearanceConfig.set(w, { motion: false })
   const clock = await start($, on, w)
   const ui = await $.ui.mount({ ...band(46), surface: 'terminal' })
-  expect((await texts(ui)).some((t: string) => t.includes('待回覆 1/2'))).toBe(true)
+  expect((await texts(ui)).some((t: string) => t.includes('── 狀態'))).toBe(true)
   expect((await ui.find({ type: 'Text', text: '│ ' }))?.props.color).toBe('magentaBright')
   expect((await texts(ui)).some((t: string) => t.includes('實作中'))).toBe(false)
-  expect((await labels(ui)).some((t: string) => t.includes('1: focusui'))).toBe(true)
+  expect(await ui.find({ key: 'later' })).toBeDefined()
   w.focus = focusOf('perm', [])
   await clock.advance(5_000)
   expect(await ui.find({ key: 'later' })).toBeUndefined()
@@ -2361,7 +2014,7 @@ test('refined：選中問題不加粗', async ($, on) => {
   await ui.unmount()
 })
 
-test('refined：編號與焦點框一致，選排隊卡後目前題不編號', async ($, on) => {
+test('refined：編號跟著排隊順序，選排隊卡只選中、目前這件照舊不編號', async ($, on) => {
   const w = world(pending())
   appearanceConfig.set(w, { motion: false })
   await start($, on, w)
@@ -2370,13 +2023,14 @@ test('refined：編號與焦點框一致，選排隊卡後目前題不編號', a
   expect(await ui.find({ key: 'num:perm@1' })).toBeUndefined()
   expect((await ui.find({ key: 'num:focusui@1' }))?.props.hotkey).toBe('1')
   await ui.press({ key: 'num:focusui@1' })
-  expect(w.calls.some(c => c[0] === 'focus-pick' && c[1] === keyOf('focusui'))).toBe(true)
-  expect(await ui.find({ key: 'num:focusui@1' })).toBeUndefined()
-  expect((await ui.find({ key: 'num:perm@1' }))?.props.hotkey).toBe('1')
+  expect(w.calls.some(c => c[0] === 'focus-pick')).toBe(false)
+  expect(await chosenTag(ui)).toBe('focusui')
+  expect(await ui.find({ key: 'num:perm@1' })).toBeUndefined()
+  expect((await ui.find({ key: 'num:focusui@1' }))?.props.hotkey).toBe('1')
   await ui.unmount()
 })
 
-test('refined：上下選卡不切換問題；Enter 或點暱稱等於按那張卡的數字鍵，在等回答的卡換上橫條並印出，沒在等回答的卡只選中；d 才開摘要小視窗', async ($, on) => {
+test('refined：上下選卡、Enter 或點暱稱都只選中卡片，不切換狀態區上的題目、不印題目；d 才開摘要小視窗', async ($, on) => {
   const w = world(pending())
   appearanceConfig.set(w, { motion: false })
   await start($, on, w)
@@ -2387,17 +2041,17 @@ test('refined：上下選卡不切換問題；Enter 或點暱稱等於按那張�
   expect(await chosenTag(ui)).toBe('focusui')
   expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
   await ui.press({ key: 'name:focusui@1' })
-  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([['focus-pick', 'focusui@1']])
-  expect(w.shown).toEqual(['focusui'])
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  expect(w.shown).toEqual([])
   expect(findKey(await ui.drawn(), 'popover')).toBeUndefined()
   await ui.press({ key: 'tab:all' })
   await ui.press({ key: `name:${keyOf('tune')}` })
   expect(await chosenTag(ui)).toBe('tune')
-  expect(w.calls.filter(c => c[0] === 'focus-pick')).toHaveLength(1)
-  expect(w.shown).toEqual(['focusui'])
   await ui.press({ key: `name:${keyOf('logging')}` })
-  expect(w.calls.at(-1)).toEqual(['focus-pick', keyOf('logging')])
-  expect(w.shown.at(-1)).toBe('logging')
+  expect(await chosenTag(ui)).toBe('logging')
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  expect(w.shown).toEqual([])
+  expect(w.focus.current).toBe(keyOf('perm'))
   await ui.unmount()
 })
 
@@ -2502,19 +2156,6 @@ test('設定檔：寫了 appearance（不論值）跳一次「appearance 已移�
   await ui.unmount()
 })
 
-test('refined：超過五筆排隊仍顯示完整隱藏數', async ($, on) => {
-  const many = queued(10)
-  const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [...SESSIONS, ...many] })
-  appearanceConfig.set(w, { motion: false })
-  await start($, on, w)
-  for (const cols of [80, 46]) {
-    const ui = await $.ui.mount({ ...band(cols), surface: 'terminal' })
-    expect((await texts(ui)).some((t: string) => t.includes(`＋${cols === 80 ? 5 : 9} · `))).toBe(true)
-    expect((await labels(ui)).filter((t: string) => /^[1-5]:/.test(t))).toHaveLength(5)
-    await ui.unmount()
-  }
-})
-
 test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱且不超寬', async ($, on) => {
   // The longest 代號 each header row holds whole beside its repo: 19 and 9 on 待回覆, 9 on 封存 at 46, and 4 there at 36, which cannot hold 8 cells of repo.
   const cards = [card('abcdefghijklmnopqrs', { repo: 'fe' }), card('abcdefghi', { repo: 'fe' }), card('ABCDEFGHI', { archived: true, pending: false }), card('ABCD', { archived: true, pending: false })]
@@ -2558,70 +2199,6 @@ test('refined：窄版一般與封存卡完整標頭文字包含預算內名稱�
   }
 })
 
-const longBandQuestion = `第一行\n\n${'問'.repeat(500)}\n最後一行`
-const longBandQueue = Array.from({ length: 5 }, (_, i) => ({ tag: `排隊名稱${i}abcdefghijk`, isNew: true }))
-
-test('寬度：✨ 算 2 欄，排隊名稱後的 ✨ 照 2 欄預留', () => {
-  expect(columns('✨')).toBe(2)
-  expect(columns('a ✨')).toBe(4)
-  const rows = focusBandRows({ cols: 80, maxRows: 20, question: '問題', queue: [{ tag: 'abc', isNew: true }], hiddenCount: 0 })
-  expect(rows.queueLabels).toEqual(['abc ✨'])
-  expect(rows.keyLines.flat().find(item => item.index === 2)?.width).toBe(columns('abc') + 3 + 7)
-})
-
-test('refined：80 與 46 欄操作在標題列不佔行，題目最多一行，超過一行寬時截斷以 … 結尾，其他列行數不變', () => {
-  for (const cols of [80, 46]) {
-    const inner = cols - 6
-    const rows = focusBandRows({ cols, maxRows: 10, question: longBandQuestion, queue: longBandQueue, hiddenCount: 2 })
-    expect(rows.actions).toBe(0)
-    expect(rows.keys).toBe(cols === 80 ? 3 : 2)
-    expect(rows.question).toBe(1)
-    expect(rows.questionText.startsWith('第一行 問')).toBe(true)
-    expect(rows.questionText.endsWith('…')).toBe(true)
-    expect(rows.questionText.includes('\n')).toBe(false)
-    expect(columns(rows.questionText)).toBeLessThanOrEqual(inner)
-    const short = focusBandRows({ cols, maxRows: 10, question: '要怎麼做？', queue: longBandQueue, hiddenCount: 2 })
-    expect(short.question).toBe(1)
-    expect(short.questionText).toBe('要怎麼做？')
-    const exact = focusBandRows({ cols, maxRows: 10, question: '問'.repeat(inner / 2), queue: longBandQueue, hiddenCount: 2 })
-    expect(exact.questionText).toBe('問'.repeat(inner / 2))
-    const over = focusBandRows({ cols, maxRows: 10, question: '問'.repeat(inner / 2 + 1), queue: longBandQueue, hiddenCount: 2 })
-    expect(over.question).toBe(1)
-    expect(over.questionText.endsWith('…')).toBe(true)
-    expect(columns(over.questionText)).toBeLessThanOrEqual(inner)
-    for (const other of [short, exact, over]) {
-      expect([other.margin, other.separator, other.header, other.actions, other.keys]).toEqual([rows.margin, rows.separator, rows.header, rows.actions, rows.keys])
-      expect(other.keyLines).toEqual(rows.keyLines)
-    }
-  }
-})
-
-test('refined：長多行問題與五個長排隊名稱仍畫出操作與 0 面板', async ($, on) => {
-  const many = [...longBandQueue.map(q => card(q.tag)), card('隱藏一'), card('隱藏二')]
-  const w = world({ ...focusOf('perm', many.map(c => c.tag)), sessions: [card('perm', { question: longBandQuestion }), ...many] })
-  w.focus.queue = many.map(c => ({ key: c.key, isNew: true }))
-  appearanceConfig.set(w, { motion: false })
-  await start($, on, w)
-  for (const cols of [80, 46]) {
-    const ui = await $.ui.mount({ ...band(cols, 10), surface: 'terminal' })
-    const drawn = await ui.drawn()
-    const buttons: string[] = []
-    type Drawn = { type: string; props: { hotkey?: string; label?: string }; children?: (Drawn | string)[] }
-    const visit = (node: Drawn | string) => {
-      if (typeof node === 'string') return
-      if (node.type === 'Button') buttons.push(`${node.props.hotkey ?? ''}: ${node.props.label}`)
-      for (const child of node.children ?? []) visit(child)
-    }
-    visit(drawn)
-    expect(buttons).toContain('9: 顯示問題')
-    expect(buttons).toContain('8: 延後處理')
-    expect(buttons).toContain('0: 面板')
-    expect(buttons).toContain(`1: ${longBandQueue[0]!.tag} ✨`)
-    expect((await texts(ui)).includes(`＋${cols === 80 ? 2 : 6} · `)).toBe(true)
-    expect((await texts(ui)).find((text: string) => text.startsWith('第一行'))?.endsWith('…')).toBe(true)
-    await ui.unmount()
-  }
-})
 
 const contrast = (a: string, b: string): number => {
   const luminance = (hex: string) => {
@@ -2681,31 +2258,28 @@ test('面板：命名主題最外層帶底色，中性不增加底色', async ($
   await ui.unmount()
 })
 
-test('中控台自己那一輪還在跑：橫條照樣換題但不送 /focus-show；這一輪結束後只印橫條上當下那一題，中間被換掉的不補送', async ($, on) => {
-  const w = { ...world({ ...focusOf('perm', ['focusui', 'logging']), announce: 'perm', announceKey: keyOf('perm') }), sticky: true }
+test('每次輪詢都帶 --typing 與 --turn：輸入框有字時 --typing 1、中控台這一輪在跑時 --turn 1（伺服器這時不換目前這件），子 agent 的回合不算', async ($, on) => {
+  const w = world(pending())
+  let draft = ''
+  on('prompt.read', async () => ({ value: { text: draft, cursor: draft.length } }))
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
   const clock = await start($, on, w)
-  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
+  const flag = (name: string) => w.calls.filter(c => c[0] === 'focus').map(c => c[c.indexOf(name) + 1])
+  draft = 'perm 先'
+  await clock.advance(5_000)
+  draft = '   '
+  await clock.advance(5_000)
   await $.turn.start({ text: '回 perm 允許', turnId: 'console-turn' })
-  w.focus = { ...focusOf('focusui', ['logging']), announce: 'focusui', announceKey: keyOf('focusui') }
   await clock.advance(5_000)
-  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  expect((await ui.find({ key: 'band-name' }))?.text).toBe('focusui')
-  w.focus = { ...focusOf('logging', []), announce: 'logging', announceKey: keyOf('logging') }
-  await clock.advance(5_000)
-  expect((await ui.find({ key: 'band-name' }))?.text).toBe('logging')
-  await ui.unmount()
-  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
   await $.turn.start({ text: '', turnId: 'sub-turn', agentId: 'sub' })
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'sub-turn', agentId: 'sub', reason: 'answer' })
-  await clock.settle()
-  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`])
+  await clock.advance(5_000)
   await $.turn.complete({ answer: '好', durationMs: 1, isAborted: false, turnId: 'console-turn', reason: 'answer' })
   await clock.settle()
-  expect(w.shown).toEqual([`perm ${idOf(keyOf('perm'))}`, `logging ${idOf(keyOf('logging'))}`])
-  await clock.advance(5_000)
-  expect(w.shown).toHaveLength(2)
+  expect(flag('--typing')).toEqual(['0', '1', '0', '0', '0', '0'])
+  expect(flag('--turn')).toEqual(['0', '0', '0', '1', '1', '0'])
+  expect(w.shown).toEqual([])
 })
 
 test('Herdr app tab (HC_TERMINAL_ID only): the band polls console.mjs focus like in Orca and herdr and posts no herdr notification', async ($, on) => {
@@ -2860,7 +2434,8 @@ test('摘要浮層: p prints the card\'s whole report, through /focus-show, for 
   expect(w.writes[`${HOME}/show/perm@${idOf(keyOf('perm'))}.md`]).toBe(report('perm'))
   expect(await popRows(ui)).toBeNull()
   await printFromBrief($, ui, keyOf('logging'))
-  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([['focus-pick', keyOf('logging')]])
+  expect(w.calls.filter(c => c[0] === 'focus-pick')).toEqual([])
+  expect(w.focus.current).toBe(keyOf('perm'))
   expect(w.shown.at(-1)).toBe('logging')
   expect(w.writes[`${HOME}/show/logging.md`]).toBe(report('logging'))
   await ui.unmount()

@@ -64,15 +64,14 @@ import {
 } from "./lib.mjs";
 import { asksReport } from "./asks.mjs";
 import { qaLines } from "./qa.mjs";
-import { consoleSessionOk, focusOwnerOk, focusPayload, focusPick, focusReplied, focusSkip, holdForDigest, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
+import { consoleSessionOk, focusOwnerOk, focusPayload, focusReplied, focusSkip, loadFocus, markReported, modsActive, saveFocus, saveTitles, syncFocus, waitLine } from "./focus.mjs";
+import { guideLines } from "./guide.mjs";
 import { usageLines } from "./console-usage.mjs";
 import { forgetWorktree, recordMisjudge, recordWorktree, rememberRepo, repoByName, worktreeHome, worktreeRecords } from "./herdr.mjs";
 import { appWorktreeHome, branchFolder } from "./herdr-app.mjs";
 import { waitingLine } from "./waiting-line.mjs";
-import { finishRound, reviewCommand } from "./review-cli.mjs";
-import { SHEET_ANSWER } from "./urgency.mjs";
+import { closeElsewhere, ownReply, pastedSheet, reviewCommand } from "./review-cli.mjs";
 import { deliverReview } from "./review-deliver.mjs";
-import { stateOf, worktreeOf } from "./review.mjs";
 import { sheetPath } from "./urgency.mjs";
 import { alreadyIn } from "./git-scene.mjs";
 import { maybeTerminals, runOrca, terminals } from "./terminals.mjs";
@@ -147,6 +146,9 @@ const { values, positionals } = parseArgs({
     before: { type: "string" },
     after: { type: "string" },
     prototype: { type: "string" },
+    turn: { type: "string" },
+    mine: { type: "string" },
+    self: { type: "string" },
   },
 });
 
@@ -306,44 +308,48 @@ function archived() {
   for (const line of archivedLines(rows)) console.log(line);
 }
 
-// The focus band's data for the mod, as JSON; only the console's own screen gets it, and each poll marks the band as drawn.
-// `announce` names the question to print in the conversation: a new one on screen, or the one a press just put there; it counts as shown only after `focus-shown`.
-function focusOut({ rows, keys }, { change = null, show = false, notice = null } = {}) {
+// The status band's data for the mod, as JSON; only the console's own screen gets it, and each poll marks the band as drawn.
+// Nothing is printed in the conversation unless the user presses 9.
+function focusOut({ rows, keys }, { change = null, notice = null, hold = undefined } = {}) {
   const now = Date.now();
-  const view = syncFocus(rows, { now, change, heartbeat: true });
-  const fresh = view.current && readConfig()?.autoShow !== false && !view.state.reported.includes(view.current.key);
-  const announced = view.current && (show || fresh) && !holdForDigest(view, { now }) ? view.current : null;
-  const { payload, titles, firsts } = focusPayload(rows, view, { now, keys, notice, announce: announced?.item.tag ?? null, announceKey: announced?.key ?? null });
-  saveTitles(titles, firsts);
+  const view = syncFocus(rows, { now, change, heartbeat: true, hold });
+  const { payload, titles, firsts, closables } = focusPayload(rows, view, { now, keys, notice });
+  saveTitles(titles, firsts, { closables });
   console.log(JSON.stringify(payload));
 }
 
 function focus() {
-  // The band says while the console's prompt holds a draft; no question is answered for the user meanwhile.
+  // A draft in the console's prompt (`--typing 1`) or its turn still running (`--turn 1`) holds back a new stop on the band.
   if (values.typing) {
     const state = loadFocus();
     saveFocus({ ...state, typingAt: values.typing === "1" ? Date.now() : 0 });
   }
   if (!isConsole(maybeTerminals()?.selfHandle()) || !consoleSessionOk(values.session ?? process.env.CLAUDE_CODE_SESSION_ID) || !focusOwnerOk(values.owner, { claim: values.claim })) return console.log(JSON.stringify({ active: false }));
-  focusOut(load({}, { repoOptional: true }));
+  const hold = values.typing !== undefined || values.turn !== undefined ? values.typing === "1" || values.turn === "1" : undefined;
+  focusOut(load({}, { repoOptional: true }), { hold });
 }
 
-// The mod ran /focus-show; it printed only if the question was still on the band, so one that left waits to be printed when it is back.
+// The mod ran /focus-show for the stop on the band.
 function focusShown() {
   if (!positionals[0]) fail("缺少題目代號");
   const state = loadFocus();
   if (state.current === positionals[0]) saveFocus(markReported(state, positionals[0]));
 }
 
-// A queue button, or a card picked on the pane's 待回覆 tab: that question goes on screen.
-function focusPickCommand() {
-  if (!positionals[0]) fail("缺少題目代號");
-  focusOut(load({}, { repoOptional: true }), { change: (state) => focusPick(state, positionals[0]), show: true });
+// 8 on the band: the stop on screen goes behind the queue, or the band stops waiting, and the first one in the queue comes up.
+function focusLater() {
+  focusOut(load({}, { repoOptional: true }), { change: (state, entries, now) => focusSkip(state, entries, now) });
 }
 
-// 8 on the band: the question on screen goes behind the queue and the first one in the queue comes up.
-function focusLater() {
-  focusOut(load({}, { repoOptional: true }), { change: (state) => focusSkip(state), show: true });
+// The questions the console points at, its own advice, and the two lines every console reply ends with.
+function guide() {
+  const { rows } = load({}, { repoOptional: true });
+  const view = syncFocus(rows);
+  try {
+    for (const line of guideLines(rows, view, positionals, { mine: values.mine ?? null, self: values.self ?? null })) console.log(line);
+  } catch (e) {
+    fail(e.message);
+  }
 }
 
 function detail() {
@@ -734,7 +740,7 @@ async function answerSession(row, session, said) {
   const at = Date.now();
   const record = (fields) => {
     logEvent("answer", { repo: row.repo, ticket: tag, handle: session.handle, paneKey: session.paneKey, ...fields });
-    if (fields.delivery === "delivered") noteReply({ paneKey: session.paneKey, handle: session.handle, tag, at });
+    if (fields.delivery === "delivered") noteReply({ paneKey: session.paneKey, handle: session.handle, tag, at, text: fields.answer });
   };
   if (session.status.kind === "permission") return permit(tag, session, said.trim(), record);
   const questions = session.status.menu;
@@ -841,6 +847,10 @@ async function send() {
   const handle = values.terminal;
   const text = positionals.join(" ");
   if (!handle || !text.trim()) fail("用法：console.mjs send --terminal <handle> --tag <代號> -- <文字>");
+  try {
+    const item = pendingItems(load({}, { repoOptional: true }).rows).find((x) => x.session.handle === handle);
+    if (item) closeSheetReview(item, text);
+  } catch {}
   return sendText(handle, values.tag ?? handle, text);
 }
 
@@ -881,7 +891,7 @@ async function sendText(handle, tag, text) {
     answer: clip(text),
     delivery: landed(result) || result.verdict === "unconfirmed" ? result.verdict : `failed: ${result.reason}`,
   });
-  if (landed(result) || result.verdict === "unconfirmed") noteReply({ paneKey: stop?.paneKey ?? known?.paneKey ?? null, handle, tag, at });
+  if (landed(result) || result.verdict === "unconfirmed") noteReply({ paneKey: stop?.paneKey ?? known?.paneKey ?? null, handle, tag, at, text });
   if (result.verdict === "delivered") return print(`[${tag}] 已送出${note}`, 0);
   if (result.verdict === "queued") return print(`[${tag}] 已送出（排隊中）${note}`, 0);
   if (result.verdict === "unconfirmed") return print(`[${tag}] 已送出（子 session 執行中，畫面上還沒看到這句，等它停下再確認）`, 0);
@@ -927,16 +937,13 @@ async function reply() {
   return answerSession(item.row, item.session, said);
 }
 
-// A define-goal or lean dev-flow batch sheet is this ticket's pre-implementation review: the user's own reply to it also closes the review sheet sent along.
+// Answered from the console, the review closes with what is left marked 在別處回覆: the user's own reply to a batch sheet shown with its
+// review sheet (any path but dev-flow's full one), or to the stop that pasted the whole review sheet.
 function closeSheetReview(item, said) {
-  if (item.kind !== "text" || !batchSheet(item.session.status.text ?? "") || said.startsWith(SHEET_ANSWER)) return;
-  if (sheetPath(item.row, item.session.status.text ?? "") === "full") return;
-  delivered.push(() => {
-    try {
-      const wt = worktreeOf(item.row.path);
-      if (wt && stateOf(wt).open.length > 0) finishRound(wt, { by: "reply", passAll: true });
-    } catch {}
-  });
+  if (item.kind !== "text" || !ownReply(said)) return;
+  const text = item.session.status.text ?? "";
+  if (!(batchSheet(text) && sheetPath(item.row, text) !== "full") && !pastedSheet(text)) return;
+  delivered.push(() => closeElsewhere(item.row.path));
 }
 
 // ⚠️: nobody knows what the child waits on, so the reply is typed verbatim and Enter pressed, past herdr's blocked guard.
@@ -1419,7 +1426,6 @@ const commands = {
   unarchive,
   archived,
   focus,
-  "focus-pick": focusPickCommand,
   "focus-later": focusLater,
   "focus-shown": focusShown,
   reply,
@@ -1437,6 +1443,7 @@ const commands = {
   stage: stageCommand,
   review: reviewEntry,
   "waiting-line": waitingLineCommand,
+  guide,
 };
 const OFFLINE = new Set(["asks", "qa", "report", "focus", "prompt", "prune", "stage", "review"]);
 if (!commands[command]) fail(`未知指令：${command ?? "（未指定）"}\n用法：console.mjs <${Object.keys(commands).join("|")}> ...`);

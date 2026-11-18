@@ -191,7 +191,7 @@ test("repo 名稱開頭：唯一對到才算、對到多個要反問、對不到
   assert.deepEqual(repoLead("hours", repos).repo?.name, "hours-dashboard");
 });
 
-test("拋棄式 session（暫存 worktree 與臨時分頁）不續命、不交棒；回覆完畢照常進待回覆排隊、上專注橫條", () => {
+test("拋棄式 session（暫存 worktree 與臨時分頁）不續命、不交棒；回覆完畢沒在等你時不上狀態區，照樣有卡片", () => {
   const now = Date.now();
   const home = homes();
   putHome(home, "disposable.json", [
@@ -217,7 +217,7 @@ test("拋棄式 session（暫存 worktree 與臨時分頁）不續命、不交�
     state = step.state;
   }
   const view = cards(dir, home, now);
-  assert.deepEqual(view.queue.sort(), ["PROJ-1#1", "PROJ-1#2", "skills"].sort(), "回覆完畢照常進待回覆排隊");
+  assert.deepEqual(view.queue, [], "沒在等你的回覆完畢不進排隊");
   assert.equal(view.cards.skills.summary, "有哪些 skill", "暫存 worktree 的卡片顯示任務標題");
   assert.equal(view.cards["PROJ-1#2"].summary, "問登入流程");
 });

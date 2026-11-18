@@ -217,6 +217,33 @@ export function cacheTrigger(entries) {
   return { id: entries[at].uuid ?? `line-${at}`, question: lastAssistantText(entries.slice(0, beforeKeepalive(entries, at))) || null };
 }
 
+// The last message this turn answers: the user's, or the keepalive, cache handoff or takeover message the console's tooling sent.
+function lastPrompt(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e.type !== "user" || e.isSidechain || e.isMeta) continue;
+    const text = textOf(e.message?.content).trim();
+    if (!text || text.startsWith("<")) continue;
+    return text;
+  }
+  return "";
+}
+
+const toolingPrompt = (text) => text === KEEPALIVE_TEXT || text === CACHE_HANDOFF_TEXT || text.startsWith(TAKEOVER_HEAD);
+
+// The console's reply ends with the two lines its last `console.mjs guide` of this turn printed; the reason to ask once for them, or null.
+// Not checked on the stop the hook already held, a turn with no guide, a turn the keepalive or a handoff message started, or any other session.
+export function endingProblem(input, entries, { guide = readJson(path.join(consoleHome(), "guide.json"), {}), turnEnd = readJson(turnEndFile(input.session_id), null), isConsole = false } = {}) {
+  const last = guide?.last;
+  if (input.stop_hook_active || !isConsole || !last?.lines?.length || last.session !== input.session_id) return null;
+  if (typeof turnEnd?.at === "number" && last.at <= turnEnd.at) return null;
+  if (toolingPrompt(lastPrompt(entries))) return null;
+  const want = last.lines.map((l) => l.trim());
+  const got = String(input.last_assistant_message ?? lastAssistantText(entries)).split("\n").map((l) => l.trim()).filter(Boolean).slice(-want.length);
+  if (got.join("\n") === want.join("\n")) return null;
+  return ["這則回覆最後兩行要原樣貼 `console.mjs guide` 印出的結尾，不要手寫或改字。照貼下面兩行再結束這一輪：", ...want].join("\n");
+}
+
 // The keepalive exchange right before the handoff message is not the question; the reply before it is.
 function beforeKeepalive(entries, at) {
   for (let i = at - 1; i >= 0; i--) {
@@ -233,7 +260,7 @@ export function isQuestion(text) {
   return proseLines(text).some((l) => /[?？]/.test(l));
 }
 
-function lastAssistantText(entries) {
+export function lastAssistantText(entries) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
     if (e.type === "assistant" && !e.isSidechain) {
@@ -813,6 +840,11 @@ async function stop(input) {
   const cacheHit = cacheTrigger(entries);
   const cache = !!cacheHit && cacheHit.id !== st.consumed;
   const manual = !cache && !!trigger && trigger !== st.consumed;
+  if (!st.pending && !manual && !cache) {
+    const handle = terminalOf()?.handle;
+    const problem = endingProblem(input, entries, { isConsole: !!handle && isRegisteredConsole(handle) });
+    if (problem) return block(problem);
+  }
   if (st.done && !manual && !cache) return;
   if (st.done) st = { consumed: st.consumed };
 

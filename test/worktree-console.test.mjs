@@ -43,7 +43,7 @@ import {
   textOptionLabels,
 } from "../skills/worktree-console/scripts/lib.mjs";
 import { addDays, localDay } from "../skills/worktree-console/scripts/automation.mjs";
-import { FOCUS_WAIT_MS, emptyFocus, focusPick, focusReplied, focusSkip, focusStep, loadFocus, saveFocus, saveTitles } from "../skills/worktree-console/scripts/focus.mjs";
+import { emptyFocus, focusReplied, focusSkip, focusStep, loadFocus, saveFocus, saveTitles } from "../skills/worktree-console/scripts/focus.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = path.join(root, "skills", "worktree-console", "scripts");
@@ -375,7 +375,7 @@ test("UX4 最後動態：回應放問題、授權放執行內容、執行中放�
   assertClipped(t.by["PROJ-102(perm)"][4], "Bash npm run db:migrate -- --…");
   assertClipped(t.by["PROJ-101"][4], "PROJ-101 實作登入頁改版");
   assert.match(t.by["release…#1"][4], /^全部改動已 commit/);
-  assert.equal(t.by["PROJ-103"][0], "💬 等待回應");
+  assert.equal(t.by["PROJ-103"][0], "💬 輪到你");
   assert.equal(t.by["PROJ-103"][4], "要哪個顏色？");
   for (const row of t.rows) assert.ok(Array.from(row[4]).length <= 30, row[4]);
   const long = "這是一句非常非常長的最後一句話，用來確認最後動態欄一定會被截在三十個字以內而且結尾有刪節號。";
@@ -455,13 +455,13 @@ test("UX5 baseline：狀態沒變不觸發，之後的轉換才觸發；轉成�
     .join(",");
   const { out } = run("watch.mjs", ["--baseline", current], { dir });
   const b = blocks(out);
-  assert.deepEqual(fresh(b.reports).map((r) => r[0]), ["### 💬 PROJ-101 等你回應"]);
+  assert.deepEqual(fresh(b.reports).map((r) => r[0]), ["### ◆ PROJ-101 輪到你"]);
 });
 
 test("UX6 一般文字提問：回報貼最後一則回覆完整原文，不截斷、不改寫、不加詳情提示", () => {
   const { out } = run("watch.mjs", ["--baseline", allPanes("busy")]);
   const r = blocks(out).reports.find((x) => x[0].includes("PROJ-102(question)"));
-  assert.equal(r[0], "### 💬 PROJ-102(question) 等你回應");
+  assert.equal(r[0], "### ◆ PROJ-102(question) 輪到你");
   const original = agentsOf("chris-proj-102-question")[0].lastAssistantMessage;
   const quoted = r.filter((l) => l.startsWith(">")).map((l) => l.replace(/^> ?/, "")).join("\n");
   assert.equal(quoted, original);
@@ -472,9 +472,9 @@ test("UX7 AskUserQuestion：狀態是 💬 等待回應，列出每題標籤、�
   const dir = withMenuSession();
   const { out } = run("watch.mjs", ["--baseline", baselineWith()], { dir });
   const r = blocks(out).reports[0];
-  assert.equal(r[0], "### 💬 PROJ-103 等你選擇");
+  assert.equal(r[0], "### ◆ PROJ-103 輪到你");
   assert.ok(!out.includes("🔐 PROJ-103"));
-  assert.equal(table(blocks(out).board).by["PROJ-103"][0], "💬 等待回應");
+  assert.equal(table(blocks(out).board).by["PROJ-103"][0], "💬 輪到你");
   assert.ok(r.includes("> 第 1 題 **顏色**　要哪個顏色？"));
   assert.ok(r.includes("> 第 2 題 **尺寸**　要哪個尺寸？"));
   const q1 = r.indexOf("> 第 1 題 **顏色**　要哪個顏色？");
@@ -518,7 +518,7 @@ test("UX8 回報沒有「↳ 回覆：」行與「摘要：…｜階段：…」
   });
   const multi = fresh(blocks(run("watch.mjs", ["--baseline", baselineWith()], { dir }).out).reports);
   assert.equal(multi.length, 1);
-  assert.deepEqual(multi[0], ["### 💬 PROJ-101#1 等你回應", "", "> 要改註冊頁嗎？"]);
+  assert.deepEqual(multi[0], ["### ◆ PROJ-101#1 輪到你", "", "> 要改註冊頁嗎？"]);
 });
 
 test("UX9 回 <票號> <編號>／其他：<文字>：代按選單選項，送完子 session 離開等待回應", () => {
@@ -582,15 +582,15 @@ test("UX10 回報排版：標題列、空行、引用框原文或選單表格（
   const baseline = baselineWith({ [pane("proj-103-idle")]: "waiting" });
   const { out } = run("watch.mjs", ["--baseline", baseline], { dir });
   const [r] = blocks(out).reports;
-  assert.deepEqual(r, ["### 💬 PROJ-101 等你回應", "", "> 第一段。", ">", "> 第二段？"]);
+  assert.deepEqual(r, ["### ◆ PROJ-101 輪到你", "", "> 第一段。", ">", "> 第二段？"]);
   assert.match(out, /\n\n---\n\n\*\*app\*\*\n\n\| 狀態 \|/, "回報與看板以分隔線隔開");
   const menu = blocks(run("watch.mjs", ["--baseline", baselineWith()], { dir: withMenuSession() }).out).reports[0];
-  assert.match(menu[0], /^### 💬 PROJ-103 等你選擇$/);
+  assert.match(menu[0], /^### ◆ PROJ-103 輪到你$/);
   assert.equal(menu[1], "");
   assert.ok(menu.includes("| b | **綠 (Recommended)** | 冷色 |"));
   assert.equal(menu.at(-1), "| c | 其他 | 自行輸入 |");
   for (const report of blocks(run("watch.mjs", ["--baseline", allPanes("busy")]).out).reports) {
-    assert.match(report[0], /^### (💬|🔐|⏸) \S+ (等你回應|等你選擇|等你授權|回覆完畢)$/);
+    assert.match(report[0], /^### (?:◆ \S+ 輪到你|(?:🔐|⏸) \S+ (?:等你授權|回覆完畢))$/);
     assert.equal(report[1], "");
     const body = report.slice(2);
     const end = body.includes("") ? body.indexOf("") : body.length;
@@ -633,11 +633,11 @@ test("UX13 同一輪多個 session 同時變動：各一則回報，全部貼完
   assert.equal(out.split("\n").filter((l) => l === "**app**").length, 1, "看板只貼一次");
   assert.ok(out.lastIndexOf("### ", out.indexOf("### 📋") - 1) < out.indexOf(BOARD_HEADER), "全部回報貼完才貼表格");
   const t = table(b.board);
-  const emoji = { 等你回應: "💬", 等你選擇: "💬", 等你授權: "🔐", 回覆完畢: "⏸" };
+  const emoji = { 輪到你: ["◆", "💬 輪到你"], 等你授權: ["🔐", "🔐"], 回覆完畢: ["⏸", "⏸"] };
   for (const r of b.reports) {
     const [, e, tag, title] = r[0].split(" ");
-    assert.equal(e, emoji[title]);
-    assert.ok(t.by[tag][0].startsWith(e), r[0]);
+    assert.equal(e, emoji[title][0]);
+    assert.ok(t.by[tag][0].startsWith(emoji[title][1]), r[0]);
   }
 });
 
@@ -964,7 +964,7 @@ test("看板：多 session 的 worktree 各 session 一列，狀態與最後動�
   assert.equal(promptHead(""), "（無）");
   const t = table(run("console.mjs", ["board", "--repo", app()], { dir: fake(addSecondLoginSession) }).out);
   assert.deepEqual(t.by["PROJ-101#1"], ["🔄 執行中", "PROJ-101#1", "登入頁改版", "實作中", "PROJ-101 實作登入頁改版"]);
-  assert.deepEqual(t.by["PROJ-101#2"], ["💬 等待回應", "PROJ-101#2", "登入頁改版", "實作中", "要我順便跑測試嗎？"]);
+  assert.deepEqual(t.by["PROJ-101#2"], ["💬 輪到你", "PROJ-101#2", "登入頁改版", "實作中", "要我順便跑測試嗎？"]);
   assert.ok(!t.by["PROJ-101"]);
   assert.ok(t.by["PROJ-6923"], "單一 session 不加編號");
 });
@@ -1007,7 +1007,7 @@ test("detail：多 session 逐一列出編號、狀態、handle、最後一則 p
   assert.ok(one.lines.includes("狀態：💬 等待回應"));
   assert.ok(!one.lines.includes("sessions:"));
   assert.deepEqual(detailReports(one.lines), expectedReports(dir, ["PROJ-101#2"]));
-  assert.deepEqual(detailReports(one.lines)[0], ["### 💬 PROJ-101#2 等你回應", "", "> lint 已修好。", ">", "> 要我順便跑測試嗎？"]);
+  assert.deepEqual(detailReports(one.lines)[0], ["### ◆ PROJ-101#2 輪到你", "", "> lint 已修好。", ">", "> 要我順便跑測試嗎？"]);
 });
 
 test("detail：多 session 不帶 #n 保留 sessions 清單，其下只有待你處理的 session 各一段回報", () => {
@@ -1030,7 +1030,7 @@ test("detail：💬 文字提問的回報段＝reportLines()，引用框是完�
   const { lines } = run("console.mjs", ["detail", "--repo", app(), "chris-proj-102-question"], { dir });
   const reports = detailReports(lines);
   assert.equal(reports.length, 1, lines.join("\n"));
-  const [tag] = reports[0][0].match(/^### 💬 (\S+) 等你回應$/).slice(1);
+  const [tag] = reports[0][0].match(/^### ◆ (\S+) 輪到你$/).slice(1);
   assert.deepEqual(reports, expectedReports(dir, [tag]));
   assert.equal(reports[0][1], "");
   assert.ok(reports[0].slice(2).every((l) => l === ">" || l.startsWith("> ")));
@@ -1042,7 +1042,7 @@ test("detail：選單、等待授權的回報段＝reportLines()；💤 閒置�
   const menu = withMenuSession();
   const m = detailReports(run("console.mjs", ["detail", "--repo", app(), "103"], { dir: menu }).lines);
   assert.deepEqual(m, expectedReports(menu, ["PROJ-103"]));
-  assert.equal(m[0][0], "### 💬 PROJ-103 等你選擇");
+  assert.equal(m[0][0], "### ◆ PROJ-103 輪到你");
   assert.ok(m[0].includes("| # | 選項 | 說明 |"));
   const dir = fake();
   const p = detailReports(run("console.mjs", ["detail", "--repo", app(), "proj-102-perm"], { dir }).lines);
@@ -1117,7 +1117,7 @@ test("看板每列顯示寬度不超過 100 欄（中文與 emoji 算 2 格）�
   const t = table(shot.join("\n"));
   assert.deepEqual(t.rows.map((r) => [r[0], r[1], r[3]]), [
     ["⏸ 回覆完畢", "dev", "實作中"],
-    ["💬 等待回應", "PROJ-6700", "已推送"],
+    ["💬 輪到你", "PROJ-6700", "已推送"],
     ["⏸ 回覆完畢", "PROJ-6923", "實作中"],
   ]);
   for (const dir of [fake(), withMenuSession(), fake(addSecondLoginSession)]) {
@@ -1145,11 +1145,11 @@ test("還在確認要不要開 session 的票：--aligning 階段為未開工，
   const out = run("console.mjs", ["board", "--repo", app(), "--aligning", `PROJ-7001=${long}`, "--aligning", "api/PROJ-7002=後端匯出"]).out;
   const t = table(out);
   const last = t.tables[0].rows.at(-1);
-  assert.deepEqual([last[0], last[1], last[3]], ["💬 等待回應", "PROJ-7001", "未開工"]);
+  assert.deepEqual([last[0], last[1], last[3]], ["💬 輪到你", "PROJ-7001", "未開工"]);
   assert.ok(last[2].endsWith("…"));
   assertClipped(last[2], long);
   assertClipped(last[4], "等你確認開工");
-  assert.deepEqual(t.tables[1].rows.at(-1).slice(0, 4), ["💬 等待回應", "PROJ-7002", "後端匯出", "未開工"]);
+  assert.deepEqual(t.tables[1].rows.at(-1).slice(0, 4), ["💬 輪到你", "PROJ-7002", "後端匯出", "未開工"]);
   for (const line of tableLines(out.split("\n"))) assert.ok(displayWidth(line) <= BOARD_WIDTH, line);
 });
 
@@ -1467,10 +1467,10 @@ test("清單格式：標題列只有「### 📋 待回覆」，表格欄位依�
   assert.equal(list.columns, LIST_HEAD);
   assert.ok(list.rows.every((r) => r.length === 5));
   assert.deepEqual(list.rows, [
-    ["💬 等待回應", "PROJ-6923①", "要哪個顏色？", "a 紅／b 綠／c 藍／其他", "b 綠"],
-    ["💬 等待回應", "PROJ-6923②", "要哪個尺寸？", "a S／b M／其他", "—"],
+    ["◆ 輪到你", "PROJ-6923①", "要哪個顏色？", "a 紅／b 綠／c 藍／其他", "b 綠"],
+    ["◆ 輪到你", "PROJ-6923②", "要哪個尺寸？", "a S／b M／其他", "—"],
     ["🔐 等待授權", "PROJ-7000", "Bash ls", "允許／拒絕", "—"],
-    ["💬 等待回應", "PROJ-8000", "要繼續嗎？", "—", "—"],
+    ["◆ 輪到你", "PROJ-8000", "要繼續嗎？", "—", "—"],
   ]);
 });
 
@@ -1485,8 +1485,8 @@ test("清單每列顯示寬度不超過 100 欄，代號與狀態保持原字，
   const list = replyList(pendingBlock(rows).join("\n"));
   for (const line of list.lines) assert.ok(displayWidth(line) <= BOARD_WIDTH, `${displayWidth(line)}: ${line}`);
   assert.deepEqual(list.rows.map((r) => [r[1], r[0]]), [
-    ["PROJ-6923(report-export)", "💬 等待回應"],
-    ["PROJ-7000", "💬 等待回應"],
+    ["PROJ-6923(report-export)", "◆ 輪到你"],
+    ["PROJ-7000", "◆ 輪到你"],
     ["PROJ-7001", "🔐 等待授權"],
   ]);
   assertClipped(list.by["PROJ-6923(report-export)"][2], long);
@@ -1519,10 +1519,10 @@ test("新回報連同先前未回的題目一起出現：同票其他 session �
   });
   const baseline = baselineWith({ "zzz-tab:zzz-leaf": "waiting" });
   const heads = blocks(run("watch.mjs", ["--baseline", baseline], { dir }).out).reports.map((r) => r[0]);
-  assert.equal(heads[0], "### 💬 PROJ-101#1 等你回應");
+  assert.equal(heads[0], "### ◆ PROJ-101#1 輪到你");
   assert.deepEqual(heads.slice(1).sort(), [
-    `### 💬 PROJ-101#2 等你回應${AGAIN}`,
-    `### 💬 PROJ-102(question) 等你回應${AGAIN}`,
+    `### ◆ PROJ-101#2 輪到你${AGAIN}`,
+    `### ◆ PROJ-102(question) 輪到你${AGAIN}`,
     `### 🔐 PROJ-102(perm) 等你授權${AGAIN}`,
   ].sort());
   const answered = fake({
@@ -1535,7 +1535,7 @@ test("新回報連同先前未回的題目一起出現：同票其他 session �
     ],
   });
   const later = blocks(run("watch.mjs", ["--baseline", baselineWith()], { dir: answered }).out).reports.map((r) => r[0]);
-  assert.deepEqual(later, ["### 💬 PROJ-101 等你回應", `### 💬 PROJ-102(question) 等你回應${AGAIN}`]);
+  assert.deepEqual(later, ["### ◆ PROJ-101 輪到你", `### ◆ PROJ-102(question) 輪到你${AGAIN}`]);
   assert.ok(!later.some((h) => h.includes("release…")), "⏸ 回覆完畢不重貼");
 });
 
@@ -1545,10 +1545,10 @@ test("先前未回的題目完整重貼原文，排在新題目之後、看板�
   const { out } = run("watch.mjs", ["--baseline", baselineWith()], { dir });
   const b = blocks(out);
   assert.equal(b.reports[0][0], "### ⏸ PROJ-101 回覆完畢");
-  const again = b.reports.find((r) => r[0] === `### 💬 PROJ-102(question) 等你回應${AGAIN}`);
+  const again = b.reports.find((r) => r[0] === `### ◆ PROJ-102(question) 輪到你${AGAIN}`);
   assert.equal(again.filter((l) => l.startsWith(">")).map((l) => l.replace(/^> ?/, "")).join("\n"), original);
   const at = (s) => out.indexOf(s);
-  assert.ok(at(`PROJ-102(question) 等你回應${AGAIN}`) > at("### ⏸ PROJ-101"));
+  assert.ok(at(`PROJ-102(question) 輪到你${AGAIN}`) > at("### ⏸ PROJ-101"));
   assert.ok(at(BOARD_HEADER) > at(`PROJ-102(perm) 等你授權${AGAIN}`));
   assert.ok(at("### 📋 待回覆") > at(BOARD_HEADER), "清單在看板之後");
 });
@@ -1557,7 +1557,7 @@ test("等待回應判斷：程式碼區塊與引用框以外任何一行有問�
   const text = "**要先改 API 還是先改畫面？**\n\n- A：先改 API\n- B：先改畫面\n\n建議選 B，畫面改完可以先給 PM 看。";
   assert.equal(asking(text).kind, "waiting");
   const rows = [listRow("PROJ-1", session(asking(text))), listRow("PROJ-2", session(asking("好嗎？")))];
-  assert.equal(table(boardLines(rows).join("\n")).by["PROJ-1"][0], "💬 等待回應");
+  assert.equal(table(boardLines(rows).join("\n")).by["PROJ-1"][0], "💬 輪到你");
   assert.ok(replyList(pendingBlock(rows).join("\n")).by["PROJ-1"]);
 });
 
@@ -1662,7 +1662,7 @@ test("代號撞名：不同 repo 的代號相同時，看板、回報、待回�
   assert.equal(r("main").match, "many");
   const changed = fake({ ...sameMain, sequence: [() => {}, (ps) => sameMain.mutatePs(ps)] });
   const heads = fresh(blocks(run("watch.mjs", ["--baseline", baselineWith()], { dir: changed }).out).reports).map((x) => x[0]);
-  assert.deepEqual(heads.sort(), ["### 💬 api/main 等你回應", "### 💬 app/main 等你回應"]);
+  assert.deepEqual(heads.sort(), ["### ◆ api/main 輪到你", "### ◆ app/main 輪到你"]);
 });
 
 test("非啟動 repo 的 session：resolve、詳情、選單代答、關閉檢查都作用得到", () => {
@@ -1731,7 +1731,7 @@ test("中控台互相排除：登記過的另一個中控台 session 不上看�
   const quiet = run("watch.mjs", ["--baseline", baselineWith()], { dir: fake(asks), env: { ...env, WATCH_TIMEOUT_MS: "300" } });
   assert.equal(quiet.lines[0], "[watch] timeout", quiet.out);
   const seen = run("watch.mjs", ["--baseline", baselineWith()], { dir: fake(asks) });
-  assert.match(seen.out, /### 💬 PROJ-6923 等你回應/, "沒登記時照常回報");
+  assert.match(seen.out, /### ◆ PROJ-6923 輪到你/, "沒登記時照常回報");
 });
 
 const idleStatus = { kind: "idle", text: "" };
@@ -1751,7 +1751,7 @@ test("看板：💤 閒置不進表格，🔄／🔐／💬／⏸ 的列照舊",
   assert.deepEqual(t.rows.map((r) => [r[0], r[1]]), [
     ["🔄 執行中", "PROJ-1"],
     ["🔐 等待授權", "PROJ-2"],
-    ["💬 等待回應", "PROJ-3"],
+    ["💬 輪到你", "PROJ-3"],
     ["⏸ 回覆完畢", "PROJ-4"],
   ]);
   assert.ok(!lines.some((l) => l.includes(LABEL.idle)), lines.join("\n"));
@@ -2302,9 +2302,8 @@ test("封存：封存後不上看板表格、待回覆清單、專注橫條；�
   assert.ok(board.split("\n").includes("封存 1 個、閒置 1 個"), board);
   const focus = JSON.parse(run("console.mjs", ["focus"], { dir, env }).out);
   assert.deepEqual(focus.sessions.filter((s) => s.pending).map((s) => s.tag), ["PROJ-102(perm)", "release…#1", "release…#2"], "四題扣掉封存的一題");
-  assert.equal(focus.queue.length + 1, 3);
+  assert.ok(!focus.queue.some((q) => q.key.startsWith(focus.sessions.find((s) => s.tag === tag).key)), "封存的不進排隊");
   assert.equal(focus.sessions.find((s) => s.tag === tag).archived, true);
-  assert.equal(focus.stats, "等待回應 0 | 等待授權 1 | 回覆完畢 2 | 執行中 2 | 封存 1 | 閒置 1");
   assert.equal(run("console.mjs", ["detail", "--repo", app(), tag], { dir, env }).lines[0], `[${tag}] 詳情`);
   const hit = JSON.parse(run("console.mjs", ["resolve", "--repo", app(), tag], { dir, env }).out);
   assert.deepEqual([hit.match, hit.rows[0].handle], ["one", "term_b"]);
@@ -2374,7 +2373,6 @@ test("封存：轉成 💬 或 🔐 時自動解除並進入待回覆清單與�
   assert.ok(list["release…#1"] && list["PROJ-103"], board);
   assert.ok(!list["release…#2"], "⏸ 不解除封存");
   const focus = JSON.parse(run("console.mjs", ["focus"], { dir, env }).out);
-  assert.match(focus.stats, /^等待回應 2 \| 等待授權 2 \| 回覆完畢 0 \| 執行中 \d+ \| 封存 1 \| 閒置 0$/);
 });
 
 test("新開中控台時看板之後列一次封存清單表格：代號｜摘要｜封存時間；沒有封存就不列", () => {
@@ -2404,199 +2402,6 @@ test("選項摘要：文字題取到第一個「，：。—（」或只取行�
 
 const entry = (key, kind, since, extra = {}) => ({ key, paneKey: key, handle: `h-${key}`, tag: key, kind, since, ...extra });
 
-test("專注佇列：先停先出、🔐 插最前；目前這題不被後來的 🔐 搶走", () => {
-  const a = entry("a", "waiting", 1);
-  const b = entry("b", "done", 2);
-  const c = entry("c", "permission", 3);
-  const first = focusStep(emptyFocus(), [a, b, c], 100);
-  assert.deepEqual([first.current.key, first.queue.map((e) => e.key)], ["c", ["a", "b"]]);
-  const noPerm = focusStep(emptyFocus(), [b, a], 100);
-  assert.deepEqual([noPerm.current.key, noPerm.queue.map((e) => e.key)], ["a", ["b"]]);
-  const d = entry("d", "permission", 4);
-  const sticky = focusStep(noPerm.state, [a, b, d], 200);
-  assert.deepEqual([sticky.current.key, sticky.queue.map((e) => e.key)], ["a", ["d", "b"]]);
-});
-
-test("專注佇列：回完一題先等同一個 session 最多 60 秒；期間它再停下就端它的新題目，其他 session 的 🔐 不插隊；超過 60 秒才換下一題", () => {
-  const a = entry("a@1", "waiting", 1, { paneKey: "a", tag: "a" });
-  const b = entry("b@2", "done", 2, { paneKey: "b" });
-  const t0 = 1_000;
-  let view = focusStep(emptyFocus(), [a, b], t0);
-  assert.equal(view.current.key, "a@1");
-  let state = focusReplied(view.state, [a, b], [{ paneKey: "a", tag: "a" }], t0);
-  view = focusStep(state, [a, b], t0 + 1_000);
-  assert.deepEqual([view.current, view.wait.tag], [null, "a"], "剛回的那則還掛著也不再端出");
-  const perm = entry("p@3", "permission", 3, { paneKey: "p" });
-  view = focusStep(view.state, [b, perm], t0 + 20_000);
-  assert.equal(view.current, null, "等待中其他 session 的 🔐 不插隊");
-  const again = entry("a@9", "waiting", 9, { paneKey: "a" });
-  const back = focusStep(view.state, [b, perm, again], t0 + FOCUS_WAIT_MS - 1);
-  assert.deepEqual([back.current.key, back.wait], ["a@9", null]);
-  const late = focusStep(view.state, [b, perm], t0 + FOCUS_WAIT_MS);
-  assert.deepEqual([late.current.key, late.wait], ["p@3", null], "超過 60 秒換排隊中的下一題，🔐 在最前");
-  const afterLate = focusStep(late.state, [b, perm, again], t0 + FOCUS_WAIT_MS + 1);
-  assert.equal(afterLate.current.key, "p@3", "超時後它再停下就照排隊");
-});
-
-test("專注佇列：「延後處理」立刻放棄等待，把目前這題移到隊尾", () => {
-  const a = entry("a", "waiting", 1);
-  const b = entry("b", "waiting", 2);
-  const c = entry("c", "permission", 3);
-  let view = focusStep(emptyFocus(), [a, b, c], 10);
-  assert.equal(view.current.key, "c");
-  view = focusStep(focusSkip(view.state, 20), [a, b, c], 20);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["a", ["b", "c"]]);
-  const waiting = focusReplied(view.state, [a, b, c], [{ paneKey: "a", tag: "a" }], 30);
-  const skipped = focusStep(focusSkip(waiting, 40), [b, c], 40);
-  assert.deepEqual([skipped.current.key, skipped.wait], ["b", null]);
-});
-
-test("專注佇列：四層順序——回覆後又回來的 → 🔐 → 其他 → 被跳過的；前三層照停下時間，被跳過那層最近跳過的在最後", () => {
-  const a = entry("a@1", "waiting", 1, { paneKey: "a" });
-  const b = entry("b@2", "waiting", 2, { paneKey: "b" });
-  const c = entry("c@3", "waiting", 3, { paneKey: "c" });
-  const d = entry("d@4", "done", 4, { paneKey: "d" });
-  const p = entry("p@5", "permission", 5, { paneKey: "p" });
-  const s = entry("s@6", "waiting", 6, { paneKey: "s" });
-  let view = focusStep(emptyFocus(), [a, b, c, d, p, s], 10);
-  assert.equal(view.current.key, "p@5");
-  view = focusStep(focusSkip(view.state, 20), [a, b, c, d, p, s], 20);
-  assert.equal(view.current.key, "a@1");
-  view = focusStep(focusPick(view.state, "s@6", 30), [a, b, c, d, p, s], 30);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["s@6", ["b@2", "c@3", "d@4", "p@5", "a@1"]]);
-  let state = focusReplied(view.state, [a, b, c, d, p, s], [{ paneKey: "s" }], 40);
-  state = focusReplied(state, [a, b, c, d, p], [{ paneKey: "c" }], 41);
-  view = focusStep(state, [a, b, d, p], 45 + FOCUS_WAIT_MS);
-  assert.equal(view.current.key, "b@2");
-  const c2 = entry("c@90", "waiting", 90, { paneKey: "c" });
-  const s2 = entry("s@80", "done", 80, { paneKey: "s" });
-  const q = entry("q@70", "permission", 70, { paneKey: "q" });
-  const e = entry("e@60", "waiting", 60, { paneKey: "e" });
-  view = focusStep(view.state, [a, b, d, p, c2, s2, q, e], 50 + FOCUS_WAIT_MS);
-  assert.deepEqual([view.current.key, view.queue.map((x) => x.key)], ["b@2", ["s@80", "c@90", "q@70", "d@4", "e@60", "p@5", "a@1"]]);
-});
-
-test("專注佇列：回覆 A 後 A 超過 60 秒才再停下，畫面上的 B 不被換掉，A 排在排隊第 1 位", () => {
-  const a = entry("a@1", "waiting", 1, { paneKey: "a", tag: "a" });
-  const b = entry("b@2", "permission", 2, { paneKey: "b" });
-  const c = entry("c@3", "permission", 3, { paneKey: "c" });
-  const t0 = 1_000;
-  let view = focusStep(focusPick(emptyFocus(), "a@1", t0), [a, b, c], t0);
-  view = focusStep(focusReplied(view.state, [a, b, c], [{ paneKey: "a", tag: "a" }], t0), [a, b, c], t0);
-  view = focusStep(view.state, [b, c], t0 + FOCUS_WAIT_MS + 1);
-  assert.deepEqual([view.current.key, view.wait], ["b@2", null]);
-  const again = entry("a@9", "waiting", 9, { paneKey: "a" });
-  view = focusStep(view.state, [b, c, again], t0 + FOCUS_WAIT_MS + 30_000);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["b@2", ["a@9", "c@3"]], "B 仍在畫面上，A 排第 1 位（🔐 之前）");
-});
-
-test("專注佇列：回覆 A 後 A 在 60 秒內再停下，直接上畫面", () => {
-  const a = entry("a@1", "waiting", 1, { paneKey: "a", tag: "a" });
-  const b = entry("b@2", "permission", 2, { paneKey: "b" });
-  let view = focusStep(focusPick(emptyFocus(), "a@1", 10), [a, b], 10);
-  view = focusStep(focusReplied(view.state, [a, b], [{ paneKey: "a", tag: "a" }], 10), [a, b], 10);
-  const again = entry("a@9", "waiting", 9, { paneKey: "a" });
-  view = focusStep(view.state, [b, again], 10 + FOCUS_WAIT_MS - 1);
-  assert.deepEqual([view.current.key, view.wait, view.queue.map((e) => e.key)], ["a@9", null, ["b@2"]]);
-});
-
-test("專注佇列：上一題被延後、或自己停下沒被回覆的 session 再停下，不進第一層，照一般規則排", () => {
-  const a = entry("a@1", "waiting", 1, { paneKey: "a" });
-  const b = entry("b@2", "waiting", 2, { paneKey: "b" });
-  const c = entry("c@3", "waiting", 3, { paneKey: "c" });
-  let view = focusStep(emptyFocus(), [a, b, c], 10);
-  assert.equal(view.current.key, "a@1");
-  view = focusStep(focusSkip(view.state, 20), [a, b, c], 20);
-  assert.equal(view.current.key, "b@2");
-  const a2 = entry("a@50", "waiting", 50, { paneKey: "a" });
-  const c2 = entry("c@40", "done", 40, { paneKey: "c" });
-  view = focusStep(view.state, [b, a2, c2], 60);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["b@2", ["c@40", "a@50"]], "依停下時間排，不插到最前");
-  assert.deepEqual(view.state.back, {});
-  const replied = focusStep(focusReplied(view.state, [b, a2, c2], [{ paneKey: "b" }], 70), [a2, c2], 70 + FOCUS_WAIT_MS);
-  const b2 = entry("b@99", "waiting", 99, { paneKey: "b" });
-  const later = focusStep(replied.state, [a2, c2, b2], 80 + FOCUS_WAIT_MS);
-  assert.deepEqual([later.current.key, later.queue.map((e) => e.key)], ["c@40", ["b@99", "a@50"]], "被回覆過的 b 回來才插到最前");
-});
-
-test("專注佇列：一般題在畫面上沒回就切走（數字或面板），排到最後，跟按 8 一樣", () => {
-  const a = entry("a", "waiting", 1);
-  const b = entry("b", "waiting", 2);
-  const c = entry("c", "permission", 3);
-  let view = focusStep(emptyFocus(), [a, b, c], 10);
-  assert.equal(view.current.key, "c");
-  const picked = focusStep(focusPick(view.state, "b", 20), [a, b, c], 20);
-  const later = focusStep(focusSkip(view.state, 20), [a, b, c], 20);
-  assert.deepEqual([picked.current.key, picked.queue.map((e) => e.key)], ["b", ["a", "c"]]);
-  assert.deepEqual(later.queue.map((e) => e.key).at(-1), "c");
-  view = focusStep(focusPick(picked.state, "a", 30), [a, b, c], 30);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["a", ["c", "b"]], "被跳過那層最近跳過的在最後");
-  const same = focusStep(focusPick(view.state, "a", 40), [a, b, c], 40);
-  assert.deepEqual(same.queue.map((e) => e.key), ["c", "b"], "點目前這題不算跳過");
-});
-
-test("專注佇列：第一層的題目被切走仍留第一層（照停下時間排在其他第一層之間）；被按 8 才掉到最後", () => {
-  const a = entry("a@1", "waiting", 1, { paneKey: "a" });
-  const b = entry("b@2", "waiting", 2, { paneKey: "b" });
-  const x = entry("x@3", "permission", 3, { paneKey: "x" });
-  let view = focusStep(emptyFocus(), [a, b, x], 10);
-  let state = focusReplied(view.state, [a, b, x], [{ paneKey: "a" }], 10);
-  state = focusReplied(state, [b, x], [{ paneKey: "b" }], 11);
-  view = focusStep(state, [x], 20 + FOCUS_WAIT_MS);
-  assert.equal(view.current.key, "x@3");
-  const a2 = entry("a@40", "waiting", 40, { paneKey: "a" });
-  const b2 = entry("b@50", "waiting", 50, { paneKey: "b" });
-  const y = entry("y@30", "waiting", 30, { paneKey: "y" });
-  view = focusStep(view.state, [x, y, a2, b2], 30 + FOCUS_WAIT_MS);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["x@3", ["a@40", "b@50", "y@30"]]);
-  view = focusStep(focusPick(view.state, "a@40", 40 + FOCUS_WAIT_MS), [x, y, a2, b2], 40 + FOCUS_WAIT_MS);
-  view = focusStep(focusPick(view.state, "y@30", 50 + FOCUS_WAIT_MS), [x, y, a2, b2], 50 + FOCUS_WAIT_MS);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["y@30", ["a@40", "b@50", "x@3"]], "a 被切走仍在第一層、b 之前");
-  view = focusStep(focusPick(view.state, "b@50", 60 + FOCUS_WAIT_MS), [x, y, a2, b2], 60 + FOCUS_WAIT_MS);
-  view = focusStep(focusPick(view.state, "a@40", 70 + FOCUS_WAIT_MS), [x, y, a2, b2], 70 + FOCUS_WAIT_MS);
-  assert.deepEqual(view.queue.map((e) => e.key), ["b@50", "x@3", "y@30"], "b 被切走仍排第 1 位");
-  view = focusStep(focusSkip(view.state, 80 + FOCUS_WAIT_MS), [x, y, a2, b2], 80 + FOCUS_WAIT_MS);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["b@50", ["x@3", "y@30", "a@40"]], "按 8 延後的第一層題目掉到最後");
-});
-
-test("專注佇列時間線：回覆送出後子 session 搶先停下，新題直接上橫條且只算回覆當下那題；打字回覆（含 after-send）與按鈕回覆都一樣", () => {
-  const t0 = 1_791_168_832_980;
-  const old = entry("a@1791168000000", "waiting", 1_791_168_000_000, { paneKey: "a", handle: "h-a", tag: "a" });
-  const b = entry("b@1791167000000", "permission", 1_791_167_000_000, { paneKey: "b" });
-  const start = focusStep(focusPick(emptyFocus(), old.key, t0 - 5_000), [old, b], t0 - 5_000).state;
-  const next = entry(`a@${t0 + 1_584}`, "done", t0 + 1_584, { paneKey: "a", handle: "h-a", tag: "a" });
-  const reply = { paneKey: "a", handle: "h-a", tag: "a", at: t0 };
-  for (const afterSend of [true, false]) {
-    let state = focusReplied(start, [next, b], [reply], t0 + 2_000);
-    let view = focusStep(state, [next, b], t0 + 2_000);
-    if (afterSend) view = focusStep(focusReplied(view.state, [next, b], [{ paneKey: "a", handle: "h-a", tag: "a" }], t0 + 3_000), [next, b], t0 + 3_000);
-    view = focusStep(view.state, [next, b], t0 + 5_000);
-    assert.deepEqual([view.current?.key, view.state.answered, view.queue.map((e) => e.key)], [next.key, [], ["b@1791167000000"]], afterSend ? "打字回覆" : "按鈕回覆");
-    assert.deepEqual(view.state.replied, [], "已回來的 session 不再記成等它回來");
-    state = focusReplied(focusStep(start, [old, b], t0).state, [old, b], [reply], t0 + 1_000);
-    assert.deepEqual(state.answered, [old.key], "子 session 還沒停下時只記回覆當下那題");
-    view = focusStep(state, [next, b], t0 + 4_000);
-    if (afterSend) view = focusStep(focusReplied(view.state, [next, b], [{ paneKey: "a", handle: "h-a", tag: "a" }], t0 + 4_500), [next, b], t0 + 4_500);
-    assert.deepEqual([view.current?.key, view.state.answered], [next.key, []]);
-  }
-});
-
-test("專注佇列時間線：回覆後超過 60 秒才回來，橫條換成排隊第一題且不再變，回來的 session 排在排隊第 1 位", () => {
-  const t0 = 1_791_168_832_980;
-  const old = entry("a@1791168000000", "waiting", 1_791_168_000_000, { paneKey: "a", handle: "h-a", tag: "a" });
-  const b = entry("b@1791167000000", "waiting", 1_791_167_000_000, { paneKey: "b" });
-  const c = entry("c@1791166000000", "permission", 1_791_166_000_000, { paneKey: "c" });
-  let view = focusStep(focusPick(emptyFocus(), old.key, t0 - 5_000), [old, b, c], t0 - 5_000);
-  view = focusStep(focusReplied(view.state, [old, b, c], [{ paneKey: "a", handle: "h-a", tag: "a", at: t0 }], t0 + 1_000), [old, b, c], t0 + 1_000);
-  view = focusStep(focusReplied(view.state, [b, c], [{ paneKey: "a", handle: "h-a", tag: "a" }], t0 + 2_000), [b, c], t0 + 2_000);
-  assert.deepEqual([view.current, view.wait?.tag], [null, "a"]);
-  view = focusStep(view.state, [b, c], t0 + 2_000 + FOCUS_WAIT_MS);
-  assert.deepEqual([view.current.key, view.wait], ["c@1791166000000", null]);
-  const next = entry(`a@${t0 + 90_000}`, "done", t0 + 90_000, { paneKey: "a", handle: "h-a", tag: "a" });
-  view = focusStep(view.state, [b, c, next], t0 + 95_000);
-  assert.deepEqual([view.current.key, view.queue.map((e) => e.key)], ["c@1791166000000", [next.key, "b@1791167000000"]]);
-});
-
 const stagger = (ps) => {
   at(1790787800001)(agentIn(ps, "chris-proj-102-question")[0]);
   at(1790787800002)(agentIn(ps, "proj-102-perm")[0]);
@@ -2605,11 +2410,10 @@ const stagger = (ps) => {
   at(1790787800004)(r2);
 };
 
-// The focus band's JSON for one poll, and the tag of a key in it; like the mod, an announced question is reported as printed unless `printed` is false.
-function focusRun(dir, env, args = ["focus"], { printed = true } = {}) {
+// The status band's JSON for one poll, and the tag of a key in it.
+function focusRun(dir, env, args = ["focus"]) {
   const res = run("console.mjs", args, { dir, env });
   const payload = JSON.parse(res.out);
-  if (printed && payload.announceKey) run("console.mjs", ["focus-shown", payload.announceKey], { dir, env });
   const tagOf = (key) => payload.sessions.find((s) => s.key === key)?.tag ?? null;
   return { ...payload, currentTag: tagOf(payload.current), queueTags: payload.queue.map((q) => tagOf(q.key)), tagOf };
 }
@@ -2685,48 +2489,6 @@ test("有 mods 時 watcher 不為題目叫醒中控台：題目停下只寫紀�
   assert.ok(plain.out.includes("### 🔐 PROJ-102(perm) 等你授權"));
 });
 
-test("config.json 的 autoShow 設成 false：題目換上橫條不 announce（不自動印）；按 9 選這題（focus-pick）照舊印；沒設或 true 照舊自動印", () => {
-  const home = consoleHome({ mods: true });
-  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ autoShow: false }));
-  const env = { WORKTREE_CONSOLE_HOME: home };
-  const dir = fake({ mutatePs: stagger });
-  const first = focusRun(dir, env);
-  assert.equal(first.currentTag, "PROJ-102(perm)");
-  assert.equal(first.announce, null, "autoShow false 不自動印");
-  const picked = focusRun(dir, env, ["focus-pick", first.current]);
-  assert.equal(picked.announce, "PROJ-102(perm)", "按 9 照舊印");
-  const on = consoleHome({ mods: true });
-  fs.writeFileSync(path.join(on, "config.json"), JSON.stringify({ autoShow: true }));
-  assert.equal(focusRun(dir, { WORKTREE_CONSOLE_HOME: on }).announce, "PROJ-102(perm)");
-});
-
-test("專注：同一題（session＋停下時間）只 announce 一次，輪詢、重啟都不重送；該 session 有新題才再 announce", () => {
-  const home = consoleHome({ mods: true });
-  const env = { WORKTREE_CONSOLE_HOME: home };
-  const dir = fake({ mutatePs: stagger });
-  const first = focusRun(dir, env);
-  assert.deepEqual([first.currentTag, first.announce], ["PROJ-102(perm)", "PROJ-102(perm)"]);
-  for (let i = 0; i < 2; i++) assert.equal(focusRun(dir, env).announce, null, "同一題不重送");
-  const restarted = { ...readJson(home, "focus.json"), modsAt: 0 };
-  fs.writeFileSync(path.join(home, "focus.json"), JSON.stringify(restarted));
-  assert.equal(focusRun(dir, env).announce, null, "中控台重啟後同一題也不重送");
-  const asksAgain = fake({ mutatePs: (ps) => { stagger(ps); Object.assign(agentIn(ps, "proj-102-perm")[0], { state: "waiting", toolName: "Bash", toolInput: "ls", stateStartedAt: 1790787900000 }); } });
-  const fresh = focusRun(asksAgain, env);
-  assert.deepEqual([fresh.currentTag, fresh.announce], ["PROJ-102(perm)", "PROJ-102(perm)"], "同 session 停在新的一題：再 announce");
-});
-
-test("專注：mod 回報印出（focus-shown）前，同一題每次輪詢都 announce；回報後才算印過", () => {
-  const home = consoleHome({ mods: true });
-  const env = { WORKTREE_CONSOLE_HOME: home };
-  const dir = fake({ mutatePs: stagger });
-  const first = focusRun(dir, env, ["focus"], { printed: false });
-  assert.deepEqual([first.announce, first.tagOf(first.announceKey)], ["PROJ-102(perm)", "PROJ-102(perm)"]);
-  assert.deepEqual(readJson(home, "focus.json").reported, [], "只決定要印，還不算印過");
-  assert.equal(focusRun(dir, env, ["focus"], { printed: false }).announceKey, first.announceKey, "沒回報印出就再送一次");
-  assert.equal(run("console.mjs", ["focus-shown", first.announceKey], { dir, env }).code, 0);
-  assert.deepEqual([focusRun(dir, env).announce, focusRun(dir, env).announceKey], [null, null]);
-});
-
 test("專注：同一個分頁裡沒載入過中控台 skill 的 session（daemon 的備用 session）拿不到橫條；中控台 session 查過一次就記住", () => {
   const home = consoleHome({ mods: true });
   const env = { WORKTREE_CONSOLE_HOME: home };
@@ -2738,7 +2500,7 @@ test("專注：同一個分頁裡沒載入過中控台 skill 的 session（daemo
   assert.equal(fs.readFileSync(path.join(home, "focus.json"), "utf8"), before, "備用 session 不動專注狀態，題目留給中控台");
   const real = claudeSession("console-session");
   const view = focusRun(dir, env, ["focus", "--session", real], { printed: false });
-  assert.deepEqual([view.currentTag, view.announce], ["PROJ-102(perm)", "PROJ-102(perm)"]);
+  assert.equal(view.currentTag, "PROJ-102(perm)");
   assert.deepEqual(readJson(home, "focus.json").consoleSessions, [real]);
   fs.rmSync(path.join(tmp, "claude-projects", "-sessions", `${real}.jsonl`));
   assert.equal(focusRun(dir, env, ["focus", "--session", real]).active, true, "記住後不再讀對話紀錄");
@@ -2761,47 +2523,35 @@ test("專注：只有最新的橫條拿得到橫條；重載 plugin 或另開中
   assert.equal(poll("--owner", "new"), false);
 });
 
-test("專注：切題把排隊題放上橫條、沒回的原題排到最後；延後把目前這題移到排隊最後、換排隊第一題；兩者都 announce", () => {
+test("專注：8 延後把目前這件移到排隊最後、換排隊第一件；focus-pick 子指令已移除", () => {
   const home = consoleHome({ mods: true });
   const env = { WORKTREE_CONSOLE_HOME: home };
   const dir = fake({ mutatePs: stagger });
   const start = focusRun(dir, env);
-  assert.deepEqual([start.currentTag, start.queueTags], ["PROJ-102(perm)", ["PROJ-102(question)", "release…#1", "release…#2"]]);
-  const picked = focusRun(dir, env, ["focus-pick", start.queue[2].key]);
-  assert.deepEqual([picked.currentTag, picked.queueTags, picked.announce], ["release…#2", ["PROJ-102(question)", "release…#1", "PROJ-102(perm)"], "release…#2"]);
-  const back = focusRun(dir, env, ["focus-pick", picked.queue[2].key]);
-  assert.deepEqual([back.currentTag, back.queueTags, back.announce], ["PROJ-102(perm)", ["PROJ-102(question)", "release…#1", "release…#2"], "PROJ-102(perm)"], "切回已印過的題目照樣 announce");
+  assert.equal(start.currentTag, "PROJ-102(perm)");
   const later = focusRun(dir, env, ["focus-later"]);
-  assert.deepEqual([later.currentTag, later.queueTags, later.announce], ["PROJ-102(question)", ["release…#1", "release…#2", "PROJ-102(perm)"], "PROJ-102(question)"]);
-  const again = focusRun(dir, env, ["focus-later"]);
-  assert.deepEqual([again.currentTag, again.queueTags], ["release…#1", ["release…#2", "PROJ-102(perm)", "PROJ-102(question)"]], "延後過的依延後先後排最後");
-  const unit = focusStep(focusPick(emptyFocus(), "b"), [entry("a", "waiting", 1), entry("b", "waiting", 2), entry("c", "permission", 3)], 10);
-  assert.deepEqual([unit.current.key, unit.queue.map((e) => e.key)], ["b", ["c", "a"]], "🔐 固定最前");
+  assert.deepEqual([later.currentTag, later.queueTags.at(-1)], [start.queueTags[0], "PROJ-102(perm)"]);
+  assert.equal("announce" in later, false, "不自動印題目");
+  const gone = run("console.mjs", ["focus-pick", start.queue[0].key], { dir, env });
+  assert.equal(gone.code, 1);
+  assert.match(gone.out + gone.err, /未知指令：focus-pick/);
 });
 
-test("專注：其他 session 有新題時橫條題目不動、排隊多一題標 isNew、統計加 1；回完等同一 session 60 秒，它再問就直接上橫條並 announce", () => {
+test("專注：其他 session 有新題時目前這件不動、只排進隊伍；回完沒有別題在等時等同一 session 回應，不設時限", () => {
   const home = consoleHome({ mods: true });
   const env = { WORKTREE_CONSOLE_HOME: home };
   const quiet = (ps) => { stagger(ps); releaseBusy(ps); };
   const before = focusRun(fake({ mutatePs: quiet }), env);
   assert.deepEqual([before.currentTag, before.queueTags], ["PROJ-102(perm)", ["PROJ-102(question)"]]);
-  assert.match(before.stats, /^等待回應 1 \| 等待授權 1 \| 回覆完畢 0 /);
   const dir = fake({ mutatePs: (ps) => { quiet(ps); Object.assign(agentIn(ps, "release-2026-10")[0], { state: "done", toolName: null, lastAssistantMessage: "要先跑測試嗎？", stateStartedAt: 1790787900000 }); } });
   const after = focusRun(dir, env);
-  assert.deepEqual([after.currentTag, after.announce], ["PROJ-102(perm)", null], "橫條題目不動，也不印");
-  assert.deepEqual(after.queue.map((q) => [after.tagOf(q.key), q.isNew]), [["PROJ-102(question)", false], ["release…#1", true]]);
-  assert.match(after.stats, /^等待回應 2 \| 等待授權 1 /);
-  assert.deepEqual(run("console.mjs", ["after-send", "--repo", app(), "PROJ-102(perm)"], { dir, env }).lines, ["等 PROJ-102(perm) 回應中…　還有 2 題排隊", "待取暱稱：chris-proj-102-question（app）、proj-102-perm（app）、release-2026-10（app）"]);
-  const waiting = focusRun(dir, env);
-  assert.deepEqual([waiting.current, waiting.waiting.tag, waiting.announce], [null, "PROJ-102(perm)", null]);
-  const asksAgain = fake({ mutatePs: (ps) => { quiet(ps); Object.assign(agentIn(ps, "release-2026-10")[0], { state: "done", toolName: null, lastAssistantMessage: "要先跑測試嗎？", stateStartedAt: 1790787900000 }); Object.assign(agentIn(ps, "proj-102-perm")[0], { state: "done", toolName: null, lastAssistantMessage: "要改用 db:reset 嗎？", stateStartedAt: 1790787950000 }); } });
-  const sticky = focusRun(asksAgain, env);
-  assert.deepEqual([sticky.currentTag, sticky.announce, sticky.waiting], ["PROJ-102(perm)", "PROJ-102(perm)", null], "60 秒內同一 session 又問：不換人直接上橫條");
-  run("console.mjs", ["after-send", "--repo", app(), "PROJ-102(perm)"], { dir: asksAgain, env });
-  const state = readJson(home, "focus.json");
-  fs.writeFileSync(path.join(home, "focus.json"), JSON.stringify({ ...state, wait: { ...state.wait, until: Date.now() - 1 } }));
-  const moved = focusRun(asksAgain, env);
-  assert.deepEqual([moved.currentTag, moved.announce], ["PROJ-102(question)", "PROJ-102(question)"], "超過 60 秒自動輪到排隊第一題並 announce");
+  assert.equal(after.currentTag, "PROJ-102(perm)", "目前這件不動");
+  assert.deepEqual(after.queueTags.sort(), ["PROJ-102(question)", "release…#1"].sort());
+  assert.equal(after.band.rows[0].keys[0].key, "8", "有別題在等時 8 出現");
+  run("console.mjs", ["after-send", "--repo", app(), "PROJ-102(perm)"], { dir, env });
+  const moved = focusRun(dir, env);
+  assert.notEqual(moved.currentTag, "PROJ-102(perm)", "回完有別題在等就立刻換");
+  assert.equal(moved.waiting, null);
 });
 
 test("console.mjs focus：只回應中控台自己的分頁；每個 session 一張卡片資料，含狀態、階段、摘要、問題、a/b/c 選項與完整回報（不含建議）", () => {
@@ -2810,13 +2560,12 @@ test("console.mjs focus：只回應中控台自己的分頁；每個 session 一
   assert.ok(!fs.existsSync(path.join(notConsole, "focus.json")), "不是中控台不留心跳");
   const home = consoleHome();
   const view = focusRun(fake({ mutatePs: stagger }), { WORKTREE_CONSOLE_HOME: home });
-  assert.equal(view.stats, "等待回應 1 | 等待授權 1 | 回覆完畢 2 | 執行中 2 | 封存 0 | 閒置 1");
   assert.equal(view.home, home);
   const perm = view.sessions.find((s) => s.tag === "PROJ-102(perm)");
   assert.deepEqual([perm.status, perm.stage, perm.pending, perm.options, "suggest" in perm], ["等待授權", "未開工", true, [], false]);
   assert.equal(perm.report, expectedReports(fake({ mutatePs: stagger }), ["PROJ-102(perm)"])[0].join("\n"));
   const idle = view.sessions.find((s) => s.tag === "PROJ-103");
-  assert.deepEqual([idle.status, idle.question, idle.pending], ["閒置", "（閒置）", false]);
+  assert.deepEqual([idle.status, idle.question, idle.pending], ["閒置", undefined, false]);
   assert.deepEqual(view.sessions.map((s) => s.repo), ["app", "app", "app", "app", "app", "app", "api"]);
   assert.ok(Date.now() - readJson(home, "focus.json").modsAt < 5_000, "每次輪詢都是 mods 的心跳");
   const menu = focusRun(withMenuSession([MENU[0]], { mutatePs: (ps) => { stagger(ps); Object.assign(agentIn(ps, "proj-103-idle")[0], menuAgent()); } }), { WORKTREE_CONSOLE_HOME: consoleHome() });
@@ -2924,7 +2673,7 @@ test("批改單：console.mjs focus 給橫條的題目是「批改單 5 題（�
   const dir = replyWorld(SHEET, "a");
   const view = focusRun(dir, { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) });
   const card = view.sessions.find((s) => s.tag === "PROJ-102(question)");
-  assert.equal(card.question, "批改單 5 題（🔴 2 題要你看）");
+  assert.equal(card.question, undefined, "卡片不帶題目");
   assert.equal(view.currentTag, "PROJ-102(question)");
   for (const line of SHEET_ITEMS) assert.ok(card.report.includes(`> ${line}`), line);
   assert.deepEqual(card.report.split("\n").filter((l) => l.endsWith("…")), []);
@@ -3107,7 +2856,7 @@ test("批改單分已決定與待決定：按 9 印出的回報含已決定、�
   const dir = replyWorld(SPLIT_SHEET, "a");
   const view = focusRun(dir, { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) });
   const card = view.sessions.find((s) => s.tag === "PROJ-102(question)");
-  assert.equal(card.question, "批改單 待決定 3 題（🔴 2 題要你看）");
+  assert.equal(card.question, undefined, "卡片不帶題目");
   for (const line of SPLIT_SHEET.split("\n").slice(1).filter((l) => l.trim())) assert.ok(card.report.includes(`> ${line}`), line);
   assert.deepEqual(card.report.split("\n").filter((l) => l.endsWith("…")), []);
 });
@@ -3124,8 +2873,8 @@ test("有 mods 時在輸入框回覆（send 送達）也算回完這題：專注
   const sent = sendRun(["chat"], SCREENS.chat[1], { WORKTREE_CONSOLE_HOME: home });
   assert.equal(sent.out, "[PROJ-103] 已送出");
   const state = readJson(home, "focus.json");
-  assert.deepEqual([state.wait.tag, state.wait.handle, state.current], ["PROJ-103", "term_e", null]);
-  assert.ok(state.wait.until > Date.now() + FOCUS_WAIT_MS - 10_000);
+  assert.deepEqual([state.wait?.tag ?? null, state.replied.at(-1).handle], [state.current ? null : "PROJ-103", "term_e"], "回完了：有別題就換、沒有就等它");
+  assert.equal(state.wait?.until, undefined, "等待不設時限");
   const plain = consoleHome();
   assert.equal(sendRun(["chat"], SCREENS.chat[1], { WORKTREE_CONSOLE_HOME: plain }).out, "[PROJ-103] 已送出");
   assert.ok(!fs.existsSync(path.join(plain, "focus.json")));
@@ -3277,7 +3026,6 @@ test("/goal 中控台各處：進行中時專注排隊列、灰色統計行、�
   };
   const home = consoleHome({ mods: true });
   const env = { WORKTREE_CONSOLE_HOME: home };
-  const baseline = focusRun(fake({ mutatePs: stagger }), { WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }) });
 
   withTranscripts({ "s.jsonl": goalTurn() });
   const active = withScreen(GOAL_FOOTER);
@@ -3285,8 +3033,7 @@ test("/goal 中控台各處：進行中時專注排隊列、灰色統計行、�
   const card = during.sessions.find((s) => s.tag === "PROJ-101");
   assert.deepEqual([card.status, card.pending], ["執行中", false]);
   assert.ok(!during.queueTags.includes("PROJ-101") && during.currentTag !== "PROJ-101", "不進排隊");
-  assert.ok(!during.queue.some((q) => q.isNew), "沒有 ✨，不跳浮動通知");
-  assert.equal(during.stats, baseline.stats, "統計行跟沒停下時一樣");
+
   assert.equal(table(run("console.mjs", ["board", "--repo", app()], { dir: active }).out).by["PROJ-101"][0], "🔄 執行中");
   const quiet = run("watch.mjs", ["--baseline", baselineWith()], { dir: active, env: { WATCH_TIMEOUT_MS: "300" } });
   assert.equal(quiet.lines[0], "[watch] timeout", quiet.out);
@@ -3294,11 +3041,8 @@ test("/goal 中控台各處：進行中時專注排隊列、灰色統計行、�
   withTranscripts({ "s.jsonl": goalTurn(goalStatus(true), assistantText("全部完成。")) });
   const achieved = withScreen(PLAIN_FOOTER);
   const done = focusRun(achieved, env);
-  assert.equal(done.queueTags.filter((t) => t === "PROJ-101").length, 1, "達成後進隊伍");
-  assert.equal(done.queue.find((q) => done.tagOf(q.key) === "PROJ-101").isNew, true, "多一顆 ✨");
-  const again = focusRun(achieved, env);
-  assert.equal(again.queueTags.filter((t) => t === "PROJ-101").length, 1, "同一次停下只進一次");
-  assert.equal(again.queue.find((q) => again.tagOf(q.key) === "PROJ-101").isNew, true, "key 沒變，不重算成新題");
+  assert.equal(done.sessions.find((s) => s.tag === "PROJ-101").status, "回覆完畢", "達成後不再算執行中");
+  assert.ok(!done.queueTags.includes("PROJ-101") && done.currentTag !== "PROJ-101", "沒在等你的回覆完畢不上狀態區");
   assert.equal(table(run("console.mjs", ["board", "--repo", app()], { dir: achieved }).out).by["PROJ-101"][0], "⏸ 回覆完畢");
   const woke = run("watch.mjs", ["--baseline", baselineWith()], { dir: achieved, env: { WATCH_TIMEOUT_MS: "300" } });
   assert.deepEqual(fresh(blocks(woke.out).reports).map((r) => r[0]), ["### ⏸ PROJ-101 回覆完畢"]);
@@ -3330,38 +3074,6 @@ test("API 錯誤停下：不用 Orca 給的最後回覆（空的或前一個工�
   assert.deepEqual(statusOf("term_api_a", "Exit code 1\n要繼續嗎？"), { kind: "done", text: `⚠️ ${error}` }, "前一個工具的錯誤輸出不當成回覆，也不因問號變成等你回應");
   assert.deepEqual(statusOf("term_api_b", ""), { kind: "done", text: `⚠️ ${error}` });
   assert.equal(statusOf("term_api_c", "第 8 題記下了，網址是？").kind, "waiting", "錯誤之後又正常回覆就照 Orca 的內容");
-});
-
-test("專注佇列：橫條上的 session 被直接在它自己的分頁回覆（開始執行）也等它 60 秒；封存或關掉的不等", () => {
-  const a = entry("a@1", "waiting", 1, { paneKey: "a", tag: "a" });
-  const b = entry("b@2", "waiting", 2, { paneKey: "b", tag: "b" });
-  const start = focusStep(emptyFocus(), [a, b], 10).state;
-  let view = focusStep(start, [b], 20, [{ paneKey: "a", handle: "h-a", tag: "a" }]);
-  assert.deepEqual([view.current, view.wait?.tag], [null, "a"], "原本那題消失、它在執行中：不換下一題");
-  view = focusStep(view.state, [b], 30, [{ paneKey: "a", tag: "a" }]);
-  assert.equal(view.current, null, "等待中照樣不換");
-  const again = entry("a@25", "waiting", 25, { paneKey: "a", tag: "a" });
-  view = focusStep(view.state, [b, again], 40);
-  assert.deepEqual([view.current?.key, view.wait], ["a@25", null], "它再停下就端它的新題目");
-  assert.equal(focusStep(start, [b], 20).current.key, "b@2", "不在執行中（封存、關掉）就照排隊");
-  const late = focusStep(focusStep(start, [b], 20, [{ paneKey: "a", tag: "a" }]).state, [b], 20 + FOCUS_WAIT_MS, [{ paneKey: "a", tag: "a" }]);
-  assert.equal(late.current.key, "b@2", "60 秒到了就換下一題，不再重新起算");
-});
-
-test("專注橫條存檔：輪詢最後只寫標題快取，不蓋掉輪詢期間回覆存下的等待", () => {
-  const home = consoleHome({ mods: true });
-  const prev = process.env.WORKTREE_CONSOLE_HOME;
-  process.env.WORKTREE_CONSOLE_HOME = home;
-  try {
-    const wait = { paneKey: "a", handle: "h-a", tag: "a", until: Date.now() + FOCUS_WAIT_MS };
-    saveFocus({ ...loadFocus(), current: null, wait, answered: ["a@1"] });
-    saveTitles({ "/wt/a": "標題" });
-    const state = loadFocus();
-    assert.deepEqual([state.wait, state.answered, state.titles], [wait, ["a@1"], { "/wt/a": "標題" }]);
-  } finally {
-    if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
-    else process.env.WORKTREE_CONSOLE_HOME = prev;
-  }
 });
 
 test("focus-shown：題目還在橫條上才記成印過；已離開橫條的等回來再印", () => {
@@ -3552,6 +3264,7 @@ test("試營運期中：開始第 7 天起只寫一次期中報告，不印、�
 // --- 實作前審核（review-before-implement） ---
 
 const reviewMod = await import("../skills/worktree-console/scripts/review.mjs");
+const { SHEET_ANSWER } = await import("../skills/worktree-console/scripts/urgency.mjs");
 const QWT = () => fs.realpathSync(wt("chris-proj-102-question"));
 const reviewAdd = (question = "先做哪個畫面？", extra = {}) => reviewMod.addItem(reviewMod.worktreeOf(QWT()), { question, plan: "先改畫面", basis: { kind: "none", note: "" }, impact: "訂單頁", by: "advisor", stop: "x", ...extra });
 const clearReviews = () => fs.rmSync(path.join(tmp, "log", "reviews"), { recursive: true, force: true });
@@ -3587,6 +3300,23 @@ test("define-goal 與前端精簡路徑的批改單：回報後面接上審核�
   const st = reviewMod.stateOf(reviewMod.worktreeOf(QWT()));
   assert.ok(st.approved, "寫入已審標記");
   assert.equal(st.open.length, 0, "審核單記成審完");
+  assert.deepEqual(st.items.map((x) => x.status), ["elsewhere"], "沒審的件標在別處回覆");
+  clearReviews();
+});
+
+test("審核單不卡住：在中控台用 reply 回攔截點貼出整張審核單的那則，記成審完、解鎖，沒審的件標「在別處回覆」；代回前綴的訊息不算", () => {
+  clearReviews();
+  reviewAdd();
+  const env = () => ({ WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" });
+  const pasted = "改檔被攔截點擋下了，審核單如下：\n\n審核單：PROJ-102\nchris-proj-102-question\n\n先看：沒有前例\n\n1. 先做哪個畫面？\n\n要照這樣通過嗎？";
+  const auto = run("console.mjs", ["reply", "--repo", app(), "--", SHEET_ANSWER], { dir: replyWorld(pasted, SHEET_ANSWER), env: env() });
+  assert.equal(auto.code, 0, auto.out + auto.err);
+  assert.equal(reviewMod.stateOf(reviewMod.worktreeOf(QWT())).approved, null, "代回前綴不算使用者回答");
+  const sent = run("console.mjs", ["reply", "--repo", app(), "--", "照建議"], { dir: replyWorld(pasted, "照建議"), env: env() });
+  assert.equal(sent.lines[0], "[PROJ-102(question)] 已送出", sent.out + sent.err);
+  const st = reviewMod.stateOf(reviewMod.worktreeOf(QWT()));
+  assert.ok(st.approved, "寫入已審標記");
+  assert.deepEqual(st.items.map((x) => x.status), ["elsewhere"]);
   clearReviews();
 });
 

@@ -16,7 +16,9 @@ export function focusFixture(counts, summaries = []) {
     summary: "假資料摘要", question: "假資料問題", options: [], archived: false, pending: false, report: "假資料", ...extra,
   }));
   const queue = make("reply", pending, { pending: true }).map((s, i) => (summaries[i] ? { ...s, summary: summaries[i] } : s));
-  return { active: true, current: queue[0].key, queue: queue.slice(1).map(s => ({ key: s.key, isNew: false })),
+  const keys = [...(queue.length > 1 ? [{ key: "8", label: "延後處理", action: "later" }] : []), { key: "9", label: "顯示問題", action: "show" }, { key: "0", label: "面板", action: "pane" }];
+  const band = { title: "狀態", rail: "waiting", rows: [{ variants: [[{ text: "◆", color: "waiting" }, { text: " 輪到你  ", color: "waiting", bold: true }, { text: queue[0]?.tag ?? "", bold: true }]], keys }] };
+  return { active: true, current: queue[0].key, queue: queue.slice(1).map(s => ({ key: s.key })), band,
     sessions: [...queue, ...make("work", all - pending - idle, { status: "執行中" }), ...make("archive", hidden, { archived: true }), ...make("idle", idle, { status: "閒置" })] };
 }
 
@@ -84,7 +86,7 @@ export async function terminalFixture({ counts, summaries, columns = 120, socket
   return {
     home, tmux, capture, waitFor,
     async open() {
-      await waitFor(frame => frame.includes("0: 面板"), "等待假資料專注列");
+      await waitFor(frame => frame.includes("0 面板"), "等待假資料狀態區");
       // The band's digits arm only once the engine has laid out its window, some 500ms after it first paints; a `0`
       // before that stays typed in the prompt (an armed one shows there briefly too, then opens the panel and is wiped).
       for (let attempt = 0; attempt < 5; attempt++) {
