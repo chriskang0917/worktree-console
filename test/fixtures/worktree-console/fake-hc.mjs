@@ -9,7 +9,11 @@ const raw = process.argv.slice(2);
 const args = raw.filter((x) => x !== "--json");
 const stateFile = path.join(dir, "state.json");
 const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-const save = () => fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+const save = () => {
+  const tmp = `${stateFile}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, stateFile);
+};
 const screenFile = (t) => path.join(dir, `screen-${t}.txt`);
 
 fs.appendFileSync(path.join(dir, "calls.log"), `${JSON.stringify(["hc", ...args])}\n`);

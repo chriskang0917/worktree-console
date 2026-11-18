@@ -8,7 +8,11 @@ const dir = process.env.FAKE_HERDR_APP_DIR;
 const args = process.argv.slice(2);
 const stateFile = path.join(dir, "state.json");
 const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-const save = () => fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+const save = () => {
+  const tmp = `${stateFile}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, stateFile);
+};
 
 fs.appendFileSync(path.join(dir, "calls.log"), `${JSON.stringify(["herdr-app", ...args])}\n`);
 
