@@ -290,7 +290,7 @@ test("SessionStart 對每個子 session 加進四條規則：10 類緊急名單�
   const { dir } = repo();
   const r = spawnSync(process.execPath, [HOOK, "session-start"], { input: JSON.stringify({ cwd: dir, session_id: "s" }), encoding: "utf8", env: env() });
   const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
-  for (const k of ["等待授權", "session 異常", "push、合併、刪資料或 branch、寫 Linear／Slack、改遠端設定", "方向、範圍、資料寫入、權限", "需使用者本人判定的驗收與原型確認", "加進〈不做〉或拿掉先前決定", "要用秘密值", "要連 SSH 或 RDS", "連續 3 個假設失敗", "判斷不出是否緊急"]) assert.ok(ctx.includes(k), k);
+  for (const k of ["等待授權", "session 異常", "（推 main、force push、合併、刪資料或 branch、寫 Linear／Slack、改遠端設定）", "方向、範圍、資料寫入、權限", "需使用者本人判定的驗收與原型確認", "加進〈不做〉或拿掉先前決定", "要用秘密值", "要連 SSH 或 RDS", "連續 3 個假設失敗", "判斷不出是否緊急"]) assert.ok(ctx.includes(k), k);
   assert.match(ctx, /review add --question/);
   assert.match(ctx, /--before <改前截圖> --after <改後截圖>（本機 dev server 截的），截不到時加 --prototype/);
   assert.match(ctx, /整則都等使用者回/);
