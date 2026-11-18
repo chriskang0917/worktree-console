@@ -535,7 +535,7 @@ export function finishedState(row, status, now = Date.now()) {
   return value;
 }
 
-// The session's own ending line decides first; without one, the fourth layer of its recap; without that, 💬, a menu, 🔐 and ⚠️ wait,
+// The session's own ending line decides first; without one, a 第 N 題 or a, b, c question waits, else the fourth layer of its recap; without that, 💬, a menu, 🔐 and ⚠️ wait,
 // and ⏸ waits when it asks in words. 已完成 with changes left to commit or push still waits on you.
 export function awaitsUser(status, { row = null, session = null, home } = {}) {
   const kind = status?.kind;
@@ -543,6 +543,8 @@ export function awaitsUser(status, { row = null, session = null, home } = {}) {
   if (kind !== "waiting" && kind !== "done") return false;
   const ending = endingOf(status.text);
   if (ending) return ending.wait || finishedState(row, status)?.closable === false;
+  // A missed question costs more than an extra one listed, so a recap never takes a set question off the list.
+  if (kind === "waiting" && asksOutright(status.text)) return true;
   const digest = session ? digestDecides(session, home) : null;
   if (digest !== null) return digest;
   return kind === "waiting" || awaitsDecision(status.text);
@@ -602,6 +604,11 @@ export function asksAtEnd(text) {
 
 function askLines(text) {
   return proseLines(text).filter((l) => /[?？]/.test(l) && !isTableRow(l)).map((l) => l.trim());
+}
+
+export function asksOutright(text) {
+  const prose = proseLines(text);
+  return prose.some((l) => TOPIC.test(l)) || optionLists(prose).some((g) => family(g[0].code) !== "digit");
 }
 
 // A 第 N 題 heading or a, b, c options ask outright; plain sentences ask only when the last paragraph does.

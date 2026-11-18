@@ -388,6 +388,25 @@ test("結尾與狀態：最後一行等你／已完成照它判；沒寫時用�
   assert.equal(lib.awaitsUser(s("none", "改好了，請你確認。").status, { session: s("none", "x") }), true, "沒有摘要照舊用字面");
 });
 
+test("結尾與狀態：有「第 N 題」或 a、b、c 選項的 💬 題目、開著的選單，摘要寫下一步也照樣輪到你、留在等待清單", () => {
+  const home = process.env.WORKTREE_CONSOLE_HOME;
+  fs.mkdirSync(path.join(home, "summaries"), { recursive: true });
+  const asks = {
+    q1: "改好了。\n\n**第 1 題：** 按鈕放哪？\na. 左邊\nb. 右邊",
+    q2: "要怎麼處理舊資料？\n\na. 保留\nb. 刪掉\nc. 搬走",
+    q3: "**第 2 題：** 要不要拆成兩張票？",
+  };
+  for (const [handle, t] of Object.entries(asks)) {
+    fs.writeFileSync(path.join(home, "summaries", `${encodeURIComponent(handle)}.json`), JSON.stringify({ text: "在做什麼：改按鈕\n下一步：等回覆後繼續" }));
+    const s = { handle, paneKey: handle, since: 5, status: { kind: "waiting", text: t }, agent: { stateStartedAt: 5 } };
+    assert.equal(lib.awaitsUser(s.status, { session: s }), true, handle);
+    assert.equal(line.listedAs(s), "waiting", handle);
+  }
+  fs.writeFileSync(path.join(home, "summaries", "menu.json"), JSON.stringify({ text: "在做什麼：改按鈕\n下一步：跑測試" }));
+  const menu = { handle: "menu", paneKey: "menu", since: 5, status: { kind: "waiting", menu: [{ question: "選哪個？", options: [{ label: "A" }] }], text: "" }, agent: { stateStartedAt: 5 } };
+  assert.equal(line.listedAs(menu), "waiting");
+});
+
 test("結尾與狀態：子 session 停下時兩個 Stop hook 都不回 decision: block，hooks.json 也沒有替子 session 新增擋下的 Stop 指令", () => {
   const hooks = JSON.parse(fs.readFileSync(path.join(root, "hooks", "hooks.json"), "utf8"));
   assert.deepEqual(hooks.hooks.Stop.flatMap((h) => h.hooks.map((x) => x.command.split("/").at(-1))), ['auto-handoff.mjs" stop', 'summary.mjs" stop']);
