@@ -344,40 +344,137 @@ test("x 就地問：空白要範例、打字問任意問題，回答另寫一行
   assert.ok(data.fresh[0].example.endsWith(".md"));
 });
 
-test("x 問沒有目標檔：改讀 worktree 的規劃文件與子 session 的對話回答，並要求查不到就說查不到；三樣都沒有時不問模型，直接回查不到", () => {
-  const projects = fs.mkdtempSync(path.join(tmp, "projects-"));
-  const seen = path.join(tmp, `prompt-${n}.txt`);
+function fakeModel() {
+  const seen = path.join(tmp, `prompt-${++n}.txt`);
+  const cwd = path.join(tmp, `cwd-${n}.txt`);
   const model = path.join(tmp, `model-${n}.sh`);
-  fs.writeFileSync(model, `#!/bin/sh\ncat > "${seen}"\necho 規劃文件寫了先做 API。\n`);
+  fs.writeFileSync(model, `#!/bin/sh\ncat > "${seen}"\npwd > "${cwd}"\necho 規劃文件寫了先做 API。\n`);
   fs.chmodSync(model, 0o755);
-  const clean = { ...env(), WORKTREE_CONSOLE_REVIEW_MODEL_CMD: model, CLAUDE_PROJECTS_DIR: projects };
-  delete clean.CLAUDE_CODE_SESSION_ID;
-  const ask = (dir, q) => spawnSync(process.execPath, [CONSOLE, "review", "ask", "--n", "1", "--q", q], { cwd: dir, encoding: "utf8", env: clean });
+  return { model, prompt: () => fs.readFileSync(seen, "utf8"), cwd: () => fs.readFileSync(cwd, "utf8").trim(), asked: () => fs.existsSync(seen) };
+}
 
-  const bare = repo("feat/bare-ask");
-  cli(bare.dir, "add", ...good, "--session", "none-such");
-  const r0 = ask(bare.dir, "為什麼先做 API？");
-  assert.equal(r0.status, 0, r0.stderr);
-  assert.match(r0.stdout, /^查不到：這個 worktree 沒有目標檔、規劃文件，也讀不到子 session 的對話/);
-  assert.equal(fs.existsSync(seen), false, "沒問模型");
+function askEnv(model, extra = {}) {
+  const e = { ...env(), WORKTREE_CONSOLE_REVIEW_MODEL_CMD: model, CLAUDE_PROJECTS_DIR: fs.mkdtempSync(path.join(tmp, "projects-")), SARA_DEV_FLOW_HOME: path.join(tmp, "flow"), ...extra };
+  delete e.CLAUDE_CODE_SESSION_ID;
+  return e;
+}
 
-  const planned = repo("feat/planned-ask");
-  fs.mkdirSync(path.join(planned.dir, "docs"), { recursive: true });
-  fs.writeFileSync(path.join(planned.dir, "docs", "plan.md"), "# 計畫\n先做 API，再做畫面。\n");
-  fs.mkdirSync(path.join(projects, "-wt"));
-  fs.writeFileSync(path.join(projects, "-wt", "s-plan.jsonl"), [
+const askCli = (dir, e, q = "為什麼先做 API？") => spawnSync(process.execPath, [CONSOLE, "review", "ask", "--n", "1", "--q", q], { cwd: dir, encoding: "utf8", env: e });
+
+test("x 問的回答者：在 worktree 裡跑，只開 Read、Grep、Glob，帶 --restricted --strict-mcp-config，用 --add-dir 加上存在的規劃資料夾；逾時 100 秒，比面板等的 120 秒短", () => {
+  const saved = process.env.WORKTREE_CONSOLE_REVIEW_MODEL_CMD;
+  delete process.env.WORKTREE_CONSOLE_REVIEW_MODEL_CMD;
+  try {
+    const { cmd, args } = awaitImport.modelCommand({ dirs: ["/flow/repo/feat-x", "/main/.goals"] });
+    assert.equal(cmd, "claude");
+    assert.deepEqual(args, ["-p", "--model", process.env.WORKTREE_CONSOLE_REVIEW_MODEL || "sonnet", "--settings", '{"disableAllHooks":true}', "--restricted", "--strict-mcp-config", "--tools", "Read,Grep,Glob", "--add-dir", "/flow/repo/feat-x", "--add-dir", "/main/.goals"]);
+    assert.ok(!awaitImport.modelCommand().args.includes("--restricted"), "要範例照舊不帶讀檔參數");
+  } finally {
+    if (saved !== undefined) process.env.WORKTREE_CONSOLE_REVIEW_MODEL_CMD = saved;
+  }
+  const { dir } = repo("feat/dirs-ask");
+  add(dir);
+  const wt = review.worktreeOf(dir);
+  const flow = path.join(tmp, "flow-dirs");
+  const run = path.join(flow, wt.repo, "feat-dirs-ask");
+  fs.mkdirSync(run, { recursive: true });
+  fs.writeFileSync(path.join(run, "goal.md"), "# 目標\n");
+  const saveFlow = process.env.SARA_DEV_FLOW_HOME;
+  process.env.SARA_DEV_FLOW_HOME = flow;
+  try {
+    let got;
+    awaitImport.askQuestion(wt, review.stateOf(wt).open[0], review.stateOf(wt), "為什麼？", (prompt, opts) => ((got = { prompt, ...opts }), "答"));
+    assert.equal(got.cwd, wt.path);
+    assert.deepEqual(got.read.dirs, [run], "沒有 .goals 就不加");
+    fs.mkdirSync(path.join(wt.main, ".goals"));
+    awaitImport.askQuestion(wt, review.stateOf(wt).open[0], review.stateOf(wt), "為什麼？", (prompt, opts) => ((got = { prompt, ...opts }), "答"));
+    assert.deepEqual(got.read.dirs, [run, path.join(wt.main, ".goals")]);
+    assert.equal(got.timeout, 100_000);
+  } finally {
+    if (saveFlow === undefined) delete process.env.SARA_DEV_FLOW_HOME;
+    else process.env.SARA_DEV_FLOW_HOME = saveFlow;
+  }
+  const panel = fs.readFileSync(path.join(root, "hooks", "worktree-console-focus.tsx"), "utf8");
+  assert.match(panel, /const REVIEW_TIMEOUT_MS = 120_000/);
+  assert.ok(awaitImport.ASK_TIMEOUT < 120_000);
+});
+
+test("x 問沒有目標檔、規劃檔、對話時也問模型，讓它讀 worktree 的程式碼答；prompt 要它先讀再答、三句內、最後一行寫出處、查不到才說查不到", () => {
+  const m = fakeModel();
+  const { dir } = repo("feat/bare-ask");
+  cli(dir, "add", ...good, "--session", "none-such");
+  const r = askCli(dir, askEnv(m.model));
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "規劃文件寫了先做 API。");
+  assert.ok(m.asked(), "有問模型");
+  assert.equal(fs.realpathSync(m.cwd()), dir);
+  const prompt = m.prompt();
+  assert.ok(prompt.includes(`程式碼在這個 worktree：${dir}`));
+  assert.match(prompt, /先讀規劃檔與相關程式碼再答，三句內白話/);
+  assert.match(prompt, /最後一行寫『出處：<檔案:行號>』最多三個/);
+  assert.match(prompt, /讀完仍查不到才回『查不到：<缺什麼>』，不推測/);
+  assert.doesNotMatch(prompt, /這張票的規劃檔：/);
+});
+
+test("x 問列的規劃檔只有這張票的：branch 相對 base 新增或改過、或未追蹤的規劃文件；別張票留在 base 上的不列；找不到 base 時只列未追蹤的與 worktree 外的規劃資料夾", () => {
+  const m = fakeModel();
+  const { dir, git } = repo("main");
+  fs.mkdirSync(path.join(dir, "docs", "dev-flow", "old"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "docs", "dev-flow", "old", "plan.md"), "# 別張票\n");
+  git("add", ".");
+  git("commit", "-qm", "old ticket");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  git("checkout", "-qb", "feat/new-ask");
+  fs.mkdirSync(path.join(dir, "docs", "dev-flow", "new"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "docs", "dev-flow", "new", "plan.md"), "# 這張票\n");
+  git("add", ".");
+  git("commit", "-qm", "new ticket");
+  fs.writeFileSync(path.join(dir, "docs", "dev-flow", "new", "decisions.md"), "# 決定\n");
+  cli(dir, "add", ...good, "--session", "none-such");
+  const e = askEnv(m.model);
+  const run = path.join(e.SARA_DEV_FLOW_HOME, path.basename(dir), "feat-new-ask");
+  fs.mkdirSync(run, { recursive: true });
+  fs.writeFileSync(path.join(run, "goal.md"), "# 目標\n");
+  assert.equal(askCli(dir, e).status, 0);
+  const listed = (p) => p.split("這張票的規劃檔：\n")[1]?.split("\n\n")[0] ?? "";
+  const withBase = listed(m.prompt());
+  assert.ok(withBase.includes(path.join(dir, "docs", "dev-flow", "new", "plan.md")), "branch 新增的有列");
+  assert.ok(withBase.includes(path.join(dir, "docs", "dev-flow", "new", "decisions.md")), "未追蹤的有列");
+  assert.ok(withBase.includes(path.join(run, "goal.md")), "dev-flow 規劃資料夾的有列");
+  assert.ok(!withBase.includes("dev-flow/old/plan.md"), "別張票的不列");
+
+  git("symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+  assert.equal(askCli(dir, e).status, 0);
+  const noBase = listed(m.prompt());
+  assert.ok(noBase.includes(path.join(dir, "docs", "dev-flow", "new", "decisions.md")));
+  assert.ok(noBase.includes(path.join(run, "goal.md")));
+  assert.ok(!noBase.includes("dev-flow/new/plan.md"), "沒有 base 不認已 commit 的");
+  assert.ok(!noBase.includes("dev-flow/old/plan.md"), "不退回掃整個 worktree");
+});
+
+test("x 問有目標檔時不只給目標檔：目標檔（與它的 checklist）、其他規劃檔、子 session 的對話最後一段一起給", () => {
+  const m = fakeModel();
+  const { dir } = repo("feat/goal-ask");
+  fs.mkdirSync(path.join(dir, ".goals"));
+  fs.writeFileSync(path.join(dir, ".goals", "goal-ask.md"), "# 目標\n");
+  fs.writeFileSync(path.join(dir, ".goals", "goal-ask.checklist.md"), "- [ ] 一\n");
+  fs.writeFileSync(path.join(dir, ".goals", "other.md"), "# 別張\n");
+  fs.mkdirSync(path.join(dir, "docs"));
+  fs.writeFileSync(path.join(dir, "docs", "plan.md"), "# 計畫\n");
+  const e = askEnv(m.model);
+  fs.mkdirSync(path.join(e.CLAUDE_PROJECTS_DIR, "-wt"));
+  fs.writeFileSync(path.join(e.CLAUDE_PROJECTS_DIR, "-wt", "s-goal.jsonl"), [
     { type: "user", message: { content: "先做哪個？" } },
     { type: "assistant", message: { content: [{ type: "text", text: "我建議先做 API，畫面等資料格式定了再接。" }] } },
-  ].map((e) => JSON.stringify(e)).join("\n") + "\n");
-  cli(planned.dir, "add", ...good, "--session", "s-plan");
-  const r1 = ask(planned.dir, "為什麼先做 API？");
-  assert.equal(r1.status, 0, r1.stderr);
-  assert.equal(r1.stdout.trim(), "規劃文件寫了先做 API。");
-  const prompt = fs.readFileSync(seen, "utf8");
-  assert.match(prompt, /規劃文件：\n# docs\/plan\.md\n# 計畫\n先做 API，再做畫面。/);
+  ].map((x) => JSON.stringify(x)).join("\n") + "\n");
+  cli(dir, "add", ...good, "--session", "s-goal");
+  const r = askCli(dir, e);
+  assert.equal(r.status, 0, r.stderr);
+  const prompt = m.prompt();
+  for (const f of [".goals/goal-ask.md", ".goals/goal-ask.checklist.md", "docs/plan.md"]) assert.ok(prompt.includes(`- ${path.join(dir, f)}`), f);
+  assert.ok(!prompt.includes(".goals/other.md"));
   assert.match(prompt, /子 session 的對話（最後一段）：\n使用者：先做哪個？\n\n子 session：我建議先做 API/);
-  assert.match(prompt, /查不到答案時，只回一句「查不到：<缺的是什麼>」，不要推測/);
-  assert.doesNotMatch(prompt, /目標檔：/);
 });
 
 test("review undo：通過或改過的那件退回待審（另寫一行 undo，不改舊行）；本來就待審的不能退", () => {

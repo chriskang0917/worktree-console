@@ -284,7 +284,7 @@ test("審核結果回送找不到交棒鏈（超過 24 小時、或 dev-flow 自
   assert.equal(targetSession(w.rows, w.dir, ["s-gone"], { events: [], now: NOW, idOf }).s, w.session, "沒有交棒鏈");
 });
 
-test("整張審核單審完，不論有沒有改，一律送一則「審核完成：N 件通過、M 件已改，請重跑剛才被擋的指令」，有改的件一起附上；通過算猜中、改了算猜錯寫回 advisor", async () => {
+test("整張審核單審完，不論有沒有改，一律送一則開頭「（中控台自動訊息，不是使用者的新指令）」的「審核完成：N 件通過、M 件已改，請重跑剛才被擋的指令」，有改的件一起附上；通過算猜中、改了算猜錯寫回 advisor", async () => {
   const { finishRound } = await import("../skills/worktree-console/scripts/review-cli.mjs");
   const w = world();
   const adv = advisor({ path: w.dir });
@@ -294,12 +294,14 @@ test("整張審核單審完，不論有沒有改，一律送一則「審核完�
   append(wt, { event: "pass", n: 1 });
   append(wt, { event: "edit", n: 2, to: "改用實線" });
   const r = finishRound(wt);
-  assert.equal(r.message, "審核完成：1 件通過、1 件已改，請重跑剛才被擋的指令\n\n已改的件：\n2. 二？：改成 改用實線");
+  assert.equal(r.message, "（中控台自動訊息，不是使用者的新指令）審核完成：1 件通過、1 件已改，請重跑剛才被擋的指令\n\n已改的件：\n2. 二？：改成 改用實線");
+  // advisor.mjs watcherText: the tab-answer hook skips prompts starting 「（中控台自動」.
+  assert.match(r.message, /^（中控台自動/);
   assert.ok(stateOf(wt).approved);
   assert.deepEqual(adv.calls().filter((c) => c.startsWith("verdict")), ["verdict --prediction pa --hit yes", "verdict --prediction pb --hit no"]);
   addItem(wt, { question: "三？", plan: "x", basis: { kind: "none", note: "" }, impact: "y", by: "advisor", stop: "s" });
   append(wt, { event: "pass", n: 3 });
-  assert.equal(finishRound(wt).message, "審核完成：1 件通過、0 件已改，請重跑剛才被擋的指令", "沒有改也送");
+  assert.equal(finishRound(wt).message, "（中控台自動訊息，不是使用者的新指令）審核完成：1 件通過、0 件已改，請重跑剛才被擋的指令", "沒有改也送");
 });
 
 test("draft PR／MR 開好後，把審核單的 Markdown 版與實作階段的代回補進說明一次，和「請先看」合成一份", async () => {

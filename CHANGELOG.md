@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.24.1
+
+- fix(review): let review ask read the worktree and this ticket's plans, and mark the done message as automatic
+
 ## 1.24.0
 
 - feat: run implementation sessions on omp when Claude usage is near its limit
