@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.24.2
+
+- fix(handoff): open /goal with the CLAUDE.md stop-point rule and let child sessions push feature branches
+
 ## 1.24.1
 
 - fix(review): let review ask read the worktree and this ticket's plans, and mark the done message as automatic
