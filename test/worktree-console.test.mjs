@@ -405,13 +405,14 @@ test("UX5 狀態改變：先貼該次變動的回報，接著貼包含全部 ses
   assert.match(lines.at(-1), /^baseline: /);
 });
 
+const LOGIN_KEY = (await import("../skills/worktree-console/scripts/summary-read.mjs")).replyKey("登入頁做好了。");
 const WATCH_DIGEST = "在做什麼：做登入頁\n做了什麼：登入頁做好了\n下一步：接著做註冊頁";
 const WATCH_DIGEST_MD = ["", "── 摘要 ──", "", "**在做什麼**\u3000\u3000做登入頁  ", "**做了什麼**\u3000\u3000登入頁做好了  ", "**下一步**\u3000\u3000\u3000接著做註冊頁"];
 const doneLogin = () => fake({ sequence: [() => {}, (ps) => Object.assign(agentIn(ps, "proj-101-login")[0], { state: "done", lastAssistantMessage: "登入頁做好了。" })] });
 function digestHome(text, { pending = false } = {}) {
   const home = fs.mkdtempSync(path.join(tmp, "digest-home-"));
   fs.mkdirSync(path.join(home, "summaries"));
-  if (text) fs.writeFileSync(path.join(home, "summaries", "term_a.json"), JSON.stringify({ text, at: 1, since: 1, sessionId: "s", handle: "term_a" }));
+  if (text) fs.writeFileSync(path.join(home, "summaries", "term_a.json"), JSON.stringify({ text, at: 1, since: 1, sessionId: "s", handle: "term_a", replyKey: LOGIN_KEY }));
   if (pending) fs.writeFileSync(path.join(home, "summaries", "term_a.pending.json"), JSON.stringify({ since: Date.now(), timeoutMs: 120_000 }));
   return home;
 }
@@ -434,7 +435,7 @@ test("watcher 回報附摘要：這次的摘要還在產生時先等它（最多
   const done = new Promise((resolve) => child.on("close", resolve));
   await new Promise((r) => setTimeout(r, 1_500));
   assert.equal(out, "", "摘要產生中時還沒回報");
-  fs.writeFileSync(path.join(home, "summaries", "term_a.json"), JSON.stringify({ text: WATCH_DIGEST, since: 1, sessionId: "s", handle: "term_a" }));
+  fs.writeFileSync(path.join(home, "summaries", "term_a.json"), JSON.stringify({ text: WATCH_DIGEST, since: 1, sessionId: "s", handle: "term_a", replyKey: LOGIN_KEY }));
   fs.rmSync(path.join(home, "summaries", "term_a.pending.json"));
   await done;
   const [report] = blocks(out.trim()).reports;
@@ -3308,7 +3309,7 @@ test("審核單不卡住：在中控台用 reply 回攔截點貼出整張審核�
   clearReviews();
   reviewAdd();
   const env = () => ({ WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" });
-  const pasted = "改檔被攔截點擋下了，審核單如下：\n\n審核單：PROJ-102\nchris-proj-102-question\n\n先看：沒有前例\n\n1. 先做哪個畫面？\n\n要照這樣通過嗎？";
+  const pasted = "改檔被攔截點擋下了，審核單如下：\n\n審核單：PROJ-102\nchris-proj-102-question\n\n先看：沒有前例\n\n1. 先做哪個畫面？\n   當前方案：先改畫面\n\n要照這樣通過嗎？";
   const auto = run("console.mjs", ["reply", "--repo", app(), "--", SHEET_ANSWER], { dir: replyWorld(pasted, SHEET_ANSWER), env: env() });
   assert.equal(auto.code, 0, auto.out + auto.err);
   assert.equal(reviewMod.stateOf(reviewMod.worktreeOf(QWT())).approved, null, "代回前綴不算使用者回答");

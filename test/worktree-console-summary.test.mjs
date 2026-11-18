@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { writeManaged } from "../skills/worktree-console/scripts/log.mjs";
 import { CACHE_HANDOFF_TEXT, KEEPALIVE_REPLY, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../hooks/auto-handoff.mjs";
 import { modelCommand, pendingFile, readSummary, summaryFile, summaryModel, usageFile } from "../skills/worktree-console/scripts/summary.mjs";
+import { replyKey } from "../skills/worktree-console/scripts/summary-read.mjs";
 import { focusPayload } from "../skills/worktree-console/scripts/focus.mjs";
 import { reportLines } from "../skills/worktree-console/scripts/lib.mjs";
 
@@ -82,7 +83,7 @@ test("摘要產生：受管子 session 停下時 hook 立刻結束、不輸出�
   const saved = JSON.parse(fs.readFileSync(summaryFile(home, "term_child"), "utf8"));
   assert.equal(saved.text, OK_JSON.result);
   assert.equal(saved.sessionId, "sid-child");
-  assert.deepEqual(readSummary(home, "term_child"), { text: OK_JSON.result, at: saved.at, sessionId: "sid-child", replyAt: null, pending: false });
+  assert.deepEqual(readSummary(home, "term_child"), { text: OK_JSON.result, at: saved.at, sessionId: "sid-child", replyAt: null, replyKey: replyKey(REPLY), pending: false });
   const [call] = calls(home);
   const [model, handle, stdin] = call.split("|");
   assert.equal(model, "sonnet");
@@ -287,7 +288,7 @@ test("replyAt：摘要檔記下被摘要那則回覆在 transcript 的 timestamp
   assert.equal(saved.replyAt, T0 + 9_000);
   const { readTranscript, transcriptState } = await import("../skills/worktree-console/scripts/herdr.mjs");
   assert.equal(transcriptState(readTranscript(transcript).entries).at, saved.replyAt, "跟 herdr 的 stateStartedAt 同一筆");
-  assert.deepEqual(Object.keys(saved).sort(), ["at", "handle", "model", "replyAt", "sessionId", "since", "text"]);
+  assert.deepEqual(Object.keys(saved).sort(), ["at", "handle", "model", "replyAt", "replyKey", "sessionId", "since", "text"]);
   assert.equal(typeof saved.since, "number");
 });
 

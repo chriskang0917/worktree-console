@@ -1,4 +1,5 @@
 // Reading the recaps scripts/summary.mjs writes, kept apart so lib.mjs can read them without loading the Stop hook itself.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,16 +30,20 @@ export function readSummary(home, handle, now = Date.now()) {
   const saved = readJson(summaryFile(home, handle));
   const marker = readJson(pendingFile(home, handle));
   const pending = !!marker && now - (marker.since ?? 0) < (marker.timeoutMs ?? timeoutMs()) + PENDING_SLACK_MS;
-  return { text: saved?.text ?? null, at: saved?.at ?? null, sessionId: saved?.sessionId ?? null, replyAt: saved?.replyAt ?? null, pending };
+  return { text: saved?.text ?? null, at: saved?.at ?? null, sessionId: saved?.sessionId ?? null, replyAt: saved?.replyAt ?? null, replyKey: saved?.replyKey ?? null, pending };
 }
 
+// Which reply a recap is of, blind to whitespace, since the card's copy of the reply is re-wrapped into paragraphs.
+export const replyKey = (text) => crypto.createHash("sha1").update(String(text ?? "").replace(/\s+/g, "")).digest("hex");
+
 // The recap of the stop a card shows, or null: only a recap whose replyAt matches the stop counts; herdr and the Herdr app read
-// the stop time from the same transcript entry, Orca's own clock is not compared. A recap still being written for it is `pending`.
+// the stop time from the same transcript entry, Orca's own clock is not compared, so there the recap must be of this very reply.
+// A recap still being written for it is `pending`.
 export function stopDigest(home, session, now = Date.now()) {
-  const { text, pending, replyAt } = readSummary(home, session?.handle, now);
+  const { text, pending, replyAt, replyKey: key } = readSummary(home, session?.handle, now);
   const since = session?.since ?? session?.agent?.stateStartedAt ?? null;
   const comparable = !!session?.agent?.herdr && typeof replyAt === "number" && typeof since === "number";
-  const matches = comparable ? replyAt === since : !pending;
+  const matches = comparable ? replyAt === since : !pending && !!key && key === replyKey(session?.status?.text);
   return { text: text && matches ? text : null, pending };
 }
 

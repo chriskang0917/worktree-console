@@ -106,6 +106,7 @@ function parseSelf(text) {
 
 // The two lines every console reply ends with. `--mine` names what the console itself suggests for `target`.
 export function endingLines(rows, view, { target = null, mine = null, advice = null, advisor = null, now = Date.now() } = {}) {
+  view = view.after ?? view;
   const item = target ?? view.current?.item ?? null;
   let suggestion;
   if (mine && item) suggestion = `回 ${item.tag} ${mine}`;
@@ -118,7 +119,7 @@ export function endingLines(rows, view, { target = null, mine = null, advice = n
       suggestion = `${f.answer}，${f.reason}`;
     } else suggestion = `回 ${item.tag}（按 9 看題目）`;
   } else suggestion = view.wait?.tag ? `不用做事，等 ${view.wait.tag} 回報` : "不用做事";
-  return [`\`建議\`：${suggestion}`, `\`等待\`：${waitingLine(rows).replace(/^等待：/, "")}`];
+  return [`\`建議\`：${suggestion}`, `\`等待\`：${waitingLine(rows).replace(/^等待：/, "")}`].map((l) => l.replace(/\s*\n\s*/g, " "));
 }
 
 // Prints the blocks for `tags`, the console's own advice when given, and the two ending lines; records them for the band and the Stop hook.
@@ -136,10 +137,11 @@ export function guideLines(rows, view, tags = [], { mine = null, self = null, no
   const target = items[0] ?? null;
   const own = mine ? splitAdvice(mine) : null;
   if (own) out.push(...(out.length ? [""] : []), `中控台的建議：${own.answer}${own.reason ? `，${own.reason}` : ""}`);
-  const ending = endingLines(rows, view, { target: mine || self ? target ?? view.current?.item : null, mine, advice, advisor, now });
+  const shown = view.after ?? view;
+  const ending = endingLines(rows, view, { target: mine || self ? target ?? shown.current?.item : null, mine, advice, advisor, now });
   out.push(...(out.length ? [""] : []), ...ending);
   const record = readGuide();
-  const who = (mine || self) && (target ?? view.current?.item);
+  const who = (mine || self) && (target ?? shown.current?.item);
   if (who) {
     const numbers = who.kind === "text" ? questionOf(who.session.status.text).numbers : [];
     record.sessions[who.session.paneKey] = { since: sinceOf(who.session), tag: who.tag, mine: own, self: self ? parseSelf(self) : [], numbers, ending, at: now };

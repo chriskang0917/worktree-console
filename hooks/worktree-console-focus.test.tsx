@@ -2282,6 +2282,31 @@ test('每次輪詢都帶 --typing 與 --turn：輸入框有字時 --typing 1、�
   expect(w.shown).toEqual([])
 })
 
+test('中控台這一輪被 Esc 中斷或出錯，或後面的 hook 拋錯，--turn 照樣回到 0，狀態區不會一直不接新題', async ($, on) => {
+  const w = world(pending())
+  let fail = false
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', async (_$, e) => {
+    if (fail) throw new Error('boom')
+    return { text: e.answer }
+  })
+  const clock = await start($, on, w)
+  const last = () => { const c = w.calls.filter(x => x[0] === 'focus').at(-1)!; return c[c.indexOf('--turn') + 1] }
+  for (const reason of ['aborted', 'error'] as const) {
+    await $.turn.start({ text: '回 perm 允許', turnId: `t-${reason}` })
+    await clock.advance(5_000)
+    expect(last()).toBe('1')
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: reason === 'aborted', turnId: `t-${reason}`, reason })
+    await clock.advance(5_000)
+    expect(last()).toBe('0')
+  }
+  fail = true
+  await $.turn.start({ text: '回 perm 允許', turnId: 't-throw' })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't-throw', reason: 'answer' }).catch(() => {})
+  await clock.advance(5_000)
+  expect(last()).toBe('0')
+})
+
 test('Herdr app tab (HC_TERMINAL_ID only): the band polls console.mjs focus like in Orca and herdr and posts no herdr notification', async ($, on) => {
   const w = world(withAdvice(READY))
   await start($, on, w, { HC_TERMINAL_ID: 't1' })
@@ -2591,7 +2616,12 @@ const reviewWorld = () => {
   w.submits = []
   return w
 }
-const reviewCalls = (w: World) => w.calls.filter(c => c[0] === 'review').map(c => c.slice(1))
+// Every review call names the console's session, which console.mjs checks before writing review state.
+const reviewCalls = (w: World) => w.calls.filter(c => c[0] === 'review').map(c => {
+  const i = c.indexOf('--session')
+  expect(c[i + 1]).toBe('console-session')
+  return [...c.slice(1, i), ...c.slice(i + 2)]
+})
 const REVIEW_PATH = ['--path', '/wt/ask-aide']
 
 // The drawing as a terminal lays it out, one string per row: a column stacks its rows (a margin adds blank rows, a zero-height box none),

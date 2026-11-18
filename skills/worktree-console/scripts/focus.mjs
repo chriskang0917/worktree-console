@@ -268,9 +268,12 @@ export function syncFocus(rows, { now = Date.now(), change = null, heartbeat = f
   const entries = onBand(focusEntries(rows), rows, now);
   if (change) state = change(state, entries, now);
   if (hold !== undefined) state = { ...state, hold };
-  const view = focusStep(state, entries, now, { sessions: sessionFacts(rows), hold: !!state.hold });
+  const sessions = sessionFacts(rows);
+  const view = focusStep(state, entries, now, { sessions, hold: !!state.hold });
   if (heartbeat) view.state.modsAt = now;
   saveFocus(view.state);
+  // What the band takes up once the draft is cleared and the console's turn ends; never saved.
+  if (state.hold) view.after = focusStep(view.state, entries, now, { sessions, hold: false });
   return view;
 }
 

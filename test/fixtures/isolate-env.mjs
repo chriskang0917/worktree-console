@@ -4,3 +4,5 @@ for (const key of Object.keys(process.env)) if (/^(HERDR_|HC_|ORCA_)/.test(key))
 process.env.ADVISOR_HOME ??= "/nonexistent/wtc-test-advisor";
 // Nor the real dev-flow run folders, which would move the stage column.
 process.env.SARA_DEV_FLOW_HOME ??= "/nonexistent/wtc-test-sara-dev-flow";
+// Nor the session running the tests, which the review state subcommands would check as their caller.
+delete process.env.CLAUDE_CODE_SESSION_ID;

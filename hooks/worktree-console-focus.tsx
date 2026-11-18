@@ -810,7 +810,7 @@ const REVIEW_FINISH = 'review-finish'
 async function reviewCall($: EngineInterface, r: Review, sub: string, args: string[] = [], timeoutMs = 60_000): Promise<string | null> {
   let res: { exitCode: number; stdout: string; stderr: string }
   try {
-    res = await run($, ['review', sub, '--path', r.path, ...args], timeoutMs)
+    res = await run($, ['review', sub, '--path', r.path, ...(sessionId ? ['--session', sessionId] : []), ...args], timeoutMs)
   } catch {
     $.ui.toast(`[${r.tag}] 審核單沒有回應`)
     return null
@@ -1103,13 +1103,15 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    const res = await next(e)
-    if (e.agentId === undefined) {
-      if (recapHandle) void pollRecap($)
-      turning = false
-      if (focus.active) void poll($)
+    if (e.agentId === undefined) turning = false
+    try {
+      return await next(e)
+    } finally {
+      if (e.agentId === undefined) {
+        if (recapHandle) void pollRecap($)
+        if (focus.active) void poll($)
+      }
     }
-    return res
   })
 
   // The engine walks ↑↓ one Button back or forth through the pane, keeping its place by index: a step from where it held is one card up or down.

@@ -457,15 +457,45 @@ export function chained(cmd) {
 
 const isConsoleScript = (w) => /(^|\/)console\.mjs$/.test(w);
 export const STATE_SUBCOMMANDS = new Set(["pass", "edit", "undo", "pass-all", "done", "reviewed", "elsewhere", "approve", "clear", "unlock"]);
+const STATE_WORDS = [...STATE_SUBCOMMANDS].join("|");
+const STATE_TEXT = new RegExp(`console\\.mjs\\W+review\\W+(?:${STATE_WORDS})(?![\\w-])`);
+
+// Whether any part of a command, chained, prefixed or quoted inside another shell, runs a review state subcommand.
+export function stateCommandIn(cmd) {
+  const w = words(cmd);
+  if (w.some((x, i) => (isConsoleScript(x) || /^\$/.test(x)) && w[i + 1] === "review" && STATE_SUBCOMMANDS.has(w[i + 2]))) return true;
+  return STATE_TEXT.test(String(cmd));
+}
+
+// Read-only tails a review command may carry: stderr folded in and a pipe into cat, head or tail.
+const SAFE_TAIL = /\s*(?:2>&1|\|\s*(?:cat|head|tail)(?:\s+-n\s*\d+|\s+-\d+)?)\s*$/;
+function withoutSafeTail(cmd) {
+  let text = String(cmd).trimEnd();
+  for (let next = text.replace(SAFE_TAIL, ""); next !== text; next = text.replace(SAFE_TAIL, "")) text = next.trimEnd();
+  return text;
+}
+
+// An unquoted > (a redirect into a file) outside single and double quotes.
+function redirects(cmd) {
+  let quote = null;
+  for (const ch of String(cmd)) {
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === ">") return true;
+  }
+  return false;
+}
 
 // Which gate a command hits: `approve` / `confirm-spec` as the word after a flow script, `handoff-files.mjs` anywhere; `reopen` is noted for the marker.
-// `review` is set when the command is console.mjs review alone, which the gate always lets through (its state subcommands are the console's alone);
-// one with another command chained on is checked like any other.
+// `review` is set when the command is console.mjs review alone (or with a read-only tail), which the gate always lets through (its state
+// subcommands are the console's alone); one with another command chained on or a redirect is checked like any other.
 export function classifyCommand(cmd) {
-  const w = words(cmd);
+  const solo = withoutSafeTail(cmd);
+  const w = words(solo);
   const lead = w.findIndex((x) => isConsoleScript(x));
   const start = w.slice(0, lead).every((x) => x === "node" || /(^|\/)node$/.test(x));
-  if (lead >= 0 && start && w[lead + 1] === "review" && !chained(cmd)) return { gate: null, review: w[lead + 2] ?? "", reopen: false };
+  if (lead >= 0 && start && w[lead + 1] === "review" && !chained(solo) && !redirects(solo)) return { gate: null, review: w[lead + 2] ?? "", reopen: false };
   let gate = null;
   let reopen = false;
   for (let i = 0; i < w.length; i++) {

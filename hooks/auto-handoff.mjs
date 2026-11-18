@@ -238,7 +238,7 @@ export function endingProblem(input, entries, { guide = readJson(path.join(conso
   if (input.stop_hook_active || !isConsole || !last?.lines?.length || last.session !== input.session_id) return null;
   if (typeof turnEnd?.at === "number" && last.at <= turnEnd.at) return null;
   if (toolingPrompt(lastPrompt(entries))) return null;
-  const want = last.lines.map((l) => l.trim());
+  const want = last.lines.flatMap((l) => String(l).split("\n")).map((l) => l.trim()).filter(Boolean);
   const got = String(input.last_assistant_message ?? lastAssistantText(entries)).split("\n").map((l) => l.trim()).filter(Boolean).slice(-want.length);
   if (got.join("\n") === want.join("\n")) return null;
   return ["這則回覆最後兩行要原樣貼 `console.mjs guide` 印出的結尾，不要手寫或改字。照貼下面兩行再結束這一輪：", ...want].join("\n");

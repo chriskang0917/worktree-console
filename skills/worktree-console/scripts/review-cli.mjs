@@ -6,7 +6,7 @@ import path from "node:path";
 import { git, homeRunFolder, readNames, repoBase, watcherPrompt } from "./lib.mjs";
 import { DELEGATE_PREFIX } from "./urgency.mjs";
 import { TAKEOVER_HEAD } from "../../../hooks/auto-handoff.mjs";
-import { archiveDir, readEntries, transcriptOf } from "./log.mjs";
+import { archiveDir, isConsoleSession, readEntries, transcriptOf } from "./log.mjs";
 import { advisorHome, advisorState } from "./advice.mjs";
 import {
   DONE_MESSAGE,
@@ -23,6 +23,7 @@ import {
   sheetData,
   sheetLines,
   sheetMarkdown,
+  STATE_SUBCOMMANDS,
   sheetProblems,
   stateOf,
   tagOf,
@@ -234,11 +235,22 @@ export function finishRound(wt, { by = "panel", passAll = false, elsewhere = fal
 // The user's own words, not something the console or the watcher sent on its own.
 export function ownReply(text) {
   const t = String(text ?? "").trim();
-  return !!t && !watcherPrompt(t) && !t.startsWith(DELEGATE_PREFIX) && !t.startsWith("（中控台自動") && !t.startsWith(TAKEOVER_HEAD);
+  return !!t && !t.startsWith("/") && !watcherPrompt(t) && !t.startsWith(DELEGATE_PREFIX) && !t.startsWith("（中控台自動") && !t.startsWith(TAKEOVER_HEAD);
 }
 
-// A stop that pasted the whole review sheet, as the gate asks when it holds a session back.
-export const pastedSheet = (text) => /^\s*(?:\*\*)?審核單[：:]/m.test(String(text ?? ""));
+// A stop that pasted the whole review sheet of the worktree at `where`, as the gate asks when it holds a session back: the 審核單 heading
+// and every item still pending, its question and plan; the gate's own 「審核單：node … review sheet」 line alone is not the sheet.
+export function pastedSheet(text, where) {
+  const t = String(text ?? "");
+  if (!/^\s*(?:\*\*)?審核單[：:]/m.test(t)) return false;
+  try {
+    const wt = worktreeOf(where);
+    const pending = wt ? stateOf(wt).open.filter((x) => x.status === "pending") : [];
+    return pending.length > 0 && pending.every((x) => t.includes(x.question) && t.includes(x.plan));
+  } catch {
+    return false;
+  }
+}
 
 // Answered outside the sheet: the open round of the worktree at `where` closes once, its pending items marked 在別處回覆.
 export function closeElsewhere(where, { by = "reply" } = {}) {
@@ -254,6 +266,8 @@ export function closeElsewhere(where, { by = "reply" } = {}) {
 export async function reviewCommand(values, positionals, { deliver }) {
   const [sub] = positionals;
   if (!sub) die(USAGE);
+  const caller = values.session ?? process.env.CLAUDE_CODE_SESSION_ID ?? null;
+  if (STATE_SUBCOMMANDS.has(sub) && caller && !isConsoleSession(caller)) die(`review ${sub} 只有中控台與焦點面板能跑；子 session 只能用 review add／correct 記下代回。`);
   if (sub === "add") {
     const wt = worktree(values);
     const r = addItem(wt, {

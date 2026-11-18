@@ -375,14 +375,14 @@ test("可關閉：第一次判成可關閉時事件紀錄多記一筆停下事�
 test("結尾與狀態：最後一行等你／已完成照它判；沒寫時用背景摘要的第四層（要你決定／下一步）；都沒有才照舊用字面判", () => {
   const home = process.env.WORKTREE_CONSOLE_HOME;
   const s = (handle, t, kind = "done") => ({ handle, since: 5, status: { kind, text: t }, agent: { stateStartedAt: 5 } });
-  const recap = (handle, t) => {
+  const recap = (handle, t, reply) => {
     fs.mkdirSync(path.join(home, "summaries"), { recursive: true });
-    fs.writeFileSync(path.join(home, "summaries", `${encodeURIComponent(handle)}.json`), JSON.stringify({ text: t }));
+    fs.writeFileSync(path.join(home, "summaries", `${encodeURIComponent(handle)}.json`), JSON.stringify({ text: t, replyKey: lib.replyKey(reply) }));
   };
   assert.equal(lib.awaitsUser(s("e1", "改好了。\n\n等你：看畫面").status), true);
   assert.equal(lib.awaitsUser(s("e2", "改好了。\n\n已完成").status), false);
-  recap("d1", "在做什麼：改按鈕\n要你決定：要不要上線");
-  recap("d2", "在做什麼：改按鈕\n下一步：跑測試");
+  recap("d1", "在做什麼：改按鈕\n要你決定：要不要上線", "改好了。");
+  recap("d2", "在做什麼：改按鈕\n下一步：跑測試", "改好了，請你確認。");
   assert.equal(lib.awaitsUser(s("d1", "改好了。").status, { session: s("d1", "改好了。") }), true);
   assert.equal(lib.awaitsUser(s("d2", "改好了，請你確認。").status, { session: s("d2", "改好了，請你確認。") }), false, "摘要說下一步就不等你");
   assert.equal(lib.awaitsUser(s("none", "改好了，請你確認。").status, { session: s("none", "x") }), true, "沒有摘要照舊用字面");
@@ -671,8 +671,7 @@ test("審核單不卡住：在別處回覆把待審的件標「在別處回覆�
   assert.deepEqual(review.sheetMarkdown({ tag: "t", items: st.items }).filter((l) => l.includes("在別處回覆")).length, 1);
   for (const t of [urgency.SHEET_ANSWER, "（中控台自動交棒）x", `${handoff.TAKEOVER_HEAD}x`, handoff.KEEPALIVE_TEXT, ""]) assert.equal(reviewCli.ownReply(t), false, t);
   assert.equal(reviewCli.ownReply("1 b；2 a"), true);
-  assert.equal(reviewCli.pastedSheet("被擋下了。\n\n審核單：flow\nfeat/x\n\n1. 先做哪個？"), true);
-  assert.equal(reviewCli.pastedSheet("請跑 review sheet"), false);
+  assert.equal(reviewCli.pastedSheet("請跑 review sheet", dir), false);
 });
 
 test("審核單不卡住：在子 session 分頁直接回攔截點貼出整張審核單的那則會解鎖；直接回批改單、代回都不解鎖", async () => {
@@ -688,11 +687,113 @@ test("審核單不卡住：在子 session 分頁直接回攔截點貼出整張�
     assert.equal(r.status, 0, r.stderr);
     return review.stateOf(wt);
   };
-  const pasted = "被擋下。\n\n審核單：tab\nfeat/demo\n\n1. 先做哪個畫面？";
+  const pasted = "被擋下。\n\n審核單：tab\nfeat/demo\n\n1. 先做哪個畫面？\n   當前方案：先改畫面";
   assert.equal(hook(SHEET, "a").open.length, 1, "分頁裡直接回批改單不解鎖");
   assert.equal(hook(pasted, urgency.SHEET_ANSWER).open.length, 1, "代回不算");
   assert.equal(hook(pasted, handoff.KEEPALIVE_TEXT).open.length, 1, "續命訊息不算");
   const st = hook(pasted, "照建議");
   assert.ok(st.approved);
   assert.equal(st.items[0].status, "elsewhere");
+});
+
+// --- 檢核找到的漏洞：一律由程式擋 ---
+
+test("審核狀態子指令：串接、前綴環境變數、cd、包在 sh -c 裡都擋；中控台照常能跑", () => {
+  const cmds = [
+    "node /x/console.mjs review pass-all && node /x/console.mjs review done --path /w",
+    "node /x/console.mjs review elsewhere --path /w; true",
+    "node /x/console.mjs review reviewed --path /w 2>&1",
+    "cd . && node /x/console.mjs review done --path /w",
+    "FOO=1 node /x/console.mjs review done --path /w",
+    "sh -c 'node /x/console.mjs review approve --path /w'",
+    "node /x/console.mjs review sheet | node /x/console.mjs review unlock",
+  ];
+  for (const command of cmds) {
+    const out = gate.preToolUse({ tool_name: "Bash", tool_input: { command }, cwd: tmp, session_id: "child" }, { consoleCheck: () => false });
+    assert.equal(out?.hookSpecificOutput?.permissionDecision, "deny", command);
+    const ok = gate.preToolUse({ tool_name: "Bash", tool_input: { command }, cwd: tmp, session_id: "con" }, { consoleCheck: () => true });
+    assert.notEqual(ok?.hookSpecificOutput?.permissionDecisionReason?.startsWith("審核狀態只能由中控台"), true, command);
+  }
+});
+
+test("審核狀態子指令：console.mjs 本身也只讓中控台的 session 跑，子 session 直接跑不寫入", () => {
+  const dir = reviewRepo("cli-guard");
+  const wt = review.worktreeOf(dir);
+  review.addItem(wt, item);
+  const cli = path.join(root, "skills", "worktree-console", "scripts", "console.mjs");
+  for (const sub of ["elsewhere", "reviewed", "pass-all", "done"]) {
+    const r = spawnSync(process.execPath, [cli, "review", sub, "--path", dir], { encoding: "utf8", env: { ...process.env, CLAUDE_CODE_SESSION_ID: "child-not-console" } });
+    assert.notEqual(r.status, 0, sub);
+    assert.match(r.stderr + r.stdout, /只有中控台/, sub);
+  }
+  assert.equal(review.stateOf(wt).open.length, 1);
+  assert.equal(review.stateOf(wt).approved, null);
+});
+
+test("被鎖住的 session：review sheet 接 2>&1、| cat、| head 放行；導向寫檔照擋", () => {
+  const dir = reviewRepo("locked-tail");
+  const wt = review.worktreeOf(dir);
+  review.addItem(wt, item);
+  review.append(wt, { event: "lock", session: "s1", files: ["a.ts"] });
+  const run = (command) => gate.preToolUse({ tool_name: "Bash", tool_input: { command }, cwd: dir, session_id: "s1" }, { consoleCheck: () => false });
+  for (const c of ["node console.mjs review sheet 2>&1", "node console.mjs review sheet | cat", "node console.mjs review sheet 2>&1 | head -50", "node console.mjs review status | tail -n 5"]) assert.equal(run(c), null, c);
+  for (const c of ["node console.mjs review sheet > a.ts", "node console.mjs review sheet | tee a.ts", "node console.mjs review sheet 2>&1 >> a.ts"]) assert.equal(run(c)?.hookSpecificOutput?.permissionDecision, "deny", c);
+});
+
+test("貼出審核單：要包含每一件待審的題目與方案才算；只有攔截訊息那行「審核單：…」不算；斜線指令不算使用者回答", () => {
+  const dir = reviewRepo("pasted");
+  const wt = review.worktreeOf(dir);
+  review.addItem(wt, item);
+  review.addItem(wt, { ...item, question: "要不要拆票？", plan: "先不拆" });
+  const blocked = `第一次改檔被擋下：這個 worktree 有還沒審的代回。\n審核單：node "/x/console.mjs" review sheet`;
+  assert.equal(reviewCli.pastedSheet(blocked, dir), false);
+  assert.equal(reviewCli.pastedSheet("審核單：pasted\n\n1. 先做哪個畫面？\n   當前方案：先改畫面", dir), false, "少一件");
+  const full = review.sheetLines({ tag: "pasted", wt, open: review.stateOf(wt).open }).join("\n");
+  assert.equal(reviewCli.pastedSheet(`被擋下。\n\n${full}`, dir), true);
+  for (const t of ["/compact", "/clear", " /goal x"]) assert.equal(reviewCli.ownReply(t), false, t);
+});
+
+test("💬 題一律輪到你：一般句子問的題，摘要寫下一步也留在等待清單，和卡片的「輪到你」一致", () => {
+  const home = process.env.WORKTREE_CONSOLE_HOME;
+  fs.mkdirSync(path.join(home, "summaries"), { recursive: true });
+  fs.writeFileSync(path.join(home, "summaries", "plain.json"), JSON.stringify({ text: "在做什麼：改按鈕\n下一步：等回覆", replyKey: lib.replyKey("按鈕要放左邊還是右邊？") }));
+  const s = { handle: "plain", paneKey: "plain", since: 5, status: { kind: "waiting", text: "按鈕要放左邊還是右邊？" }, agent: { stateStartedAt: 5 } };
+  assert.equal(lib.awaitsUser(s.status, { session: s }), true);
+  assert.equal(line.listedAs(s), "waiting");
+  assert.equal(lib.yourTurn(null, s), true);
+});
+
+test("Orca 這類比不了停下時間的 session：摘要對不上這次的回覆內容就不用，不拿上一次停下的摘要判", () => {
+  const home = process.env.WORKTREE_CONSOLE_HOME;
+  fs.mkdirSync(path.join(home, "summaries"), { recursive: true });
+  const s = (handle, t) => ({ handle, since: 5, status: { kind: "done", text: t }, agent: { stateStartedAt: 5 } });
+  fs.writeFileSync(path.join(home, "summaries", "stale.json"), JSON.stringify({ text: "在做什麼：改按鈕\n要你決定：要不要上線", replyKey: lib.replyKey("上一次的回覆") }));
+  fs.writeFileSync(path.join(home, "summaries", "nokey.json"), JSON.stringify({ text: "在做什麼：改按鈕\n要你決定：要不要上線" }));
+  fs.writeFileSync(path.join(home, "summaries", "fresh.json"), JSON.stringify({ text: "在做什麼：改按鈕\n要你決定：要不要上線", replyKey: lib.replyKey("改好了。\n\n測試都過了。") }));
+  assert.equal(lib.awaitsUser(s("stale", "改好了。").status, { session: s("stale", "改好了。") }), false);
+  assert.equal(lib.awaitsUser(s("nokey", "改好了。").status, { session: s("nokey", "改好了。") }), false);
+  const fresh = s("fresh", "改好了。\n測試都過了。");
+  assert.equal(lib.awaitsUser(fresh.status, { session: fresh }), true, "內容一樣、只差空白換行也算同一則");
+});
+
+test("guide X 沒帶 --mine：中控台這一輪在跑時，建議行寫這一輪結束後狀態區會顯示的那件，不寫「不用做事」", () => {
+  focus.saveFocus(emptyFocus());
+  const rows = [row("gx", asking("要哪個？\n\n- a. 甲\n- b. 乙"))];
+  const view = focus.syncFocus(rows, { hold: true });
+  assert.equal(view.current, null, "這一輪在跑，狀態區先不接");
+  const out = guide.guideLines(rows, view, ["gx"]);
+  assert.match(out.at(-2), /^`建議`：回 gx/);
+  focus.saveFocus(emptyFocus());
+});
+
+test("結尾行不含換行：建議裡有換行時 guide 印成一行，Stop hook 照貼的回覆不擋", () => {
+  const rows = [row("nl", asking("要哪個？\n\n- a. 甲\n- b. 乙"))];
+  const view = focus.syncFocus(rows, { hold: false });
+  const ending = guide.endingLines(rows, view, { mine: "a，因為\n第二行理由" });
+  assert.ok(ending.every((l) => !l.includes("\n")), JSON.stringify(ending));
+  const lines = ["`建議`：回 nl a，因為\n第二行理由", "`等待`：nl"];
+  const opts = { guide: { last: { at: 2_000, session: "con", lines } }, turnEnd: { at: 1_000 }, isConsole: true };
+  const input = { session_id: "con", stop_hook_active: false, last_assistant_message: `說明。\n\n${lines.join("\n")}` };
+  assert.equal(handoff.endingProblem(input, [{ type: "user", message: { content: "回 a" } }], opts), null);
+  focus.saveFocus(emptyFocus());
 });

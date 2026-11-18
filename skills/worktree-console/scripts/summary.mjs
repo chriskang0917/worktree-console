@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { pendingFile, readJson, readSummary, stopDigest, summaryFile, summaryHome, timeoutMs, usageFile } from "./summary-read.mjs";
+import { pendingFile, readJson, readSummary, replyKey, stopDigest, summaryFile, summaryHome, timeoutMs, usageFile } from "./summary-read.mjs";
 
 export { pendingFile, readSummary, stopDigest, summaryFile, summaryHome, usageFile };
 
@@ -175,7 +175,7 @@ export function runSummary({ home = summaryHome(), handle, sessionId, since }) {
     } catch {}
   }
   const saved = readJson(summaryFile(home, handle));
-  if (ok && !(saved?.since > since)) writeJson(summaryFile(home, handle), { text, at: Date.now(), since, sessionId, handle, model, replyAt });
+  if (ok && !(saved?.since > since)) writeJson(summaryFile(home, handle), { text, at: Date.now(), since, sessionId, handle, model, replyAt, replyKey: replyKey(marker.reply ?? "") });
   if (readJson(pendingFile(home, handle))?.since === since) fs.rmSync(pendingFile(home, handle), { force: true });
   return { ok, reason, text };
 }

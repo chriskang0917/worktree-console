@@ -942,7 +942,7 @@ async function reply() {
 function closeSheetReview(item, said) {
   if (item.kind !== "text" || !ownReply(said)) return;
   const text = item.session.status.text ?? "";
-  if (!(batchSheet(text) && sheetPath(item.row, text) !== "full") && !pastedSheet(text)) return;
+  if (!(batchSheet(text) && sheetPath(item.row, text) !== "full") && !pastedSheet(text, item.row.path)) return;
   delivered.push(() => closeElsewhere(item.row.path));
 }
 
