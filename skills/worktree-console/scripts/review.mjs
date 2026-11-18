@@ -13,7 +13,9 @@ export const NO_PRECEDENT = "沒有前例";
 export const SENTENCE_MAX = 40;
 export const FILES_QUESTION = "規劃階段改了這些檔";
 export const BLOCK_MESSAGE = "先跑 console.mjs review sheet、停下等使用者審核";
-export const DONE_MESSAGE = (passed, edited) => `審核完成：${passed} 件通過、${edited} 件已改，請重跑剛才被擋的指令`;
+export const DONE_TEXT = (passed, edited) => `審核完成：${passed} 件通過、${edited} 件已改，請重跑剛才被擋的指令`;
+// The opening tells the advisor's tab-answer hook this is not the user replying.
+export const DONE_MESSAGE = (passed, edited) => `（中控台自動訊息，不是使用者的新指令）${DONE_TEXT(passed, edited)}`;
 const BY = new Set(["advisor", "child"]);
 
 export const logDir = () => process.env.WORKTREE_CONSOLE_LOG_DIR || path.join(os.homedir(), ".worktree-console");
