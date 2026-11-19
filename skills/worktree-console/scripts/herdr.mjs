@@ -212,7 +212,7 @@ export function promptText(entry) {
 
 export function isPrompt(entry) {
   const text = promptText(entry);
-  return !entry.isMeta && !!text && !INTERRUPTED.test(text) && !/^<(task-notification|local-command-)/.test(text);
+  return !entry.isMeta && !entry.isCompactSummary && !!text && !INTERRUPTED.test(text) && !/^<(task-notification|local-command-)/.test(text);
 }
 
 // Where the main conversation stands: fresh (no instruction yet), running, tool (a call without its result), replied.
@@ -226,7 +226,7 @@ export function transcriptState(entries, { truncated = false } = {}) {
   let lead = "";
   let at = null;
   for (const e of entries) {
-    if (e.isSidechain || (e.type !== "user" && e.type !== "assistant")) continue;
+    if (e.isSidechain || e.isCompactSummary || (e.type !== "user" && e.type !== "assistant")) continue;
     const parts = Array.isArray(e.message?.content) ? e.message.content : [];
     if (e.type === "user") {
       for (const p of parts) if (p.type === "tool_result") open.delete(p.tool_use_id);

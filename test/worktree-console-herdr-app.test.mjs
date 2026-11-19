@@ -209,7 +209,7 @@ test("看板五種狀態：blocked 依對話紀錄分成 💬 選單與 🔐 授
   const res = w.run(["board", "--repo", app()]);
   assert.equal(res.code, 0, res.out + res.err);
   const row = (tag) => res.out.split("\n").find((l) => l.includes(`| ${tag} |`)) ?? "";
-  assert.match(row("PROJ-201"), /💬 等待回應.*要用哪個色？/);
+  assert.match(row("PROJ-201"), /💬 輪到你.*要用哪個色？/);
   assert.match(row("PROJ-202"), /🔐 等待授權.*Bash mkdir -p \/tmp\/x/);
   assert.match(row("PROJ-203"), /🔄 執行中/);
   assert.match(row("PROJ-204"), /⏸ 回覆完畢.*測試也全過。/);

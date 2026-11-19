@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 import { writeManaged } from "../skills/worktree-console/scripts/log.mjs";
 import { CACHE_HANDOFF_TEXT, KEEPALIVE_REPLY, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../hooks/auto-handoff.mjs";
 import { modelCommand, pendingFile, readSummary, summaryFile, summaryModel, usageFile } from "../skills/worktree-console/scripts/summary.mjs";
-import { DIGEST_WAIT_MS, focusPayload, holdForDigest } from "../skills/worktree-console/scripts/focus.mjs";
+import { replyKey } from "../skills/worktree-console/scripts/summary-read.mjs";
+import { focusPayload } from "../skills/worktree-console/scripts/focus.mjs";
 import { reportLines } from "../skills/worktree-console/scripts/lib.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -82,7 +83,7 @@ test("摘要產生：受管子 session 停下時 hook 立刻結束、不輸出�
   const saved = JSON.parse(fs.readFileSync(summaryFile(home, "term_child"), "utf8"));
   assert.equal(saved.text, OK_JSON.result);
   assert.equal(saved.sessionId, "sid-child");
-  assert.deepEqual(readSummary(home, "term_child"), { text: OK_JSON.result, at: saved.at, sessionId: "sid-child", replyAt: null, pending: false });
+  assert.deepEqual(readSummary(home, "term_child"), { text: OK_JSON.result, at: saved.at, sessionId: "sid-child", replyAt: null, replyKey: replyKey(REPLY), pending: false });
   const [call] = calls(home);
   const [model, handle, stdin] = call.split("|");
   assert.equal(model, "sonnet");
@@ -287,7 +288,7 @@ test("replyAt：摘要檔記下被摘要那則回覆在 transcript 的 timestamp
   assert.equal(saved.replyAt, T0 + 9_000);
   const { readTranscript, transcriptState } = await import("../skills/worktree-console/scripts/herdr.mjs");
   assert.equal(transcriptState(readTranscript(transcript).entries).at, saved.replyAt, "跟 herdr 的 stateStartedAt 同一筆");
-  assert.deepEqual(Object.keys(saved).sort(), ["at", "handle", "model", "replyAt", "sessionId", "since", "text"]);
+  assert.deepEqual(Object.keys(saved).sort(), ["at", "handle", "model", "replyAt", "replyKey", "sessionId", "since", "text"]);
   assert.equal(typeof saved.since, "number");
 });
 
@@ -396,27 +397,6 @@ test("回報附摘要：🔐 授權、選單題、⚠️ 異常的回報不變�
   assert.doesNotMatch(reportOf(home, menu), /── 摘要 ──/);
 });
 
-test("橫條換題等摘要：這次的摘要還在產生時，換上橫條 15 秒內不印；好了就印（附摘要），逾時只印原文；沒在產生就馬上印", () => {
-  const home = freshHome();
-  const s = askSession(T0 + 9_000);
-  const view = (currentAt) => ({ current: { key: "pane-a@x", item: { session: s, row: askRow(s) } }, queue: [], state: { currentAt } });
-  const prev = process.env.WORKTREE_CONSOLE_HOME;
-  process.env.WORKTREE_CONSOLE_HOME = home;
-  try {
-    const now = Date.now();
-    assert.equal(holdForDigest(view(now), { home, now }), false, "沒有在產生");
-    fs.mkdirSync(path.join(home, "summaries"), { recursive: true });
-    fs.writeFileSync(pendingFile(home, "term_a"), JSON.stringify({ since: now, timeoutMs: 120_000 }));
-    assert.equal(holdForDigest(view(now - 1_000), { home, now }), true, "產生中、換上來 1 秒");
-    assert.equal(holdForDigest(view(now - DIGEST_WAIT_MS), { home, now }), false, "等滿 15 秒就印原文");
-    assert.equal(DIGEST_WAIT_MS, 15_000);
-    saveRecap(home, LAYERED);
-    assert.equal(holdForDigest(view(now - 1_000), { home, now }), false, "這次的摘要好了（replyAt 對上）就印");
-  } finally {
-    if (prev === undefined) delete process.env.WORKTREE_CONSOLE_HOME;
-    else process.env.WORKTREE_CONSOLE_HOME = prev;
-  }
-});
 
 test("假模型端到端：子 session 停下、背景用 WORKTREE_CONSOLE_SUMMARY_CMD 寫出四層摘要後，這次停下的回報最下面接摘要；摘要逾時或沒有輸出時回報跟原本一模一樣", async () => {
   const home = freshHome();

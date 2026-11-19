@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { watcherPrompt } from "../skills/worktree-console/scripts/lib.mjs";
 import { clip, logEvent, managedTarget } from "../skills/worktree-console/scripts/log.mjs";
+import { closeElsewhere, ownReply, pastedSheet } from "../skills/worktree-console/scripts/review-cli.mjs";
+import { readEntries, turnText } from "./auto-handoff.mjs";
 
 function readStdin() {
   try {
@@ -68,5 +70,7 @@ try {
     const base = { repo: target.repo, ticket: target.ticket, handle, paneKey: term.paneKey, sessionId: input.session_id ?? null };
     if (command === "session-start") logEvent("session", { ...base, role: "child", source: input.source ?? null, transcript: input.transcript_path ?? null, path: target.path, cwd });
     if (command === "user-prompt" && !watcherPrompt(input.prompt)) logEvent("prompt", { ...base, text: clip(input.prompt ?? "") });
+    // Answered in the tab, the stop that pasted the whole review sheet closes the review; a batch sheet answered here does not.
+    if (command === "user-prompt" && ownReply(input.prompt) && input.transcript_path && pastedSheet(turnText(readEntries(input.transcript_path, true)), target.path)) closeElsewhere(target.path, { by: "tab" });
   }
 } catch {}

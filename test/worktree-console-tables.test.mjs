@@ -67,7 +67,7 @@ test("程式碼區塊裡的 | 不當表格，照舊留在引用框", () => {
   assert.ok(lines.includes(`> ${TABLE[0]}`), lines.join("\n"));
 });
 
-test("回覆最後一段是表格時，看板、待回覆清單、卡片與橫條的題目那一行都不是表格列", () => {
+test("回覆最後一段是表格時，看板與待回覆清單的題目那一行都不是表格列；卡片與狀態區不帶題目", () => {
   for (const text of [["改好了，結果如下。", "", ...TABLE].join("\n"), ["要合併嗎？", "", ...TABLE].join("\n"), TABLE.join("\n")]) {
     const row = rowOf(text);
     const shown = [
@@ -77,8 +77,9 @@ test("回覆最後一段是表格時，看板、待回覆清單、卡片與橫�
     ];
     const view = syncFocus([row], { now: 10 });
     const { payload } = focusPayload([row], view, { now: 10 });
-    const question = payload.sessions[0].question;
-    for (const line of [shown[0], question]) assert.doesNotMatch(line, /\|\s*(---|測試|lint|項目)/, `${text}\n→ ${line}`);
+    assert.equal(payload.sessions[0].question, undefined);
+    assert.doesNotMatch(JSON.stringify(payload.band), /測試|lint|項目/);
+    assert.doesNotMatch(shown[0], /\|\s*(---|測試|lint|項目)/, `${text}\n→ ${shown[0]}`);
     for (const line of shown.slice(1)) assert.doesNotMatch(line, /\\\|/, `${text}\n→ ${line}`);
   }
   const row = rowOf(["改好了，結果如下。", "", ...TABLE].join("\n"));

@@ -3,8 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { git, homeRunFolder, readNames, repoBase } from "./lib.mjs";
-import { archiveDir, readEntries, transcriptOf } from "./log.mjs";
+import { git, homeRunFolder, readNames, repoBase, watcherPrompt } from "./lib.mjs";
+import { DELEGATE_PREFIX } from "./urgency.mjs";
+import { TAKEOVER_HEAD } from "../../../hooks/auto-handoff.mjs";
+import { archiveDir, isConsoleSession, readEntries, transcriptOf } from "./log.mjs";
 import { advisorHome, advisorState } from "./advice.mjs";
 import {
   DONE_MESSAGE,
@@ -21,13 +23,15 @@ import {
   sheetData,
   sheetLines,
   sheetMarkdown,
+  STATE_SUBCOMMANDS,
+  trustWrite,
   sheetProblems,
   stateOf,
   tagOf,
   worktreeOf,
 } from "./review.mjs";
 
-const USAGE = "用法：console.mjs review <add|correct|sheet|data|pass|pass-all|edit|undo|ask|example|done|reviewed|status> [--path <worktree>] …";
+const USAGE = "用法：console.mjs review <add|correct|sheet|data|pass|pass-all|edit|undo|ask|example|done|reviewed|elsewhere|status> [--path <worktree>] …";
 
 function die(line) {
   console.error(line);
@@ -209,9 +213,12 @@ function runAdvisor(args) {
 }
 
 // The whole sheet reviewed: the round closes, the worktree is marked as past its review, the advisor learns which guesses held.
-export function finishRound(wt, { by = "panel", passAll = false } = {}) {
+// `elsewhere`: the user answered outside the sheet, so the items left are marked 在別處回覆 and say nothing to the advisor.
+export function finishRound(wt, { by = "panel", passAll = false, elsewhere = false } = {}) {
   const st = stateOf(wt);
+  if (st.open.length === 0) return { ok: false, line: "沒有待審的代回" };
   if (passAll) for (const x of st.open.filter((x) => x.status === "pending")) append(wt, { event: "pass", n: x.n, by });
+  if (elsewhere) for (const x of st.open.filter((x) => x.status === "pending")) append(wt, { event: "elsewhere", n: x.n, by });
   const now = stateOf(wt);
   const left = now.open.filter((x) => x.status === "pending");
   if (left.length) return { ok: false, line: `還有 ${left.length} 件沒審：${left.map((x) => x.n).join("、")}` };
@@ -220,15 +227,60 @@ export function finishRound(wt, { by = "panel", passAll = false } = {}) {
   append(wt, { event: "done", by, passed: passed.length, edited: edited.length, ns: now.open.map((x) => x.n) });
   append(wt, { event: "approved", by });
   const byPrediction = new Map();
-  for (const x of now.open.filter((x) => x.predictionId)) byPrediction.set(x.predictionId, (byPrediction.get(x.predictionId) ?? true) && x.status === "passed");
+  for (const x of now.open.filter((x) => x.predictionId && x.status !== "elsewhere")) byPrediction.set(x.predictionId, (byPrediction.get(x.predictionId) ?? true) && x.status === "passed");
   for (const [id, hit] of byPrediction) runAdvisor(["verdict", "--prediction", id, "--hit", hit ? "yes" : "no"]);
   const message = [DONE_MESSAGE(passed.length, edited.length), ...(edited.length ? ["", "已改的件：", ...edited.map((x) => `${x.n}. ${x.question}：改成 ${x.edit}`)] : [])].join("\n");
-  return { ok: true, passed: passed.length, edited: edited.length, message, sessions: now.blocked.map((b) => b.session).concat(now.sessions).filter(Boolean) };
+  return { ok: true, passed: passed.length, edited: edited.length, elsewhere: now.open.filter((x) => x.status === "elsewhere").length, message, sessions: now.blocked.map((b) => b.session).concat(now.sessions).filter(Boolean) };
+}
+
+// The user's own words, not something the console or the watcher sent on its own.
+export function ownReply(text) {
+  const t = String(text ?? "").trim();
+  return !!t && !t.startsWith("/") && !watcherPrompt(t) && !t.startsWith(DELEGATE_PREFIX) && !t.startsWith("（中控台自動") && !t.startsWith(TAKEOVER_HEAD);
+}
+
+// A stop that pasted the whole review sheet of the worktree at `where`, as the gate asks when it holds a session back: the 審核單 heading
+// and every item still pending, its question and plan; the gate's own 「審核單：node … review sheet」 line alone is not the sheet.
+export function pastedSheet(text, where) {
+  const t = String(text ?? "");
+  if (!/^\s*(?:\*\*)?審核單[：:]/m.test(t)) return false;
+  try {
+    const wt = worktreeOf(where);
+    const pending = wt ? stateOf(wt).open.filter((x) => x.status === "pending") : [];
+    return pending.length > 0 && pending.every((x) => t.includes(x.question) && t.includes(x.plan));
+  } catch {
+    return false;
+  }
+}
+
+// Answered outside the sheet: the open round of the worktree at `where` closes once, its pending items marked 在別處回覆.
+export function closeElsewhere(where, { by = "reply" } = {}) {
+  try {
+    const wt = worktreeOf(where);
+    if (!wt || !stateOf(wt).open.some((x) => x.status === "pending")) return null;
+    trustWrite(wt.path);
+    return finishRound(wt, { by, elsewhere: true });
+  } catch {
+    return null;
+  }
+}
+
+// Who runs a review command: the session Claude Code gave the shell; the focus band, which has none, passes its own with --session.
+// A --session that differs from the shell's, or none at all, is no one.
+function callerOf(values) {
+  const shell = process.env.CLAUDE_CODE_SESSION_ID || null;
+  if (shell) return values.session === undefined || values.session === shell ? shell : null;
+  return values.session || null;
 }
 
 export async function reviewCommand(values, positionals, { deliver }) {
   const [sub] = positionals;
   if (!sub) die(USAGE);
+  if (STATE_SUBCOMMANDS.has(sub) && !isConsoleSession(callerOf(values))) die(`review ${sub} 只有中控台與焦點面板能跑；子 session 只能用 review add／correct 記下代回。`);
+  if (STATE_SUBCOMMANDS.has(sub)) {
+    const at = worktreeOf(values.path ? real(values.path) : process.cwd());
+    if (at) trustWrite(at.path);
+  }
   if (sub === "add") {
     const wt = worktree(values);
     const r = addItem(wt, {
@@ -315,6 +367,12 @@ export async function reviewCommand(values, positionals, { deliver }) {
     if (!a) die(`第 ${n} 件的問題沒有得到回答`);
     append(wt, { event: "ask", n, q, a });
     return console.log(a);
+  }
+  if (sub === "elsewhere") {
+    const wt = worktree(values);
+    const r = finishRound(wt, { by: values.by ?? "reply", elsewhere: true });
+    if (!r.ok) die(r.line);
+    return console.log(`[${tagOf(wt, readNames())}] 審核單已記成審完（在別處回覆 ${r.elsewhere} 件）`);
   }
   if (sub === "done" || sub === "reviewed") {
     const wt = worktree(values);

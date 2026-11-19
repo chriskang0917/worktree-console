@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { LABELS, batchSheet, readNames, textStop, textOptionLabels, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, recycledMark, reportLines, sessionCaption, sessionTag, sessionTranscript } from "./lib.mjs";
+import { LABELS, YOUR_TURN, awaitsUser, yourTurn, batchSheet, closable, finishedState, readKeepalive, readNames, textStop, consoleHome, fillTitle, firstInstruction, lastActivity, needsYou, pendingItems, reportLines, sessionCaption, sessionTag, sessionTranscript, stopFields } from "./lib.mjs";
+import { judgedStatus, waitingGroups } from "./waiting-line.mjs";
+import { bandRows, weeklyReport } from "./band.mjs";
+import { guideFor, readGuide } from "./guide-record.mjs";
+import { logEvent } from "./log.mjs";
 import { isConsoleSession } from "./log.mjs";
 import { adviceFor, advisorHome, advisorState, loadAdvice } from "./advice.mjs";
 import { readSummary, stopDigest } from "./summary.mjs";
@@ -8,10 +12,9 @@ import { digestLayers, digestMarkdown } from "../../../hooks/digest.mjs";
 import { verdicts } from "./delegate.mjs";
 import { autoReplyOf, readDelegated } from "./auto-reply.mjs";
 import { sheetLines, sheetProblems, stateOf, tagOf, worktreeOf } from "./review.mjs";
-import { isLiveStop, sheetPath } from "./urgency.mjs";
+import { isGateStop, isLiveStop, sheetPath } from "./urgency.mjs";
 
-export const FOCUS_WAIT_MS = 60_000;
-// How long a question that just reached the band waits for its recap before it prints without one.
+// How long the watcher, printing a report itself without the band, waits for that stop's recap.
 export const DIGEST_WAIT_MS = 15_000;
 const MODS_TTL_MS = 30_000;
 const FILE = "focus.json";
@@ -25,7 +28,7 @@ export const FOCUS_VERSION = 1;
 export const stopId = (key) => [...key].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(36);
 
 export function emptyFocus() {
-  return { modsAt: 0, current: null, currentAt: 0, reported: [], wait: null, answered: [], replied: [], back: {}, bumped: {}, seen: {}, titles: {}, firsts: {} };
+  return { modsAt: 0, current: null, currentAt: 0, reported: [], wait: null, answered: [], replied: [], back: {}, bumped: {}, seen: {}, sent: null, hold: false, closables: {}, titles: {}, firsts: {} };
 }
 
 export function loadFocus() {
@@ -50,8 +53,8 @@ export function saveFocus(state) {
 }
 
 // Writes only the title and first-instruction caches over what is on disk now: a reply saved while the band was being drawn must not be undone.
-export function saveTitles(titles, firsts = loadFocus().firsts) {
-  saveFocus({ ...loadFocus(), titles, firsts });
+export function saveTitles(titles, firsts = loadFocus().firsts, extra = {}) {
+  saveFocus({ ...loadFocus(), titles, firsts, ...extra });
 }
 
 // The mod polls `console.mjs focus` every few seconds; a fresh poll means the console screen draws the focus band.
@@ -81,73 +84,118 @@ export function focusOwnerOk(owner, { claim = false, now = Date.now() } = {}) {
   return true;
 }
 
-// One entry per pending session stop; a new stop of the same session gets a new key.
-function focusEntries(rows) {
-  return pendingItems(rows).map((item) => {
-    const since = item.session.since ?? item.session.agent?.stateStartedAt ?? null;
-    const kind = item.session.status.kind;
-    return {
-      key: `${item.session.paneKey}@${since ?? `${kind}:${item.entries[0].question}`}`,
-      paneKey: item.session.paneKey,
-      handle: item.session.handle,
-      tag: item.tag,
-      kind,
-      since,
-      item,
-    };
-  });
+// One entry per stop that is your turn; a new stop of the same session gets a new key. A 已完成 stop with nothing left is closable, not your turn.
+function focusEntries(rows, keepalive = readKeepalive()) {
+  return pendingItems(rows)
+    .filter((item) => item.kind !== "text" || awaitsUser(judgedStatus(item.session, keepalive), { row: item.row, session: item.session }))
+    .map((item) => {
+      const since = item.session.since ?? item.session.agent?.stateStartedAt ?? null;
+      const kind = item.session.status.kind;
+      const text = String(item.session.status.text ?? "");
+      return {
+        key: `${item.session.paneKey}@${since ?? `${kind}:${item.entries[0].question}`}`,
+        paneKey: item.session.paneKey,
+        handle: item.session.handle,
+        tag: item.tag,
+        kind,
+        since,
+        sheet: item.kind === "text" && (!!batchSheet(text) || isGateStop(text)),
+        turn: yourTurn(item.row, item.session),
+        item,
+      };
+    });
 }
 
-// Tiers, each first stopped first out: ⚠️, back after a reply, 🔐, the rest, then the skipped ones by when they were skipped.
-function order(entries, state) {
-  const tier = (e) => (e.kind === "anomaly" ? -1 : state.back?.[e.key] ? 0 : e.kind === "permission" ? 1 : 2);
-  const rank = (e) => (state.bumped?.[e.key] ? [3, state.bumped[e.key]] : [tier(e), e.since ?? state.seen[e.key] ?? 0]);
+// A reply that came back within this long counts as a continued conversation.
+export const RETURN_WINDOW_MS = 10 * 60_000;
+
+// Tiers from the user's own records: ⚠️, a continued conversation, 🔐, the rest newest first, batch sheets and gate stops newest first, then what 8 put off.
+// A stop that comes back after you replied to it on the band (or pressed 8 while waiting for it) is a continued conversation however late.
+function rank(e, state) {
+  const since = e.since ?? state.seen?.[e.key] ?? 0;
+  if (e.kind === "anomaly") return [0, since];
+  if (state.bumped?.[e.key]) return [5, state.bumped[e.key]];
+  const back = state.back?.[e.key];
+  if (back && (back.pin || since - (back.at ?? since) <= RETURN_WINDOW_MS)) return [1, since];
+  if (e.kind === "permission") return [2, since];
+  return [e.sheet ? 4 : 3, -since];
+}
+
+export function order(entries, state) {
   return [...entries].sort((a, b) => {
-    const [x, y] = [rank(a), rank(b)];
+    const [x, y] = [rank(a, state), rank(b, state)];
     return x[0] - y[0] || x[1] - y[1];
   });
 }
 
-// Picks the one question on screen: the session just answered gets up to 60 s to stop again before the queue moves on.
-// `busy` holds sessions now working: one whose question left the screen that way was answered in its own tab, and gets the same wait.
-export function focusStep(prev, entries, now = Date.now(), busy = []) {
+function sameSession(a, b) {
+  return !!(a && b && ((a.paneKey && a.paneKey === b.paneKey) || (a.handle && a.handle === b.handle)));
+}
+
+const person = (s, at, extra = {}) => ({ paneKey: s.paneKey ?? null, handle: s.handle ?? null, tag: s.tag ?? null, at, ...extra });
+
+// You replied to the stop on the band: the first other one in the queue comes up at once, or the band waits for this session with no time limit.
+function afterReply(state, entries, who, at, text = null) {
+  const open = order(entries.filter((e) => !state.answered.includes(e.key) && !sameSession(who, e)), state);
+  const replied = [...(state.replied ?? []).filter((s) => !sameSession(s, who)), person(who, at, { text, pin: true })].slice(-REPLIED_MAX);
+  const next = open[0] ?? null;
+  if (next) return { ...state, replied, current: next.key, wait: null, sent: person(who, at, { text }) };
+  return { ...state, replied, current: null, wait: person(who, at, { text }), sent: null };
+}
+
+// One poll: the current stop stays until you reply to it, put it off with 8, or it leaves; `sessions` is every session's kind and stop time,
+// `hold` (a draft in the prompt, or the console's turn running) defers taking a new current stop.
+export function focusStep(prev, entries, now = Date.now(), { sessions = [], hold = false } = {}) {
   const live = new Set(entries.map((e) => e.key));
   const keepLive = (obj) => Object.fromEntries(Object.entries(obj ?? {}).filter(([k]) => live.has(k)));
   const replied = prev.replied ?? [];
   const after = (s, e) => sameSession(s, e) && (s.at != null && e.since != null ? e.since >= s.at : !prev.seen?.[e.key]);
   const returned = entries.filter((e) => replied.some((s) => after(s, e)));
   const fresh = entries.filter((e) => !prev.seen?.[e.key]);
-  const state = {
+  const backOf = (e) => {
+    const s = replied.find((r) => after(r, e));
+    return { at: s.at ?? now, pin: !!s.pin };
+  };
+  let state = {
     ...prev,
     answered: (prev.answered ?? []).filter((k) => live.has(k)),
     reported: (prev.reported ?? []).filter((k) => live.has(k)),
     replied: replied.filter((s) => !returned.some((e) => sameSession(s, e))),
-    back: { ...keepLive(prev.back), ...Object.fromEntries(returned.map((e) => [e.key, replied.find((s) => after(s, e)).at ?? true])) },
+    back: { ...keepLive(prev.back), ...Object.fromEntries(returned.map((e) => [e.key, backOf(e)])) },
     bumped: keepLive(prev.bumped),
     seen: { ...keepLive(prev.seen), ...Object.fromEntries(fresh.map((e) => [e.key, now])) },
+    sent: prev.sent && !returned.some((e) => sameSession(prev.sent, e)) ? prev.sent : null,
   };
-  const open = order(entries.filter((e) => !state.answered.includes(e.key)), state);
-  let wait = state.wait && now < state.wait.until ? state.wait : null;
-  const resumed = !wait && state.current && !live.has(state.current) ? busy.find((b) => state.current.startsWith(`${b.paneKey}@`)) : null;
-  if (resumed) wait = { paneKey: resumed.paneKey, handle: resumed.handle ?? null, tag: resumed.tag ?? null, until: now + FOCUS_WAIT_MS };
-  let current = null;
-  if (wait) {
-    current = open.find((e) => sameSession(wait, e)) ?? null;
-    if (current) wait = null;
-  } else current = open.find((e) => e.key === state.current) ?? open[0] ?? null;
+  const open = () => order(entries.filter((e) => !state.answered.includes(e.key)), state);
+  const sessionOf = (who) => sessions.find((s) => sameSession(s, who)) ?? null;
+  if (state.current && !open().some((e) => e.key === state.current)) {
+    const paneKey = state.current.slice(0, state.current.indexOf("@"));
+    const s = sessionOf({ paneKey });
+    // Answered in its own tab: it is working now, as after a reply here.
+    state = s?.kind === "busy" ? afterReply(state, entries, s, now) : { ...state, current: null };
+  }
+  let wait = state.wait ?? null;
+  let current = state.current ? open().find((e) => e.key === state.current) ?? null : null;
+  if (!current && wait) {
+    const back = open().find((e) => sameSession(wait, e) && (e.since == null || wait.at == null || e.since >= wait.at));
+    const s = sessionOf(wait);
+    if (back) {
+      if (!hold) (current = back), (wait = null);
+    } else if (!s || s.archived || (s.kind === "busy" && s.goal) || (s.kind !== "busy" && s.since != null && wait.at != null && s.since >= wait.at)) wait = null;
+  }
+  if (!current && !wait && !hold) current = open()[0] ?? null;
+  if (current) wait = null;
   const key = current?.key ?? null;
-  const currentAt = key && key !== state.current ? now : state.currentAt ?? 0;
-  return { state: { ...state, wait, current: key, currentAt }, current, queue: open.filter((e) => e !== current), wait };
+  const currentAt = key && key !== prev.current ? now : state.currentAt ?? 0;
+  const queue = open().filter((e) => e !== current);
+  return { state: { ...state, wait, current: key, currentAt }, current, queue, wait };
 }
 
-function sameSession(a, b) {
-  return !!((a.paneKey && a.paneKey === b.paneKey) || (a.handle && a.handle === b.handle));
-}
-
-// After a reply: the stop it answered is done with, a stop after it was sent counts as back, and the focus waits for that session (the one on screen when several were answered).
+// After a reply: the stop it answered is done with and a stop after it was sent counts as back.
+// A reply to the stop on the band moves the band on (afterReply); one sent to another session by its tag leaves the band as it was.
 export function focusReplied(prev, entries, sessions, now = Date.now()) {
-  const backAt = (s) => entries.map((e) => sameSession(s, e) && prev.back?.[e.key]).find((v) => typeof v === "number") ?? null;
-  const sentAt = (s) => s.at ?? (prev.replied ?? []).find((r) => sameSession(r, s))?.at ?? backAt(s);
+  const backAt = (s) => entries.map((e) => sameSession(s, e) && prev.back?.[e.key]?.at).find((v) => typeof v === "number") ?? null;
+  const sentAt = (s) => s.at ?? (prev.replied ?? []).find((r) => sameSession(r, s))?.at ?? backAt(s) ?? now;
   const answers = (e) => sessions.find((s) => sameSession(s, e));
   const done = entries.filter((e) => {
     const s = answers(e);
@@ -155,32 +203,35 @@ export function focusReplied(prev, entries, sessions, now = Date.now()) {
     return s && (e.since == null || at == null || e.since < at);
   });
   if (done.length === 0 && !sessions.length) return prev;
-  const target = done.find((e) => e.key === prev.current) ?? done.at(-1) ?? null;
-  const wanted = target ?? sessions.at(-1);
-  const person = (s, by) => ({ paneKey: s.paneKey ?? null, handle: s.handle ?? null, at: sentAt(by) });
-  const returned = (s) => entries.some((e) => sameSession(s, e) && prev.back?.[e.key] && !done.includes(e));
-  const who = [...done.map((e) => person(e, answers(e))), ...sessions.filter((s) => !returned(s)).map((s) => person(s, s))];
-  return {
-    ...prev,
-    answered: [...new Set([...(prev.answered ?? []), ...done.map((e) => e.key)])],
-    replied: [...(prev.replied ?? []).filter((s) => !who.some((w) => sameSession(w, s))), ...who].slice(-REPLIED_MAX),
-    current: null,
-    wait: wanted ? { paneKey: wanted.paneKey ?? null, handle: wanted.handle ?? null, tag: wanted.tag ?? null, until: now + FOCUS_WAIT_MS, sentAt } : null,
-  };
+  let state = { ...prev, answered: [...new Set([...(prev.answered ?? []), ...done.map((e) => e.key)])], replied: prev.replied ?? [] };
+  const onBand = (s) => done.some((e) => e.key === prev.current && sameSession(s, e)) || (!prev.current && (!prev.wait || sameSession(prev.wait, s)));
+  for (const s of sessions) {
+    const at = sentAt(s);
+    if (onBand(s)) state = afterReply(state, entries, s, at, s.text ?? null);
+    else state = { ...state, replied: [...state.replied.filter((r) => !sameSession(r, s)), person(s, at, { text: s.text ?? null })].slice(-REPLIED_MAX) };
+  }
+  return state;
 }
 
-// 「延後處理」: the question on screen goes behind everything else and the first one in the queue comes up.
-export function focusSkip(prev, now = Date.now()) {
-  return { ...prev, wait: null, current: null, bumped: prev.current ? { ...prev.bumped, [prev.current]: now } : prev.bumped };
+// 8 on the band: the stop on screen goes behind everything else and the first one in the queue comes up;
+// while the band waits for a session, the first one in the queue comes up and that session goes first when it is back.
+export function focusSkip(prev, entries = [], now = Date.now()) {
+  const open = (state) => order(entries.filter((e) => !(state.answered ?? []).includes(e.key)), state);
+  if (prev.current) {
+    const state = { ...prev, bumped: { ...prev.bumped, [prev.current]: now } };
+    const next = open(state).find((e) => e.key !== prev.current);
+    return next ? { ...state, current: next.key, wait: null } : prev;
+  }
+  if (prev.wait) {
+    const next = open(prev)[0];
+    if (!next) return prev;
+    const replied = (prev.replied ?? []).map((r) => (sameSession(r, prev.wait) ? { ...r, pin: true } : r));
+    return { ...prev, replied, current: next.key, wait: null };
+  }
+  return prev;
 }
 
-// A queue button or a pane card picked: that question goes on screen at once; the one it replaces counts as skipped unless it came back after a reply.
-export function focusPick(prev, key, now = Date.now()) {
-  const left = prev.current && prev.current !== key && !prev.back?.[prev.current] ? prev.current : null;
-  return { ...prev, wait: null, current: key, bumped: left ? { ...prev.bumped, [left]: now } : prev.bumped };
-}
-
-// Marks a question as shown once the mod has printed it, so an automatic change never prints the same stop twice.
+// Marks a stop as printed by /focus-show.
 export function markReported(state, key) {
   return state.reported.includes(key) ? state : { ...state, reported: [...state.reported, key] };
 }
@@ -194,16 +245,35 @@ export function waitLine(view) {
   return [tag ? `等 ${tag} 回應中…` : null, queueLine(view.queue.length)].filter(Boolean).join("　");
 }
 
-// Loads the saved focus, applies `change` (a reply, a pick), steps it over `rows` and saves it back.
+// Every session's kind and stop time, for the rules that watch a session leave or come back.
+function sessionFacts(rows) {
+  return rows.flatMap((row) =>
+    row.sessions.map((s) => ({
+      paneKey: s.paneKey,
+      handle: s.handle,
+      tag: sessionTag(row, s),
+      kind: s.status.kind,
+      since: s.since ?? s.agent?.stateStartedAt ?? null,
+      goal: s.status.kind === "busy" && (!!s.status.goal || /^\s*\/goal\b/.test(String(s.agent?.prompt ?? s.status.text ?? ""))),
+      archived: !!s.archived,
+    })),
+  );
+}
+
+// Loads the saved focus, applies `change` (a reply, 8), steps it over `rows` and saves it back.
 // Only urgent questions reach the band: one the advisor is still judging, or has answered for the user, stays off it.
-export function syncFocus(rows, { now = Date.now(), change = null, heartbeat = false } = {}) {
+// `hold` comes from the mod's poll (a draft in the prompt, or the console's turn running); other callers keep the last one it saved.
+export function syncFocus(rows, { now = Date.now(), change = null, heartbeat = false, hold = undefined } = {}) {
   let state = loadFocus();
   const entries = onBand(focusEntries(rows), rows, now);
-  const busy = rows.flatMap((row) => row.sessions.filter((s) => s.status.kind === "busy").map((s) => ({ paneKey: s.paneKey, handle: s.handle, tag: sessionTag(row, s) })));
   if (change) state = change(state, entries, now);
-  const view = focusStep(state, entries, now, busy);
+  if (hold !== undefined) state = { ...state, hold };
+  const sessions = sessionFacts(rows);
+  const view = focusStep(state, entries, now, { sessions, hold: !!state.hold });
   if (heartbeat) view.state.modsAt = now;
   saveFocus(view.state);
+  // What the band takes up once the draft is cleared and the console's turn ends; never saved.
+  if (state.hold) view.after = focusStep(view.state, entries, now, { sessions, hold: false });
   return view;
 }
 
@@ -288,19 +358,16 @@ export function reviewAppendix(row, status) {
   }
 }
 
-// A question that just reached the band holds its print while its recap is being written, up to DIGEST_WAIT_MS.
-export function holdForDigest(view, { home = consoleHome(), now = Date.now() } = {}) {
-  if (!view.current || now - (view.state.currentAt ?? 0) >= DIGEST_WAIT_MS) return false;
-  return stopDigestLines(view.current.item.session, { home, now }).pending;
-}
-
 function plainReport(tag, status) {
   const [icon, label] = STATUS[status.kind];
   return [`### ${icon} ${tag} ${label}`, "", `> ${lastActivity(status)}`];
 }
 
-// The focus band's and pane's data: every session as a card, the question on screen, the queue in order and the counts.
-export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(), announce = null, announceKey = null, keys = new Set(), notice = null } = {}) {
+const sameStop = (a, b) => !!(a && b && ((a.paneKey && a.paneKey === b.paneKey) || (a.handle && a.handle === b.handle)));
+
+// The status band and pane's data: every session as a card, the stop on the band, the queue in order and the band's rows.
+// `closables` lists the stops judged closable now, so the first time each is logged once.
+export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(), keys = new Set(), notice = null } = {}) {
   const items = new Map(pendingItems(rows).map((item) => [item.session, item]));
   const keyOf = new Map([view.current, ...view.queue].filter(Boolean).map((e) => [e.item.session, e.key]));
   const titles = { ...(view.state.titles ?? {}) };
@@ -310,6 +377,9 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
   const advisor = advice ? advisorState(advisorHome()) : null;
   const reviews = new Map();
   const delegated = readDelegated(home);
+  const keepalive = readKeepalive();
+  const logged = view.state.closables ?? {};
+  const closables = {};
   const sessions = rows.flatMap((row) =>
     row.sessions.map((session) => {
       if (!(row.path in titles)) {
@@ -319,10 +389,13 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
       const tag = sessionTag(row, session);
       const item = items.get(session);
       const status = session.status;
-      const question = recycledMark(
-        session,
-        item ? (item.entries.length > 1 ? item.entries.map((x) => x.question).join(" / ") : item.entries[0].question) : status.kind === "idle" ? "（閒置）" : lastActivity(status),
-      );
+      const since = session.since ?? session.agent?.stateStartedAt ?? null;
+      if (!session.archived && closable(row, session)) {
+        const k = `${session.paneKey}@${since}`;
+        closables[k] = logged[k] ?? now;
+        if (!logged[k]) logEvent("stop", { ...stopFields(row, session), status: "closable", since });
+      }
+      const turn = yourTurn(row, { ...session, status: judgedStatus(session, keepalive) });
       const report = needsYou(status.kind) ? reportWithDigest(row, status, session, { home, now }) : plainReport(tag, status);
       const key = keyOf.get(session) ?? session.paneKey;
       return {
@@ -330,12 +403,11 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
         id: stopId(key),
         tag,
         repo: row.repo,
-        status: STATUS[status.kind][1],
+        status: turn ? YOUR_TURN : STATUS[status.kind][1],
         stage: row.stage ?? "—",
         summary: cardSummary(row, session, titles[row.path], firsts),
-        question,
         options: item ? optionsOf(item) : [],
-        advice: item ? adviceFor(advice, { path: row.path, status, since: session.since ?? session.agent?.stateStartedAt, now, advisor }) : null,
+        advice: item ? adviceFor(advice, { path: row.path, status, since, now, advisor }) : null,
         brief: briefOf(home, session, now),
         archived: !!session.archived,
         pending: !!item,
@@ -347,22 +419,34 @@ export function focusPayload(rows, view, { now = Date.now(), home = consoleHome(
       };
     }),
   );
-  const count = (label) => sessions.filter((s) => !s.archived && s.status === label).length;
-  const since = view.state.currentAt ?? 0;
+  const cur = view.current;
+  const card = cur ? sessions.find((s) => s.key === cur.key) : null;
+  const sent = cur && view.state.sent && !sameStop(view.state.sent, cur) ? view.state.sent : null;
+  const band = bandRows({
+    current: cur ? { tag: cur.tag, kind: cur.kind === "done" && !cur.turn ? "done" : cur.kind } : null,
+    wait: view.wait,
+    queue: view.queue.length,
+    groups: waitingGroups(rows, { delegated, keepalive, now, first: [cur, ...view.queue].filter(Boolean).map((e) => e.tag) }),
+    advice: card?.advice ?? null,
+    options: card?.options ?? [],
+    guide: cur ? guideFor(readGuide(home), cur) : null,
+    finished: cur ? finishedState(cur.item.row, cur.item.session.status) : null,
+    sent,
+    weekly: weeklyReport(advisorHome(), now),
+  });
   return {
     payload: {
       active: true,
       home,
-      current: view.current?.key ?? null,
-      announce,
-      announceKey,
+      current: cur?.key ?? null,
       notice,
-      waiting: view.wait ? { tag: view.wait.tag, seconds: Math.max(0, Math.ceil((view.wait.until - now) / 1000)) } : null,
-      queue: view.queue.map((e) => ({ key: e.key, isNew: (view.state.seen?.[e.key] ?? 0) > since })),
-      stats: `${count(STATUS.anomaly[1]) ? `session 異常 ${count(STATUS.anomaly[1])} | ` : ""}等待回應 ${count("等待回應")} | 等待授權 ${count("等待授權")} | 回覆完畢 ${count("回覆完畢")} | 執行中 ${count("執行中")} | 封存 ${sessions.filter((s) => s.archived).length} | 閒置 ${count("閒置")}`,
+      waiting: view.wait ? { tag: view.wait.tag } : null,
+      queue: view.queue.map((e) => ({ key: e.key })),
+      band,
       sessions,
     },
     titles,
     firsts,
+    closables,
   };
 }

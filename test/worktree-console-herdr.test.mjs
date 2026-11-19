@@ -7,7 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeProjectDir, pendingItems, turnEntry } from "../skills/worktree-console/scripts/lib.mjs";
+import { KEEPALIVE_TEXT, claudeProjectDir, lastInstruction, pendingItems, turnEntry } from "../skills/worktree-console/scripts/lib.mjs";
 import { terminalKind } from "../skills/worktree-console/scripts/terminals.mjs";
 import { transcriptState } from "../skills/worktree-console/scripts/herdr.mjs";
 import { emptyFocus, focusStep } from "../skills/worktree-console/scripts/focus.mjs";
@@ -169,7 +169,7 @@ test("blocked 依對話紀錄分類：選單→💬（選項讀自紀錄）、�
   const res = w.run(["board", "--repo", app()]);
   assert.equal(res.code, 0, res.out + res.err);
   const row = (tag) => res.out.split("\n").find((l) => l.includes(`| ${tag} |`));
-  assert.match(row("PROJ-201"), /💬 等待回應.*要用哪個色？/);
+  assert.match(row("PROJ-201"), /💬 輪到你.*要用哪個色？/);
   assert.match(row("PROJ-202"), /🔐 等待授權.*Bash mkdir -p \/tmp\/x/);
   assert.match(row("PROJ-203"), /⚠️ session 異常，需手動排程/);
   const pending = res.out.split("### 📋 待回覆")[1].split("\n").filter((l) => /^\| (?!狀態|---)/.test(l));
@@ -180,7 +180,7 @@ test("blocked 依對話紀錄分類：選單→💬（選項讀自紀錄）、�
 
 test("unknown 先讀對話紀錄補判斷：回完話→⏸／💬；工具在跑→🔄、畫面有授權框→🔐；讀不到→⚠️", () => {
   const replied = standard().run(["board", "--repo", app()]);
-  assert.match(replied.out.split("\n").find((l) => l.includes("| PROJ-204 |")), /💬 等待回應.*要我 push 嗎？/);
+  assert.match(replied.out.split("\n").find((l) => l.includes("| PROJ-204 |")), /💬 輪到你.*要我 push 嗎？/);
   const tool = (screen) =>
     world([{ cwd: wt("proj-204-unknown"), status: "unknown", session: "s" }], {
       transcripts: { s: { cwd: wt("proj-204-unknown"), entries: [user("建"), call("t9", "Bash", { command: "rm -rf build" })] } },
@@ -529,6 +529,33 @@ test("auto-handoff hook 在 herdr：同工作區開新分頁接手、送 /goal�
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).panes.some((p) => p.pane_id === "w3:p1"), false, "舊分頁關掉");
 });
 
+test("auto-handoff hook：停在「等你：…」（沒有問號）時照樣算待答題，交棒事件記下原回覆，新 session 被要求先原樣重問", async () => {
+  const dir = fs.mkdtempSync(path.join(tmp, "ah-wait-"));
+  const projects = path.join(dir, "projects");
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ panes: [{ pane_id: "w3:p1", tab_id: "w3:t1", workspace_id: "w3", cwd: app() }], agents: [] }));
+  const home = path.join(dir, "handoff");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ enabled: true, ratio: 0.4 }));
+  const transcript = path.join(dir, "t.jsonl");
+  const reply = "push 被擋，沒有繞過。\n\n等你：解鎖 SSH 金鑰後跑 push 指令";
+  const entries = [
+    { type: "user", message: { role: "user", content: "做事" } },
+    { type: "assistant", message: { role: "assistant", model: "claude-haiku-4-5", stop_reason: "end_turn", usage: { input_tokens: 90000 }, content: [{ type: "text", text: reply }] } },
+  ];
+  fs.writeFileSync(transcript, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const env = { ...clean(), HERDR_ENV: "1", HERDR_PANE_ID: "w3:p1", HERDR_WORKSPACE_ID: "w3", HERDR_BIN: fakeHerdr, FAKE_HERDR_DIR: dir, FAKE_HERDR_TRANSCRIPTS: projects, CLAUDE_PROJECTS_DIR: projects, AUTO_HANDOFF_HOME: home, CLAUDE_CONFIG_DIR: path.join(dir, "claude"), WORKTREE_CONSOLE_HOME: path.join(dir, "console"), AUTO_HANDOFF_POLL_MS: "10", AUTO_HANDOFF_DELIVER_MS: "500", AUTO_HANDOFF_FIRST_TURN_MS: "500", AUTO_HANDOFF_GOAL_MS: "500" };
+  const stop = () => spawnSync(process.execPath, [autoHandoff, "stop"], { input: JSON.stringify({ session_id: "sess-w", transcript_path: transcript, cwd: app(), last_assistant_message: reply }), encoding: "utf8", env });
+  assert.match(JSON.parse(stop().stdout).reason, /原文附在交棒說明最後/);
+  const event = JSON.parse(fs.readFileSync(path.join(home, "events", "sess-w.json"), "utf8"));
+  assert.equal(event.reply, reply);
+  assert.equal(event.question, reply);
+  fs.mkdirSync(path.join(home, "notes"), { recursive: true });
+  fs.writeFileSync(path.join(home, "notes", "sess-w.md"), "# 交棒說明\n");
+  stop();
+  const sends = fs.readFileSync(path.join(dir, "sends.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  assert.match(sends[0].text, /待答問題（原文）/);
+});
+
 test("auto-handoff hook 在 Orca、herdr、Herdr app 以外：說明只支援這三種，並附交棒說明路徑", () => {
   const dir = fs.mkdtempSync(path.join(tmp, "ah-none-"));
   const home = path.join(dir, "handoff");
@@ -553,6 +580,24 @@ test("transcriptState：選單、工具結果、回完話、被中斷、還沒�
   assert.equal(transcriptState([user("a"), call("t", "Bash", {}), result("t"), user("[Request interrupted by user]", 3)]).phase, "replied");
   assert.equal(transcriptState([{ type: "attachment" }]).phase, "fresh");
   assert.equal(transcriptState([said("x")], { truncated: true }).phase, "replied");
+});
+
+test("transcriptState：閒置時被壓縮，摘要不算新指令，停下的回覆與續命訊息照舊", () => {
+  const compacted = (n) => [
+    { type: "system", subtype: "compact_boundary", timestamp: ts(n) },
+    { type: "user", isCompactSummary: true, timestamp: ts(n), message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context." } },
+    { type: "system", subtype: "informational", timestamp: ts(n) },
+  ];
+  const plain = transcriptState([user("修 7 條"), said("push 被擋。\n\n等你：解鎖 SSH 金鑰後跑 push 指令"), ...compacted(5)]);
+  assert.equal(plain.phase, "replied");
+  assert.equal(plain.final, "push 被擋。\n\n等你：解鎖 SSH 金鑰後跑 push 指令");
+  assert.equal(plain.prompt, "修 7 條");
+  assert.equal(plain.at, Date.parse(ts(1)));
+  const kept = [user("修 7 條"), said("等你：解鎖 SSH 金鑰", 1), user(KEEPALIVE_TEXT, 3), said("收到", 4), ...compacted(5)];
+  const st = transcriptState(kept);
+  assert.equal(st.final, "收到");
+  assert.equal(st.prompt, KEEPALIVE_TEXT, "續命訊息還是最後一則指令，畫面照舊顯示原題");
+  assert.equal(lastInstruction(kept), KEEPALIVE_TEXT);
 });
 
 test("待回覆與專注排隊：⚠️ 排在 🔐 前面", () => {
@@ -872,7 +917,7 @@ test("Stop hook 還沒記下這一輪結束時，herdr 說 done／idle 也算執
     assert.equal(band.sessions[0].status, "執行中");
     endTurn(w, "s1", 4);
     const after = w.run(["board", "--repo", app()]).out;
-    assert.match(boardRow(after, "PROJ-201"), /💬 等待回應.*要 push 嗎？/, after);
+    assert.match(boardRow(after, "PROJ-201"), /💬 輪到你.*要 push 嗎？/, after);
     assert.match(bandOf(w).current ?? "", /^w1:p2@/, "這一輪結束後才出題");
   }
 });
@@ -970,7 +1015,7 @@ test("選單與授權框不等 Stop hook：Stop hook 紀錄還是上一輪的，
   endTurn(w, "m", 0);
   endTurn(w, "p", 0);
   const out = w.run(["board", "--repo", app()]).out;
-  assert.match(boardRow(out, "PROJ-201"), /💬 等待回應.*要用哪個色？/);
+  assert.match(boardRow(out, "PROJ-201"), /💬 輪到你.*要用哪個色？/);
   assert.match(boardRow(out, "PROJ-202"), /🔐 等待授權.*mkdir -p \/tmp\/x/);
 });
 
@@ -1022,7 +1067,7 @@ test("對話紀錄停在還沒回覆的選單：herdr 回 working、idle、done�
       transcripts: { m: { cwd: wt("proj-201-menu"), entries: [user("挑顏色"), call("t1", "AskUserQuestion", { questions: MENU })] } },
     });
     const out = w.run(["board", "--repo", app()]).out;
-    assert.match(boardRow(out, "PROJ-201"), /💬 等待回應.*要用哪個色？/, `${status}: ${out}`);
+    assert.match(boardRow(out, "PROJ-201"), /💬 輪到你.*要用哪個色？/, `${status}: ${out}`);
     assert.ok(pendingOf(out).some((l) => /PROJ-201.*a 紅／b 藍／其他/.test(l)), `${status}: ${pendingOf(out).join("\n")}`);
     const res = w.run(["reply", "--", "PROJ-201 b"], { FAKE_HERDR_UNBLOCK: "1", AWAIT_INTERVAL_MS: "10" });
     assert.equal(res.out, "[PROJ-201] 已選擇：顏色→藍", `${status}: ${res.out}${res.err}`);
@@ -1040,7 +1085,7 @@ test("herdr 回 blocked 但對話紀錄還沒寫進那筆工具呼叫：30 秒�
   assert.doesNotMatch(first, /⚠️/);
   const file = path.join(claudeProjectDirIn(w, wt("proj-201-menu")), "m.jsonl");
   fs.appendFileSync(file, `${JSON.stringify(call("t1", "AskUserQuestion", { questions: MENU }, 2))}\n`);
-  assert.match(boardRow(w.run(["board", "--repo", app()], slow).out, "PROJ-201"), /💬 等待回應.*要用哪個色？/, "紀錄跟上就是選單");
+  assert.match(boardRow(w.run(["board", "--repo", app()], slow).out, "PROJ-201"), /💬 輪到你.*要用哪個色？/, "紀錄跟上就是選單");
 
   const late = world([{ cwd: wt("proj-201-menu"), status: "blocked", session: "m" }], {
     transcripts: { m: { cwd: wt("proj-201-menu"), entries: [user("挑顏色", 0), said("我問一下", 1, null)] } },

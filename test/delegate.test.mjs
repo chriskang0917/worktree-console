@@ -27,6 +27,10 @@ function gitDir(branch = "feat/demo") {
   const git = (...a) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: dir });
   git("init", "-q", "-b", branch);
   git("commit", "-q", "--allow-empty", "-m", "i");
+  // A pushed branch, so a stop ending in 已完成 is closable rather than waiting on a push.
+  spawnSync("git", ["init", "-q", "--bare", `${dir}.git`]);
+  git("remote", "add", "origin", `${dir}.git`);
+  git("push", "-q", "origin", branch);
   return dir;
 }
 
@@ -390,7 +394,7 @@ test("代回中：session 正在跑、而且這一輪是中控台最近一筆代
   assert.equal(autoReplyOf(stopped, { [key(stopped)]: { at: sentAt, answer: "先改 API" } }), null, "停下就不算");
 });
 
-test("waiting-line：一行「等待：…｜自動處理中：…｜在跑：…｜已跳過：…」，空的寫「無」；⏸ 只有最後一段在等使用者決定才算等待", () => {
+test("waiting-line：一行「等待：…｜自動處理中：…｜在跑：…｜延後處理：…」，空的寫「無」；⏸ 只有最後一段在等使用者決定才算等待", () => {
   const sentAt = NOW - 30_000;
   const asking = world({ text: "做完了。\n\n要順便改舊測試嗎？" });
   const report = world({ text: "為什麼會壞？因為少了參數。\n\n已經修好。" });
@@ -400,8 +404,8 @@ test("waiting-line：一行「等待：…｜自動處理中：…｜在跑：�
   const rows = [asking, report, decide, auto, run].map((w) => w.row);
   const delegated = { [`${auto.session.paneKey}@x`]: { at: sentAt, answer: "b" } };
   const tag = (w) => w.row.label;
-  assert.equal(waitingLine(rows, delegated, {}), `等待：${tag(asking)}、${tag(decide)}｜自動處理中：${tag(auto)}｜在跑：${tag(run)}｜已跳過：無`);
-  assert.equal(waitingLine([report.row], {}, {}), "等待：無｜自動處理中：無｜在跑：無｜已跳過：無");
+  assert.equal(waitingLine(rows, delegated, {}), `等待：${tag(asking)}、${tag(decide)}｜自動處理中：${tag(auto)}｜在跑：${tag(run)}｜延後處理：無`);
+  assert.equal(waitingLine([report.row], {}, {}), "等待：無｜自動處理中：無｜在跑：無｜延後處理：無");
   assert.equal(awaitsDecision("請你確認\n\n已經修好。"), false, "只看最後一段");
 });
 
@@ -440,7 +444,7 @@ test("waiting-line：兩個 finalize 停在審核頁的回覆（最後一段只�
   const a = world({ text: REVIEW_PAGE_A });
   const b = world({ text: REVIEW_PAGE_B });
   assert.deepEqual([a.session.status.kind, b.session.status.kind], ["done", "done"], "沒有問號，是 ⏸");
-  assert.equal(waitingLine([a.row, b.row], {}, {}), `等待：${a.row.label}、${b.row.label}｜自動處理中：無｜在跑：無｜已跳過：無`);
+  assert.equal(waitingLine([a.row, b.row], {}, {}), `等待：${a.row.label}、${b.row.label}｜自動處理中：無｜在跑：無｜延後處理：無`);
 });
 
 test("💬：問句後面接「等你：…」結尾行或備註段照樣算在問；問句後面是一般內容不算", () => {
@@ -467,12 +471,12 @@ test("waiting-line：做完的回報最後一行寫「已完成」（或舊寫�
   for (const ending of ["已完成", "已完成。", "**已完成**", "不用等你"]) {
     const w = world({ text: `${report}請你確認改法。\n${ending}` });
     assert.equal(awaitsUser(w.session.status), false, ending);
-    assert.equal(waitingLine(w.rows, {}, {}, NOW), "等待：無｜自動處理中：無｜在跑：無｜已跳過：無", ending);
+    assert.equal(waitingLine(w.rows, {}, {}, NOW), "等待：無｜自動處理中：無｜在跑：無｜延後處理：無", ending);
   }
   assert.equal(awaitsUser(world({ text: "已完成登入頁，請你確認改法。" }).session.status), true, "已完成後面還接字就不是結尾行");
 });
 
-test("waiting-line：在焦點橫條按過延後處理（focus.json 的 bumped）的改列「已跳過」，等超過一天加時數", () => {
+test("waiting-line：在焦點橫條按過延後處理（focus.json 的 bumped）的改列「延後處理」，等超過一天加時數", () => {
   const fresh = world({ text: "請你確認改法。", since: NOW - 2 * 3_600_000 });
   const old = world({ text: "請你確認改法。", since: NOW - 27 * 3_600_000 });
   const still = world({ text: "請你確認改法。" });
@@ -480,7 +484,7 @@ test("waiting-line：在焦點橫條按過延後處理（focus.json 的 bumped�
   const bumped = { [key(fresh)]: NOW - 3_600_000, [key(old)]: NOW - 3_600_000, [`${still.session.paneKey}@1`]: NOW };
   assert.equal(
     waitingLine([fresh.row, old.row, still.row], {}, bumped, NOW),
-    `等待：${still.row.label}｜自動處理中：無｜在跑：無｜已跳過：${fresh.row.label}、${old.row.label}（等了 27 小時）`,
+    `等待：${still.row.label}｜自動處理中：無｜在跑：無｜延後處理：${fresh.row.label}、${old.row.label}（等了 27 小時）`,
     "同一個分頁前一次停下的跳過紀錄不算這次",
   );
   const home = consoleHome();
@@ -497,11 +501,11 @@ test("waiting-line：續命中的 session 照續命前記下的原題判斷（�
   const keepalive = { [kept.session.paneKey]: { phase: "kept", stopAt: NOW - 3_600_000, status: original } };
   applyKeepalive(kept.rows, keepalive);
   assert.equal(kept.session.status.text, original.text, "畫面換回原題");
-  assert.equal(waitingLine(kept.rows, {}, {}, NOW, keepalive), `等待：${kept.row.label}｜自動處理中：無｜在跑：無｜已跳過：無`);
+  assert.equal(waitingLine(kept.rows, {}, {}, NOW, keepalive), `等待：${kept.row.label}｜自動處理中：無｜在跑：無｜延後處理：無`);
   const missed = world({ text: "收到" });
   const byKeyword = { [missed.session.paneKey]: { phase: "sent", stopAt: NOW - 3_600_000, status: { kind: "done", text: "改好了。\n\n請你確認改法。" } } };
-  assert.equal(waitingLine(missed.rows, {}, {}, NOW, byKeyword), `等待：${missed.row.label}｜自動處理中：無｜在跑：無｜已跳過：無`, "畫面沒換回原題時也用續命紀錄的原題");
-  assert.equal(waitingLine(missed.rows, {}, {}, NOW, {}), "等待：無｜自動處理中：無｜在跑：無｜已跳過：無", "沒有續命紀錄就照畫面");
+  assert.equal(waitingLine(missed.rows, {}, {}, NOW, byKeyword), `等待：${missed.row.label}｜自動處理中：無｜在跑：無｜延後處理：無`, "畫面沒換回原題時也用續命紀錄的原題");
+  assert.equal(waitingLine(missed.rows, {}, {}, NOW, {}), "等待：無｜自動處理中：無｜在跑：無｜延後處理：無", "沒有續命紀錄就照畫面");
   const free = { [missed.session.paneKey]: { phase: "kept", stopAt: NOW - 3_600_000, status: { kind: "done", text: "做完了。\n\n不用等你" } } };
-  assert.equal(waitingLine(missed.rows, {}, {}, NOW, free), "等待：無｜自動處理中：無｜在跑：無｜已跳過：無");
+  assert.equal(waitingLine(missed.rows, {}, {}, NOW, free), "等待：無｜自動處理中：無｜在跑：無｜延後處理：無");
 });

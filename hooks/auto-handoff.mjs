@@ -7,7 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readManaged } from "../skills/worktree-console/scripts/log.mjs";
-import { KEEPALIVE_REPLY, KEEPALIVE_TEXT } from "./keepalive-text.mjs";
+import { endingOf, markMissed } from "../skills/worktree-console/scripts/ending.mjs";
+import { CACHE_HANDOFF_TEXT, KEEPALIVE_REPLY, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "./keepalive-text.mjs";
+
+export { CACHE_HANDOFF_TEXT, TAKEOVER_HEAD };
 
 const SMALL_WINDOW = 200_000;
 const LARGE_WINDOW = 1_000_000;
@@ -23,9 +26,7 @@ const ENDED = new Set(["end_turn", "stop_sequence", "max_tokens", "refusal"]);
 const BACKGROUND_LAUNCHED = /^(?:Workflow launched in background\.|Async agent launched successfully\.)/;
 const TASK_ENDED = new Set(["completed", "failed", "killed", "stopped"]);
 const SELF = fileURLToPath(import.meta.url);
-export const CACHE_HANDOFF_TEXT = "（中控台自動交棒，不是使用者的新指令）你的 prompt 快取快到期了，接下來會換新 session 接手：先不要做任何事，直接結束這一輪。";
 export { KEEPALIVE_REPLY, KEEPALIVE_TEXT };
-export const TAKEOVER_HEAD = "接手交棒：";
 export const CONSOLE_NAME = "console";
 
 export function handoffHome() {
@@ -217,6 +218,48 @@ export function cacheTrigger(entries) {
   return { id: entries[at].uuid ?? `line-${at}`, question: lastAssistantText(entries.slice(0, beforeKeepalive(entries, at))) || null };
 }
 
+// The last message this turn answers: the user's, or the keepalive, cache handoff or takeover message the console's tooling sent.
+function lastPromptAt(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e.type !== "user" || e.isSidechain || e.isMeta || e.isCompactSummary) continue;
+    const text = textOf(e.message?.content).trim();
+    if (!text || text.startsWith("<")) continue;
+    return i;
+  }
+  return -1;
+}
+
+function lastPrompt(entries) {
+  const at = lastPromptAt(entries);
+  return at < 0 ? "" : textOf(entries[at].message?.content).trim();
+}
+
+// Everything the main conversation said since the last prompt, across the stops a Stop hook held (their feedback is a meta entry).
+export function turnText(entries) {
+  return entries
+    .slice(lastPromptAt(entries) + 1)
+    .filter((e) => e.type === "assistant" && !e.isSidechain)
+    .map((e) => textOf(e.message?.content).trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+const toolingPrompt = (text) => text === KEEPALIVE_TEXT || text === CACHE_HANDOFF_TEXT || text.startsWith(TAKEOVER_HEAD);
+
+// The console's reply ends with the two lines its last `console.mjs guide` of this turn printed; the reason to ask once for them, or null.
+// Not checked on the stop the hook already held, a turn with no guide, a turn the keepalive or a handoff message started, or any other session.
+export function endingProblem(input, entries, { guide = readJson(path.join(consoleHome(), "guide.json"), {}), turnEnd = readJson(turnEndFile(input.session_id), null), isConsole = false } = {}) {
+  const last = guide?.last;
+  if (input.stop_hook_active || !isConsole || !last?.lines?.length || last.session !== input.session_id) return null;
+  if (typeof turnEnd?.at === "number" && last.at <= turnEnd.at) return null;
+  if (toolingPrompt(lastPrompt(entries))) return null;
+  const want = last.lines.flatMap((l) => String(l).split("\n")).map((l) => l.trim()).filter(Boolean);
+  const got = String(input.last_assistant_message ?? lastAssistantText(entries)).split("\n").map((l) => l.trim()).filter(Boolean).slice(-want.length);
+  if (got.join("\n") === want.join("\n")) return null;
+  return ["這則回覆最後兩行要原樣貼 `console.mjs guide` 印出的結尾，不要手寫或改字。照貼下面兩行再結束這一輪：", ...want].join("\n");
+}
+
 // The keepalive exchange right before the handoff message is not the question; the reply before it is.
 function beforeKeepalive(entries, at) {
   for (let i = at - 1; i >= 0; i--) {
@@ -229,11 +272,50 @@ function beforeKeepalive(entries, at) {
   return at;
 }
 
+// A stop that asks: a question mark, or the opening rules' 「等你：…」 last line.
 export function isQuestion(text) {
-  return proseLines(text).some((l) => /[?？]/.test(l));
+  return proseLines(text).some((l) => /[?？]/.test(l)) || endingOf(text)?.wait === true;
 }
 
-function lastAssistantText(entries) {
+export const ENDING_ASK = "這則回覆最後一行要單獨寫「等你：<要使用者做什麼>」或「已完成」，中控台靠這行判斷你在不在等使用者。只補這一行再結束這一輪，不要重做其他事。";
+
+// A child stop of a worktree the console manages without the ending line: "ask" the first time, "missed" when it stops again without it.
+// Not on a turn the keepalive or a handoff message started.
+// "Asked" is recorded per session and prompt, so a stop another Stop hook held is not taken for the second one.
+export function endingMissing(input, entries, { managed = false, home = consoleHome() } = {}) {
+  if (!managed || toolingPrompt(lastPrompt(entries))) return null;
+  const file = path.join(home, "ending-asked", `${encodeURIComponent(input.session_id ?? "x")}.json`);
+  if (endingOf(String(input.last_assistant_message ?? lastAssistantText(entries)))) {
+    fs.rmSync(file, { force: true });
+    return null;
+  }
+  const at = lastPromptAt(entries);
+  const turn = at < 0 ? "none" : (entries[at].uuid ?? `${entries[at].timestamp ?? ""}:${textOf(entries[at].message?.content).trim()}`);
+  if (readJson(file, null)?.turn === turn) {
+    fs.rmSync(file, { force: true });
+    return "missed";
+  }
+  writeJson(file, { turn, at: Date.now() });
+  return "ask";
+}
+
+// A tab on the console's board in a worktree that is not a main checkout; never the console.
+export function boardChild(cwd, handle, managed = readManaged()) {
+  if (!handle || !cwd || !managed || (managed.consoles ?? []).includes(handle) || isRegisteredConsole(handle)) return false;
+  if (!managed.handles?.[handle]) return false;
+  const hit = (managed.worktrees ?? []).filter((w) => cwd === w.path || cwd.startsWith(`${w.path}/`)).sort((a, b) => b.path.length - a.path.length)[0];
+  return !!hit && hit.main !== true;
+}
+
+function managedChild(cwd, handle) {
+  let dir = cwd;
+  try {
+    dir = fs.realpathSync(cwd);
+  } catch {}
+  return boardChild(dir, handle);
+}
+
+export function lastAssistantText(entries) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
     if (e.type === "assistant" && !e.isSidechain) {
@@ -349,6 +431,28 @@ let held = false;
 function block(reason) {
   held = true;
   process.stdout.write(JSON.stringify({ decision: "block", reason }));
+}
+
+// Ends the turn for good: a /goal evaluator that would push the session on again is overruled (Claude Code pauses the goal).
+function halt(reason) {
+  held = true;
+  process.stdout.write(JSON.stringify({ continue: false, stopReason: reason }));
+}
+
+export const REVIEW_HALT = "等使用者審核：這個 worktree 有還沒審的件，攔截點已擋下，/goal 先不推進；審完會收到「審核完成」的訊息再接著做。";
+
+// A /goal session that stopped waiting on you after the gate held it back this round on items nobody reviewed: pushing it on only repeats the question.
+export async function reviewHold(input, entries) {
+  if (!activeGoal(entries) || !endingOf(String(input.last_assistant_message ?? lastAssistantText(entries)))?.wait) return false;
+  try {
+    const { gated, stateOf, worktreeOf } = await import("../skills/worktree-console/scripts/review.mjs");
+    const wt = input.cwd ? worktreeOf(input.cwd) : null;
+    if (!wt) return false;
+    const st = stateOf(wt);
+    return gated(st) && st.blocked.some((b) => b.round === st.round);
+  } catch {
+    return false;
+  }
 }
 
 function recordTurnEnd(input) {
@@ -813,6 +917,15 @@ async function stop(input) {
   const cacheHit = cacheTrigger(entries);
   const cache = !!cacheHit && cacheHit.id !== st.consumed;
   const manual = !cache && !!trigger && trigger !== st.consumed;
+  if (!st.pending && !manual && !cache && (await reviewHold(input, entries))) return halt(REVIEW_HALT);
+  if (!st.pending && !manual && !cache) {
+    const handle = terminalOf()?.handle;
+    const problem = endingProblem(input, entries, { isConsole: !!handle && isRegisteredConsole(handle) });
+    if (problem) return block(problem);
+    const missing = endingMissing(input, entries, { managed: managedChild(input.cwd, handle) });
+    if (missing === "ask") return block(ENDING_ASK);
+    if (missing === "missed") markMissed(consoleHome(), handle, input.last_assistant_message ?? lastAssistantText(entries));
+  }
   if (st.done && !manual && !cache) return;
   if (st.done) st = { consumed: st.consumed };
 
@@ -846,6 +959,8 @@ async function stop(input) {
         status: "writing",
         oldHandle: term.handle,
         oldPaneKey: term.paneKey,
+        reply: last,
+        question: st.pending.question,
         cwd: input.cwd,
         percent: st.pending.percent,
         cache,

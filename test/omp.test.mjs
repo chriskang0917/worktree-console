@@ -202,7 +202,7 @@ test("看板列出 omp 分頁，從 omp 紀錄判出 執行中／等待回應／
   const res = w.run(["board", "--repo", app()]);
   assert.equal(res.code, 0, res.err);
   const row = (ticket) => res.out.split("\n").find((l) => l.includes(ticket)) ?? "";
-  assert.match(row("PROJ-301"), /💬 等待回應/);
+  assert.match(row("PROJ-301"), /💬 輪到你/);
   assert.match(row("PROJ-302"), /🔄 執行中/);
   assert.match(row("PROJ-303"), /⏸ 回覆完畢/);
   assert.ok(res.out.includes("安裝說明要放在哪裡？"), res.out);
@@ -220,7 +220,7 @@ function registered(logDir, rows) {
 }
 
 const OMP_TABS = [
-  { name: "proj-301-ask", sample: "question", ticket: "PROJ-301", want: /💬 等待回應/ },
+  { name: "proj-301-ask", sample: "question", ticket: "PROJ-301", want: /💬 輪到你/ },
   { name: "proj-302-run", sample: "running", ticket: "PROJ-302", want: /🔄 執行中/ },
   { name: "proj-303-done", sample: "done", ticket: "PROJ-303", want: /⏸ 回覆完畢/ },
 ];
@@ -249,7 +249,7 @@ test("Orca 模式看板：Orca 不認得 omp，從 console-log 登記的 omp 紀
   assertOmpBoard(res.stdout);
   const without = { ...env, WORKTREE_CONSOLE_LOG_DIR: path.join(dir, "empty-log") };
   const bare = spawnSync(process.execPath, [path.join(scripts, "console.mjs"), "board", "--repo", app()], { encoding: "utf8", env: without });
-  assert.doesNotMatch(bare.stdout, /💬 等待回應|🔄 執行中/, "沒登記 omp 紀錄的分頁不算 omp");
+  assert.doesNotMatch(bare.stdout, /💬 輪到你|💬 等待回應|🔄 執行中/, "沒登記 omp 紀錄的分頁不算 omp");
 });
 
 test("Herdr app 模式看板：hc 回報 omp 的分頁，從 console-log 登記的 omp 紀錄判出 等待回應／執行中／回覆完畢", () => {

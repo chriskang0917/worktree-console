@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CACHE_HANDOFF_TEXT } from "../hooks/auto-handoff.mjs";
-import { KEEPALIVE_REPLY, KEEPALIVE_TEXT, RECYCLED, agentStatus, boardLines, collect, handoffLines, pendingBlock } from "../skills/worktree-console/scripts/lib.mjs";
+import { KEEPALIVE_REPLY, KEEPALIVE_TEXT, agentStatus, boardLines, collect, handoffLines, pendingBlock } from "../skills/worktree-console/scripts/lib.mjs";
 import { KEEPALIVE_AFTER_MS, handedOver, keepaliveStep, keepaliveUsage } from "../skills/worktree-console/scripts/keepalive.mjs";
 import { emptyFocus, focusPayload, focusStep, saveFocus, syncFocus } from "../skills/worktree-console/scripts/focus.mjs";
 import { readEvents } from "../skills/worktree-console/scripts/log.mjs";
@@ -297,7 +297,7 @@ test("續命：續命造成的停下不叫醒中控台、不重新回報（不�
   const home = homes();
   saveFocusIn(home);
   const before = screens(world([A, B, C]), home, now);
-  assert.deepEqual(before.queue.map((k) => k.split("@")[0]), [pane("A"), pane("B"), pane("C")]);
+  assert.deepEqual(before.queue.map((k) => k.split("@")[0]), [pane("C"), pane("B"), pane("A")], "一般題新停下的先");
   const start = watch(world([A, B, C]), home);
   const kept = (s, dt) => ({ ...s, prompt: KEEPALIVE_TEXT, text: KEEPALIVE_REPLY, since: now - 3 * MIN + dt });
   const dir = world([A, B, C], [{ ...kept(A, 1), state: "working" }, { ...kept(B, 2), state: "working" }, C], [kept(A, 3), kept(B, 4), C]);
@@ -384,19 +384,15 @@ test("交棒：快取將到期只交棒停在 💬 且 context 超過自動交�
   assert.deepEqual([low.state[pane("A")].phase, low.state[pane("B")].phase], ["expired", "expired"]);
 });
 
-test("♻️：換手過的 session 在看板、待回覆清單、專注卡片的最後動態／問題前有「♻️」，使用者回覆後消失", () => {
+test("拿掉 ♻️：換手過的 session 在看板、待回覆清單、專注卡片都不加「♻️」；使用者回覆後換手紀錄照舊清掉", () => {
   const now = Date.now();
   const home = homes();
   fs.writeFileSync(path.join(home.WORKTREE_CONSOLE_HOME, "keepalive.json"), JSON.stringify({ [pane("N")]: { phase: "fresh", handle: "term_N", at: now } }));
   const fresh = { id: "N", n: 1, text: QUESTION, prompt: "接手交棒：先完整讀 /n.md 。讀完後第一則回覆只原樣貼出…", since: now - 2 * MIN };
   const other = { id: "B", n: 2, text: "要不要順便補測試？", since: now - 3 * MIN };
   const marked = screens(world([fresh, other]), home);
-  const boardRow = marked.board.split("\n").find((l) => l.includes("PROJ-1"));
-  const otherRow = marked.board.split("\n").find((l) => l.includes("PROJ-2"));
-  assert.match(boardRow, new RegExp(`\\| ${RECYCLED} 登入頁要怎麼改`));
-  assert.doesNotMatch(otherRow, /♻️/);
-  assert.match(marked.pending.split("\n").find((l) => l.includes("PROJ-1")), new RegExp(`\\| ${RECYCLED} 登入頁要怎麼改`));
-  assert.deepEqual(marked.focus.map((f) => [f.tag, f.question.startsWith(`${RECYCLED} `)]), [["PROJ-1", true], ["PROJ-2", false]]);
+  assert.match(marked.board.split("\n").find((l) => l.includes("PROJ-1")), /\| 登入頁要怎麼改/);
+  assert.doesNotMatch(marked.board + marked.pending + JSON.stringify(marked.focus), /♻️/);
   const replied = { ...fresh, prompt: "用 A", text: "好，改前端。要不要也改樣式？", since: now - 90_000 };
   const after = screens(world([replied, other]), home);
   assert.doesNotMatch(after.board + after.pending + JSON.stringify(after.focus), /♻️/);
