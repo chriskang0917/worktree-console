@@ -60,7 +60,7 @@ const STATS = '等待回應 3 | 等待授權 1 | 回覆完畢 1 | 執行中 1 | 
 const keyOf = (tag: string) => `${tag}@1`
 const idOf = (key: string) => `id-${key.replace('@', '-')}`
 
-type World = { focus: any; sheet?: any; opens?: string[]; askGate?: Promise<void>; closes?: string[]; notes?: string[][]; answer?: string; skips?: string[]; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: object[]; focused: string[] }
+type World = { focus: any; sheet?: any; opens?: string[]; askGate?: Promise<void>; settleGate?: Promise<void>; submitGate?: Promise<void>; submitFails?: number; timeouts?: Record<string, number>; closes?: string[]; notes?: string[][]; answer?: string; skips?: string[]; submits?: string[]; sticky?: boolean; showFails?: boolean; lost?: number; dropped?: string[]; calls: string[][]; toasts: string[]; shown: string[]; writes: Record<string, string>; opened: any[]; hints: object[]; focused: string[] }
 type AppearanceConfig = { appearance?: string; theme?: string; motion?: unknown }
 const appearanceConfig = new WeakMap<World, AppearanceConfig | string>()
 
@@ -104,6 +104,7 @@ function fakeConsole(on: On, world: World) {
     }
     const args = e.argv.slice(2)
     world.calls.push([...args])
+    if (args[0] === 'review') world.timeouts = { ...world.timeouts, [args[1]]: (e as any).init?.timeoutMs }
     const f = world.focus
     if (args[0] === 'focus-later' && f.active && f.current) {
       const [next, ...rest] = f.queue
@@ -132,6 +133,7 @@ async function fakeReview(world: World, args: string[]) {
   const it = items.find((x: any) => x.n === n)
   const sub = args[1]
   if (sub === 'data') return ok(JSON.stringify({ ...sheet, pr: args.includes('--json') ? sheet.pr : null }))
+  if (['pass', 'edit', 'undo'].includes(sub) && world.settleGate) await world.settleGate
   if (sub === 'pass') return ((it.status = 'passed'), ok(`第 ${n} 件已通過`))
   if (sub === 'edit') return Object.assign(it, { status: 'edited', edit: opt('--to') }), ok(`第 ${n} 件已改：${opt('--to')}`)
   if (sub === 'undo') return Object.assign(it, { status: 'pending', edit: null }), ok(`第 ${n} 件已退回待審`)
@@ -244,8 +246,14 @@ async function start($: any, on: On, world: World, env: Record<string, string> =
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
+  // `submitGate` holds every send until released; `submitFails` fails that many sends after recording them.
   on('prompt.submit', async (_$, e) => {
     world.submits?.push(e.text)
+    if (world.submitGate) await world.submitGate
+    if (world.submitFails) {
+      world.submitFails -= 1
+      throw new Error('submit failed')
+    }
     return { text: e.text }
   })
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
@@ -2954,6 +2962,162 @@ test('審核單 Esc：沒開輸入框時回到卡片；進度存在磁碟上，�
   expect(frame).toContain(' ✓ 1. 卡片進度條在 46 欄時，要先讓出什麼？')
   expect(frame.find(l => l.startsWith(` ${MARK_STILL} `))).toBe(` ${MARK_STILL} 2. 沒有驗收清單的卡片，執行段怎麼畫？`)
   expect(reviewCalls(w).filter(c => c[0] === 'data')).toHaveLength(3)
+  await back.unmount()
+})
+
+const focusItem = ($: any, n: number) => $.ui.focus({ component: 'Pane', requestId: PANE, plugin: PLUGIN, element: `item:${n}`, origin: { kind: 'plugin', name: PLUGIN } } as any)
+const settleAll = async ($: any, ui: any, clock: any) => {
+  await focusItem($, 3)
+  await ui.press({ key: 'review-all' })
+  await ui.press({ key: 'item:1' })
+  await ui.press({ key: 'item:2' })
+  await clock.settle()
+}
+const FINISH_LINE = ` ${MARK_STILL} 全部審完，按 Enter 送出審核結果`
+const stillReviewing = async (ui: any, n: number) => {
+  expect(textOf(findKey(await ui.drawn(), `status:${keyOf('ask-aide')}`))).toContain('待審核')
+  expect(textOf((await headerOf(ui, keyOf('ask-aide'))).right)).toBe(`需審核 ${n} 件`)
+}
+const allPassed = (w: World) => [...w.sheet.fresh, ...w.sheet.past].forEach((x: any) => (x.status = 'passed'))
+
+test('審核單審完未送出：停在「全部審完，按 Enter 送出審核結果」時按 Esc（鍵盤交回輸入框，與面板失去焦點同一條路）或收起面板再用 0 打開，都不跑 review done；回到卡片仍標待審核、需審核照本輪全部 4 件', async ($, on) => {
+  const { w, ui, clock } = await openSheet($, on)
+  await settleAll($, ui, clock)
+  expect(await reviewFrame(ui, 70)).toContain(FINISH_LINE)
+  await ui.unmount()
+  const away = await $.ui.mount({ ...pane(70), props: { ...pane(70).props, isFocused: false }, surface: 'terminal' })
+  await away.unmount()
+  await clock.settle()
+  const back = await $.ui.mount({ ...pane(70), surface: 'terminal' })
+  expect(await back.find({ key: 'tab:pending' })).toBeDefined()
+  await stillReviewing(back, 4)
+  await back.press({ key: `name:${keyOf('ask-aide')}` })
+  await clock.settle()
+  expect(await reviewFrame(back, 70)).toContain(FINISH_LINE)
+  await back.unmount()
+  await clock.settle()
+  await openPane($)
+  await clock.settle()
+  const again = await $.ui.mount({ ...pane(70), surface: 'terminal' })
+  expect(await reviewFrame(again, 70)).toContain(FINISH_LINE)
+  await again.unmount()
+  const left = await $.ui.mount({ ...pane(70), props: { ...pane(70).props, isFocused: false }, surface: 'terminal' })
+  await left.unmount()
+  const cards = await $.ui.mount({ ...pane(70), surface: 'terminal' })
+  await stillReviewing(cards, 4)
+  expect(reviewCalls(w).filter(c => c[0] === 'done')).toEqual([])
+  await cards.unmount()
+})
+
+test('審核單重開：每件都審過、還沒送出的審核單重開時停在「全部審完，按 Enter 送出審核結果」，不自動跑 review done；按 Enter 才跑（等待上限 180 秒，比送回子 session 的 120 秒長），跑完卡片不再是待審核', async ($, on) => {
+  const { w, ui, clock } = await openSheet($, on, 70, 200, allPassed)
+  expect(reviewCalls(w).map(c => c[0])).toEqual(['data'])
+  const frame = await reviewFrame(ui, 70)
+  expect(frame).toContain(FINISH_LINE)
+  expect(frame.at(-1)).toBe('Enter 送出審核結果 · Esc 返回')
+  await clock.settle()
+  expect(reviewCalls(w).filter(c => c[0] === 'done')).toEqual([])
+  await ui.press({ key: 'review-finish' })
+  await clock.settle()
+  expect(reviewCalls(w).map(c => c[0])).toEqual(['data', 'done'])
+  expect(w.timeouts?.done).toBeGreaterThanOrEqual(180_000)
+  expect(w.timeouts!.done).toBeGreaterThan(120_000)
+  expect(await ui.find({ key: 'tab:pending' })).toBeDefined()
+  expect(textOf(findKey(await ui.drawn(), `status:${keyOf('ask-aide')}`))).not.toContain('待審核')
+  await ui.unmount()
+})
+
+for (const [how, act] of [
+  ['review pass', async (ui: any) => ui.press({ key: 'item:2' })],
+  ['review edit', async (ui: any) => { await ui.press({ key: 'review-edit' }); await ui.input({ key: 'review-input', text: '畫灰色虛線' }) }],
+] as const) {
+  test(`審核單送出等指令（${how}）：最後一件的 ${how} 還沒跑完就按 Enter 送出，先等它跑完才跑 review done`, async ($, on) => {
+    const { w, ui, clock } = await openSheet($, on, 70, 200, w => [w.sheet.fresh[0], ...w.sheet.past].forEach((x: any) => (x.status = 'passed')))
+    let release = () => {}
+    w.settleGate = new Promise<void>(r => (release = r))
+    await focusItem($, 2)
+    await act(ui)
+    await clock.settle()
+    expect(await reviewFrame(ui, 70)).toContain(FINISH_LINE)
+    await ui.press({ key: 'review-finish' })
+    await clock.settle()
+    expect(reviewCalls(w).filter(c => c[0] === 'done')).toEqual([])
+    release()
+    await clock.settle()
+    expect(reviewCalls(w).map(c => c[0])).toEqual(['data', how.split(' ')[1], 'data', 'done'])
+    expect(await ui.find({ key: 'tab:pending' })).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test('審核單送出等指令（review undo）：u 退回最後一件還沒跑完就按 Enter 送出，等它跑完後不跑 review done；剛退回的那件回到待審、送出那行消失', async ($, on) => {
+  const { w, ui, clock } = await openSheet($, on)
+  await settleAll($, ui, clock)
+  let release = () => {}
+  w.settleGate = new Promise<void>(r => (release = r))
+  await ui.press({ key: 'review-undo' })
+  await ui.press({ key: 'review-finish' })
+  await clock.settle()
+  release()
+  await clock.settle()
+  expect(reviewCalls(w).filter(c => c[0] === 'done')).toEqual([])
+  expect(reviewCalls(w).filter(c => c[0] === 'undo')).toEqual([['undo', ...REVIEW_PATH, '--n', '2']])
+  const frame = await reviewFrame(ui, 70)
+  expect(frame).toContain(` ${MARK_STILL} 2. 沒有驗收清單的卡片，執行段怎麼畫？`)
+  expect(frame).not.toContain(FINISH_LINE)
+  expect(w.sheet.fresh[1].status).toBe('pending')
+  await ui.unmount()
+})
+
+test('審核單討論只送一次：同一件第一次按 c 送出並跳「已送到中控台：第 N 件」；送出還沒放行時連按 8 次只送出 1 則，其餘只跳「第 N 件已送去討論」；送出失敗才拿掉記號、可再送', async ($, on) => {
+  const { w, ui, clock } = await openSheet($, on)
+  let release = () => {}
+  w.submitGate = new Promise<void>(r => (release = r))
+  await focusItem($, 2)
+  for (let i = 0; i < 8; i++) await ui.press({ key: 'review-talk' })
+  await clock.settle()
+  expect(w.submits).toHaveLength(1)
+  expect(w.toasts.filter(t => t === '第 2 件已送去討論')).toHaveLength(7)
+  release()
+  await clock.settle()
+  expect(w.toasts.filter(t => t === '已送到中控台：第 2 件')).toHaveLength(1)
+  await ui.press({ key: 'review-talk' })
+  await clock.settle()
+  expect(w.submits).toHaveLength(1)
+  w.submitGate = undefined
+  w.submitFails = 1
+  await focusItem($, 1)
+  await ui.press({ key: 'review-talk' })
+  await clock.settle()
+  expect(w.submits).toHaveLength(2)
+  expect(w.toasts).not.toContain('已送到中控台：第 1 件')
+  await ui.press({ key: 'review-talk' })
+  await clock.settle()
+  expect(w.submits).toHaveLength(3)
+  expect(w.toasts).toContain('已送到中控台：第 1 件')
+  expect(w.toasts).not.toContain('第 1 件已送去討論')
+  await ui.unmount()
+})
+
+test('審核單討論各件各一次：不同件各自能送一次；關掉審核單再開，同一件可以再送一次', async ($, on) => {
+  const { w, ui, clock } = await openSheet($, on)
+  const talk = async (u: any, n: number) => {
+    await focusItem($, n)
+    await u.press({ key: 'review-talk' })
+    await clock.settle()
+  }
+  await talk(ui, 1)
+  await talk(ui, 2)
+  await talk(ui, 1)
+  expect(w.submits!.map(t => t.split('\n')[0])).toEqual(['討論審核單 ask-aide 第 1 件：', '討論審核單 ask-aide 第 2 件：'])
+  await ui.unmount()
+  const away = await $.ui.mount({ ...pane(70), props: { ...pane(70).props, isFocused: false }, surface: 'terminal' })
+  await away.unmount()
+  const back = await $.ui.mount({ ...pane(70), surface: 'terminal' })
+  await back.press({ key: `name:${keyOf('ask-aide')}` })
+  await clock.settle()
+  await talk(back, 1)
+  expect(w.submits!.map(t => t.split('\n')[0])).toEqual(['討論審核單 ask-aide 第 1 件：', '討論審核單 ask-aide 第 2 件：', '討論審核單 ask-aide 第 1 件：'])
   await back.unmount()
 })
 

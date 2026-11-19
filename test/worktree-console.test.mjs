@@ -3285,6 +3285,23 @@ test("reply --only：只送給這個代號的題目，找不到就失敗、什�
   assert.equal(busy.code, 1, "不在等你的 session 也不送");
 });
 
+test("需審核件數：本輪每件都通過或改過、還沒跑 review done 時，卡片照本輪全部件數算；review done 之後才歸零", () => {
+  clearReviews();
+  reviewAdd("先做哪個畫面？");
+  reviewAdd("要不要拆兩個 commit？");
+  const env = () => ({ WORKTREE_CONSOLE_HOME: consoleHome({ mods: true }), SEND_CHECK_MS: "0", SEND_CHECK_TRIES: "1" });
+  const dir = replyWorld(SPLIT_SHEET, "a");
+  const reviewOf = () => focusRun(dir, env()).sessions.find((s) => s.tag === "PROJ-102(question)").review;
+  assert.equal(reviewOf(), 2);
+  const wt = reviewMod.worktreeOf(QWT());
+  reviewMod.append(wt, { event: "pass", n: 1, by: "panel" });
+  reviewMod.append(wt, { event: "edit", n: 2, to: "只拆一個", by: "panel" });
+  assert.equal(reviewOf(), 2, "都審過但還沒送出審完，照樣標待審核、算本輪全部件數");
+  reviewMod.append(wt, { event: "done", by: "panel" });
+  assert.equal(reviewOf(), 0);
+  clearReviews();
+});
+
 test("define-goal 與前端精簡路徑的批改單：回報後面接上審核單；使用者回單時 reply 送出的同時把審核單記成審完、寫入已審標記", () => {
   clearReviews();
   reviewAdd();

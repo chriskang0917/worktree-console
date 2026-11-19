@@ -458,7 +458,8 @@ const warned = new Set<string>()
 let pop: { kind: 'brief'; id: string; at: number } | null = null
 let popView = { rows: 0, total: 0 }
 // The review-sheet screen over the cards: the sheet as `review data` last printed it, null while it loads; `top` its first row in view.
-type Review = { tag: string; path: string; sheet: ReviewSheet | null; view: SheetView; top: number; finishing: boolean }
+// `busy`: pass, edit and undo calls still running; `talked`: items c has sent to the console since the sheet opened.
+type Review = { tag: string; path: string; sheet: ReviewSheet | null; view: SheetView; top: number; finishing: boolean; busy: Set<Promise<unknown>>; talked: Set<number> }
 let review: Review | null = null
 let paneHadKeys = false
 async function loadPreferences($: EngineInterface) {
@@ -805,6 +806,8 @@ function recapBand($: EngineInterface, e: any) {
 const REVIEW_INPUT = 'review-input'
 const emptyView = (): SheetView => ({ sel: null, input: null, draft: '', expanded: new Set(), asking: new Map(), undo: [] })
 const REVIEW_FINISH = 'review-finish'
+// Longer than the 120 s `review done` may spend sending the result back to the child session.
+const DONE_TIMEOUT_MS = 180_000
 
 // `console.mjs review <sub> --path <worktree>`; a failure toasts the line it printed and gives null.
 async function reviewCall($: EngineInterface, r: Review, sub: string, args: string[] = [], timeoutMs = 60_000): Promise<string | null> {
@@ -828,8 +831,8 @@ function leaveReview($: EngineInterface) {
   $.ui.invalidate('ui.render')
 }
 
-// `review data`: only the first load asks for the PR (`--json` calls gh). A sheet that opens with nothing pending closes the round;
-// one settled here waits for Enter on 送出審核結果, so u can still take the last pass back.
+// `review data`: only the first load asks for the PR (`--json` calls gh). A sheet with every item settled, here or in an earlier
+// opening, waits for Enter on 送出審核結果; nothing else sends `review done`.
 async function loadSheet($: EngineInterface, r: Review, first = false) {
   const out = await reviewCall($, r, 'data', first ? ['--json'] : [])
   if (review !== r) return
@@ -841,21 +844,23 @@ async function loadSheet($: EngineInterface, r: Review, first = false) {
   if (!itemOf(sheet, r.view.sel)) r.view.sel = nextPending(sheet, null) ?? sheetItems(sheet)[0]?.n ?? null
   startRepin()
   $.ui.invalidate('ui.render')
-  if (allDone(sheet) && !r.view.undo.length) await finishReview($, r)
 }
 
 async function openReview($: EngineInterface, s: Session) {
-  review = { tag: s.tag, path: s.path!, sheet: null, view: emptyView(), top: 0, finishing: false }
+  review = { tag: s.tag, path: s.path!, sheet: null, view: emptyView(), top: 0, finishing: false, busy: new Set(), talked: new Set() }
   pop = null
   $.ui.invalidate('ui.render')
   await loadSheet($, review, true)
 }
 
 // Every item passed or edited: `review done` sends the result back to the child session, and the pane goes back to the cards.
+// It first waits for any pass, edit or undo still running, so an item just taken back is never sent as reviewed.
 async function finishReview($: EngineInterface, r: Review) {
   if (r.finishing) return
   r.finishing = true
-  const out = await reviewCall($, r, 'done')
+  while (r.busy.size) await Promise.allSettled([...r.busy])
+  if (review !== r || !r.sheet || !allDone(r.sheet)) return void (r.finishing = false)
+  const out = await reviewCall($, r, 'done', [], DONE_TIMEOUT_MS)
   r.finishing = false
   if (out === null) return
   if (out) $.ui.toast(out.split('\n').map(l => l.trim()).filter(Boolean).join(' · '))
@@ -863,9 +868,18 @@ async function finishReview($: EngineInterface, r: Review) {
   await poll($)
 }
 
+function track<T>(r: Review, p: Promise<T>): Promise<T> {
+  r.busy.add(p)
+  void p.catch(() => {}).finally(() => r.busy.delete(p))
+  return p
+}
+
 // After an item is settled the selection moves on to the next pending one.
-async function settle($: EngineInterface, r: Review, sub: string, args: string[], n: number | null, settled: number[] = n === null ? [] : [n]) {
-  if ((await reviewCall($, r, sub, args)) === null) return
+const settle = ($: EngineInterface, r: Review, sub: string, args: string[], n: number | null, settled?: number[]) => track(r, settleNow($, r, sub, args, n, settled))
+
+async function settleNow($: EngineInterface, r: Review, sub: string, args: string[], n: number | null, settled: number[] = n === null ? [] : [n]) {
+  // A failed call reloads the sheet, so an item shown settled ahead of the call goes back to what the records say.
+  if ((await reviewCall($, r, sub, args)) === null) return void (review === r && (await loadSheet($, r)))
   if (review !== r || !r.sheet) return
   r.view.undo.push(...settled)
   r.view.sel = nextPending(r.sheet, n) ?? r.view.sel
@@ -877,6 +891,7 @@ function passItem($: EngineInterface, r: Review, n: number) {
   if (!x || x.status !== 'pending' || r.view.input) return
   r.view.sel = n
   x.status = 'passed'
+  $.ui.invalidate('ui.render')
   return settle($, r, 'pass', ['--n', String(n)], n)
 }
 
@@ -887,9 +902,13 @@ function passPast($: EngineInterface, r: Review) {
 }
 
 // u: the item settled last in this sitting goes back to pending and is selected; pressed again, the one before it.
-async function undoLast($: EngineInterface, r: Review) {
+function undoLast($: EngineInterface, r: Review) {
   const n = r.view.undo.at(-1)
-  if (n === undefined || r.view.input || !r.sheet) return
+  if (n === undefined || r.view.input || !r.sheet || r.finishing) return
+  return track(r, undoNow($, r, n))
+}
+
+async function undoNow($: EngineInterface, r: Review, n: number) {
   if ((await reviewCall($, r, 'undo', ['--n', String(n)])) === null) return
   if (review !== r) return
   r.view.undo.pop()
@@ -914,6 +933,8 @@ async function submitInput($: EngineInterface, r: Review, value: string) {
   const text = value.trim()
   r.view.input = null
   r.view.draft = ''
+  const x = open.mode === 'edit' && text && r.sheet ? itemOf(r.sheet, open.n) : null
+  if (x) Object.assign(x, { status: 'edited', edit: text })
   startRepin()
   $.ui.invalidate('ui.render')
   if (open.mode === 'edit') {
@@ -941,9 +962,13 @@ function openExample($: EngineInterface, r: Review) {
   if (x?.example && !r.view.input) void $.process.run(['open', x.example], { timeoutMs: 10_000 }).catch(() => {})
 }
 
+// c sends each item once per opening of the sheet: marked when pressed, unmarked only if the send fails.
 function deepTalk($: EngineInterface, r: Review) {
   const x = r.sheet && itemOf(r.sheet, r.view.sel)
-  if (x && !r.view.input) void $.prompt.submit({ text: deepTalkText(r.sheet!, x) }).catch(() => {})
+  if (!x || r.view.input) return
+  if (r.talked.has(x.n)) return void $.ui.toast(`第 ${x.n} 件已送去討論`)
+  r.talked.add(x.n)
+  void $.prompt.submit({ text: deepTalkText(r.sheet!, x) }).then(() => $.ui.toast(`已送到中控台：第 ${x.n} 件`), () => void r.talked.delete(x.n))
 }
 
 // The review sheet in the pane: its rows windowed to the pane, the selected item kept in view, the keys line under them.

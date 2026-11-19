@@ -296,13 +296,13 @@ function optionsOf(item) {
   return e.options.split("／").filter((o) => o !== "其他").map((o) => o.replace(/^[a-z](?:\s|$)/, "").trim());
 }
 
-// How many decisions made without the user wait on this worktree's review; 0 when there are none or the records cannot be read.
+// How many decisions made without the user are in this worktree's open review round, settled or not until `review done`; 0 when there are none or the records cannot be read.
 function reviewCount(cache, target) {
   if (!cache.has(target)) {
     let n = 0;
     try {
       const wt = worktreeOf(target);
-      n = wt ? stateOf(wt).open.filter((x) => x.status === "pending").length : 0;
+      n = wt ? stateOf(wt).open.length : 0;
     } catch {}
     cache.set(target, n);
   }
