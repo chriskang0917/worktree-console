@@ -6,7 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readManaged } from "../skills/worktree-console/scripts/log.mjs";
+import { managedTarget, readManaged } from "../skills/worktree-console/scripts/log.mjs";
+import { endingOf, markMissed } from "../skills/worktree-console/scripts/ending.mjs";
 import { KEEPALIVE_REPLY, KEEPALIVE_TEXT } from "./keepalive-text.mjs";
 
 const SMALL_WINDOW = 200_000;
@@ -258,8 +259,26 @@ function beforeKeepalive(entries, at) {
 
 // A stop that asks: a question mark, or the opening rules' 「等你：…」 last line.
 export function isQuestion(text) {
-  const lines = proseLines(text);
-  return lines.some((l) => /[?？]/.test(l)) || /^[\s*_-]*等你[:：]/.test(lines.filter((l) => l.trim()).at(-1) ?? "");
+  return proseLines(text).some((l) => /[?？]/.test(l)) || endingOf(text)?.wait === true;
+}
+
+export const ENDING_ASK = "這則回覆最後一行要單獨寫「等你：<要使用者做什麼>」或「已完成」，中控台靠這行判斷你在不在等使用者。只補這一行再結束這一輪，不要重做其他事。";
+
+// A child stop of a worktree the console manages without the ending line: "ask" the first time, "missed" when it stops again without it.
+// Not on a turn the keepalive or a handoff message started.
+export function endingMissing(input, entries, { managed = false } = {}) {
+  if (!managed || toolingPrompt(lastPrompt(entries))) return null;
+  if (endingOf(String(input.last_assistant_message ?? lastAssistantText(entries)))) return null;
+  return input.stop_hook_active ? "missed" : "ask";
+}
+
+function managedChild(cwd, handle) {
+  if (!handle || !cwd || isRegisteredConsole(handle)) return false;
+  let dir = cwd;
+  try {
+    dir = fs.realpathSync(cwd);
+  } catch {}
+  return !!managedTarget(dir, handle);
 }
 
 export function lastAssistantText(entries) {
@@ -846,6 +865,9 @@ async function stop(input) {
     const handle = terminalOf()?.handle;
     const problem = endingProblem(input, entries, { isConsole: !!handle && isRegisteredConsole(handle) });
     if (problem) return block(problem);
+    const missing = endingMissing(input, entries, { managed: managedChild(input.cwd, handle) });
+    if (missing === "ask") return block(ENDING_ASK);
+    if (missing === "missed") markMissed(consoleHome(), handle, input.last_assistant_message ?? lastAssistantText(entries));
   }
   if (st.done && !manual && !cache) return;
   if (st.done) st = { consumed: st.consumed };

@@ -7,7 +7,9 @@ import { clip, isConsoleSession, readEvents, transcriptFor, writeManaged } from 
 import { CACHE_HANDOFF_TEXT, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../../../hooks/auto-handoff.mjs";
 import { maybeTerminals, terminals } from "./terminals.mjs";
 import { stopDigest } from "./summary-read.mjs";
+import { endingOf, missedEnding } from "./ending.mjs";
 export { replyKey } from "./summary-read.mjs";
+export { endingOf };
 import { digestLayers } from "../../../hooks/digest.mjs";
 
 export { orcaBin, runOrca } from "./terminals.mjs";
@@ -476,25 +478,12 @@ export function proseLines(text) {
   return out;
 }
 
-// The line the opening rules ask every stop to end with.
-const ENDING_WAIT = /^[\s*_-]*等你[:：]\s*(.*?)[\s*_]*$/;
-// 「不用等你」 is the old wording; sessions opened before the rename still end with it.
-const ENDING_FREE = /^[\s*_-]*(?:已完成[\s*_。.!！]*$|不用等你)/;
-
 function lastLineAt(lines) {
   let i = lines.length - 1;
   while (i >= 0 && !lines[i].trim()) i--;
   return i;
 }
 
-// { wait: true, what } for 「等你：…」, { wait: false } for 「已完成」, null when the stop's last line is neither.
-export function endingOf(text) {
-  const lines = (text || "").replace(/\r\n?/g, "\n").split("\n");
-  const last = lines[lastLineAt(lines)] ?? "";
-  const wait = last.match(ENDING_WAIT);
-  if (wait) return { wait: true, what: wait[1] };
-  return ENDING_FREE.test(last) ? { wait: false, what: null } : null;
-}
 
 // What a stop without the ending line says when it waits on the user. 「跟我說」「告訴我」 are left out: they mostly close a report politely.
 const DECIDE = new RegExp(
@@ -569,6 +558,8 @@ export function awaitsUser(status, { row = null, session = null, home } = {}) {
   if (ending) return ending.wait || finishedState(row, status)?.closable === false;
   // A missed question costs more than an extra one listed, so a recap never takes a 💬 question off the list.
   if (kind === "waiting") return true;
+  // Asked once for the ending line and still without it: listed, whatever the recap says.
+  if (missedEnding(home ?? consoleHome(), session?.handle, status.text)) return true;
   const digest = session ? digestDecides(session, home) : null;
   if (digest !== null) return digest;
   return awaitsDecision(status.text);

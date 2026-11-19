@@ -407,18 +407,37 @@ test("結尾與狀態：有「第 N 題」或 a、b、c 選項的 💬 題目、
   assert.equal(line.listedAs(menu), "waiting");
 });
 
-test("結尾與狀態：子 session 停下時兩個 Stop hook 都不回 decision: block，hooks.json 也沒有替子 session 新增擋下的 Stop 指令", () => {
+test("結尾與狀態：中控台管的子 session 沒寫結尾行時 Stop hook 擋一次；補上或寫了就放行，第二次仍沒寫照樣放行但一律列進等待；續命、交棒那一輪與沒管的 worktree 不擋", () => {
   const hooks = JSON.parse(fs.readFileSync(path.join(root, "hooks", "hooks.json"), "utf8"));
   assert.deepEqual(hooks.hooks.Stop.flatMap((h) => h.hooks.map((x) => x.command.split("/").at(-1))), ['auto-handoff.mjs" stop', 'summary.mjs" stop']);
-  for (const last of ["改好了。\n\n等你：看畫面", "改好了。"]) {
-    const transcript = path.join(tmp, `child-${last.length}.jsonl`);
-    fs.writeFileSync(transcript, [{ type: "user", message: { content: "做" } }, { type: "assistant", message: { content: [{ type: "text", text: last }] } }].map((e) => JSON.stringify(e)).join("\n") + "\n");
-    const input = JSON.stringify({ session_id: `child-${last.length}`, transcript_path: transcript, cwd: tmp, last_assistant_message: last, stop_hook_active: false });
-    for (const script of ["hooks/auto-handoff.mjs", "skills/worktree-console/scripts/summary.mjs"]) {
-      const r = spawnSync(process.execPath, [path.join(root, script), "stop"], { input, encoding: "utf8", env: { ...process.env, ORCA_TERMINAL_HANDLE: "child-term", WORKTREE_CONSOLE_SUMMARY_CMD: "true" } });
-      assert.ok(!/"decision"\s*:\s*"block"/.test(r.stdout), `${script}: ${r.stdout}`);
-    }
-  }
+  const managed = path.join(tmp, "managed-wt");
+  const loose = path.join(tmp, "loose-wt");
+  for (const d of [managed, loose]) fs.mkdirSync(d, { recursive: true });
+  fs.mkdirSync(path.join(process.env.WORKTREE_CONSOLE_LOG_DIR, ".state"), { recursive: true });
+  fs.writeFileSync(path.join(process.env.WORKTREE_CONSOLE_LOG_DIR, ".state", "managed.json"), JSON.stringify({ worktrees: [{ path: managed, repo: "app", ticket: "PROJ-7" }], repos: [], consoles: [], handles: {} }));
+  let n = 0;
+  const stop = (last, { cwd = managed, prompt = "做", active = false } = {}) => {
+    const transcript = path.join(tmp, `child-${++n}.jsonl`);
+    fs.writeFileSync(transcript, [{ type: "user", message: { content: prompt } }, { type: "assistant", message: { content: [{ type: "text", text: last }] } }].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const input = JSON.stringify({ session_id: `child-${n}`, transcript_path: transcript, cwd, last_assistant_message: last, stop_hook_active: active });
+    const r = spawnSync(process.execPath, [path.join(root, "hooks/auto-handoff.mjs"), "stop"], { input, encoding: "utf8", env: { ...process.env, ORCA_TERMINAL_HANDLE: "child-term" } });
+    return r.stdout ? JSON.parse(r.stdout) : null;
+  };
+  const asked = stop("改好了。");
+  assert.equal(asked?.decision, "block");
+  assert.match(asked.reason, /等你：/);
+  assert.match(asked.reason, /已完成/);
+  for (const last of ["改好了。\n\n等你：看畫面", "改好了。\n\n已完成"]) assert.equal(stop(last), null, last);
+  assert.equal(stop("改好了。", { cwd: loose }), null, "沒管的 worktree");
+  assert.equal(stop("收到", { prompt: handoff.KEEPALIVE_TEXT }), null, "續命那一輪");
+  assert.equal(stop("依交棒說明：…", { prompt: `${handoff.TAKEOVER_HEAD}先完整讀 x.md` }), null, "交棒那一輪");
+  assert.equal(stop("改好了，接著跑測試。", { active: true }), null, "第二次照樣放行");
+  fs.mkdirSync(path.join(process.env.WORKTREE_CONSOLE_HOME, "summaries"), { recursive: true });
+  fs.writeFileSync(path.join(process.env.WORKTREE_CONSOLE_HOME, "summaries", "child-term.json"), JSON.stringify({ text: "在做什麼：改按鈕\n下一步：跑測試", replyAt: 5 }));
+  const s = { handle: "child-term", paneKey: "child-term", since: 5, status: { kind: "done", text: "改好了，接著跑測試。" }, agent: { stateStartedAt: 5 } };
+  assert.equal(line.listedAs(s), "waiting", "補不上結尾行的那則不交給摘要");
+  const later = { ...s, status: { kind: "done", text: "另一則回覆。" } };
+  assert.equal(line.listedAs(later), null, "之後的另一則照舊看摘要");
 });
 
 // --- 中控台回覆結尾檢查 ---
