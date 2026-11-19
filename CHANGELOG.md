@@ -4,6 +4,10 @@
 
 - fix(focus): keep the review card until Enter sends the result, and send each discussion once
 
+## 1.25.1
+
+- fix(hooks): drop the ending-line rule from a console's SessionStart rules
+
 ## 1.25.0
 
 - feat: scripted status band above the prompt, no auto-switching, scripted reply endings and review unlock elsewhere
