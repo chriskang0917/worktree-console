@@ -31,7 +31,7 @@ export function missedEnding(home, handle, text) {
   if (!handle) return false;
   try {
     const rec = JSON.parse(fs.readFileSync(missedFile(home, handle), "utf8"));
-    return !!rec?.tail && rec.tail === lastLine(text);
+    return typeof rec?.tail === "string" && rec.tail === lastLine(text);
   } catch {
     return false;
   }

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { managedTarget, readManaged } from "../skills/worktree-console/scripts/log.mjs";
+import { readManaged } from "../skills/worktree-console/scripts/log.mjs";
 import { endingOf, markMissed } from "../skills/worktree-console/scripts/ending.mjs";
 import { KEEPALIVE_REPLY, KEEPALIVE_TEXT } from "./keepalive-text.mjs";
 
@@ -219,15 +219,30 @@ export function cacheTrigger(entries) {
 }
 
 // The last message this turn answers: the user's, or the keepalive, cache handoff or takeover message the console's tooling sent.
-function lastPrompt(entries) {
+function lastPromptAt(entries) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
-    if (e.type !== "user" || e.isSidechain || e.isMeta) continue;
+    if (e.type !== "user" || e.isSidechain || e.isMeta || e.isCompactSummary) continue;
     const text = textOf(e.message?.content).trim();
     if (!text || text.startsWith("<")) continue;
-    return text;
+    return i;
   }
-  return "";
+  return -1;
+}
+
+function lastPrompt(entries) {
+  const at = lastPromptAt(entries);
+  return at < 0 ? "" : textOf(entries[at].message?.content).trim();
+}
+
+// Everything the main conversation said since the last prompt, across the stops a Stop hook held (their feedback is a meta entry).
+export function turnText(entries) {
+  return entries
+    .slice(lastPromptAt(entries) + 1)
+    .filter((e) => e.type === "assistant" && !e.isSidechain)
+    .map((e) => textOf(e.message?.content).trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 const toolingPrompt = (text) => text === KEEPALIVE_TEXT || text === CACHE_HANDOFF_TEXT || text.startsWith(TAKEOVER_HEAD);
@@ -266,19 +281,38 @@ export const ENDING_ASK = "這則回覆最後一行要單獨寫「等你：<要�
 
 // A child stop of a worktree the console manages without the ending line: "ask" the first time, "missed" when it stops again without it.
 // Not on a turn the keepalive or a handoff message started.
-export function endingMissing(input, entries, { managed = false } = {}) {
+// "Asked" is recorded per session and prompt, so a stop another Stop hook held is not taken for the second one.
+export function endingMissing(input, entries, { managed = false, home = consoleHome() } = {}) {
   if (!managed || toolingPrompt(lastPrompt(entries))) return null;
-  if (endingOf(String(input.last_assistant_message ?? lastAssistantText(entries)))) return null;
-  return input.stop_hook_active ? "missed" : "ask";
+  const file = path.join(home, "ending-asked", `${encodeURIComponent(input.session_id ?? "x")}.json`);
+  if (endingOf(String(input.last_assistant_message ?? lastAssistantText(entries)))) {
+    fs.rmSync(file, { force: true });
+    return null;
+  }
+  const at = lastPromptAt(entries);
+  const turn = at < 0 ? "none" : (entries[at].uuid ?? `${entries[at].timestamp ?? ""}:${textOf(entries[at].message?.content).trim()}`);
+  if (readJson(file, null)?.turn === turn) {
+    fs.rmSync(file, { force: true });
+    return "missed";
+  }
+  writeJson(file, { turn, at: Date.now() });
+  return "ask";
+}
+
+// A tab on the console's board in a worktree that is not a main checkout; never the console.
+export function boardChild(cwd, handle, managed = readManaged()) {
+  if (!handle || !cwd || !managed || (managed.consoles ?? []).includes(handle) || isRegisteredConsole(handle)) return false;
+  if (!managed.handles?.[handle]) return false;
+  const hit = (managed.worktrees ?? []).filter((w) => cwd === w.path || cwd.startsWith(`${w.path}/`)).sort((a, b) => b.path.length - a.path.length)[0];
+  return !!hit && hit.main !== true;
 }
 
 function managedChild(cwd, handle) {
-  if (!handle || !cwd || isRegisteredConsole(handle)) return false;
   let dir = cwd;
   try {
     dir = fs.realpathSync(cwd);
   } catch {}
-  return !!managedTarget(dir, handle);
+  return boardChild(dir, handle);
 }
 
 export function lastAssistantText(entries) {

@@ -1,4 +1,5 @@
 import "./fixtures/isolate-env.mjs";
+import { consoleIdentity } from "./fixtures/isolate-env.mjs";
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -36,7 +37,8 @@ function repo(branch = "feat/demo-card") {
   return { dir, git };
 }
 
-const env = () => ({ ...process.env });
+const asConsole = consoleIdentity();
+const env = () => ({ ...process.env, ...asConsole });
 const cli = (cwd, ...args) => spawnSync(process.execPath, [CONSOLE, "review", ...args], { cwd, encoding: "utf8", env: env() });
 const good = ["--question", "卡片進度條在 46 欄時要先讓出什麼？", "--plan", "先縮短進度條。", "--basis", "沒有前例", "--impact", "焦點面板的卡片第一行。", "--by", "advisor", "--stop", "規劃 第 3 題"];
 const add = (cwd, extra = []) => cli(cwd, "add", ...good, ...extra);

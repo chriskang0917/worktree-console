@@ -329,33 +329,51 @@ export function applyKeepalive(rows, state = readKeepalive()) {
 
 // A handoff that started on a stop waiting for you keeps showing that stop: on the old tab when the handoff failed, until you reply there;
 // on the new tab until you reply to it, unless it is waiting on you with a stop of its own.
-export function applyHandoff(rows, events = handoffEvents()) {
+export function applyHandoff(rows, events = handoffEvents({ pending: true })) {
   for (const ev of events) {
     if (!ev.reply || (ev.status !== "failed" && ev.status !== "done")) continue;
     for (const row of rows) {
       for (const s of row.sessions) {
-        if (!s.agent || s.archived || !["done", "waiting"].includes(s.status?.kind) || s.status.menu || menuOpen(s.agent)) continue;
+        const pane = ev.status === "failed" ? ev.oldPaneKey : ev.question ? ev.newPaneKey : null;
+        if (!pane || s.paneKey !== pane || !s.agent || s.archived) continue;
         const prompt = typedPrompt(String(s.agent.prompt ?? "")).trim();
         const stopAt = s.agent.stateStartedAt;
-        const old = ev.status === "failed" && ev.oldPaneKey && s.paneKey === ev.oldPaneKey && typeof stopAt === "number" && stopAt <= (ev.updatedAt ?? 0);
-        const taken = ev.status === "done" && ev.question && ev.newPaneKey && s.paneKey === ev.newPaneKey
-          && (takeoverPrompt(prompt) || (!!ev.goal && prompt.startsWith("/goal ") && !endingOf(s.status.text)?.wait));
-        if (!old && !taken) continue;
+        const kept = ev.status === "failed" ? !(typeof stopAt === "number" && stopAt > (ev.updatedAt ?? 0)) : takeoverPrompt(prompt) || (!!ev.goal && prompt.startsWith("/goal "));
+        if (!kept) {
+          if (s.status?.kind !== "busy") settleHandoff(ev);
+          continue;
+        }
+        if (!["done", "waiting"].includes(s.status?.kind) || s.status.menu || menuOpen(s.agent)) continue;
+        // Under /goal the new tab may finish or ask on its own; only a stop with no ending line shows the question again.
+        if (ev.status === "done" && !takeoverPrompt(prompt) && endingOf(s.status.text)) continue;
         s.realStatus ??= s.status;
-        s.status = { kind: ev.question ? "waiting" : "done", text: taken ? ev.question : ev.reply };
+        s.status = { kind: ev.question ? "waiting" : "done", text: ev.status === "done" ? ev.question : ev.reply };
       }
     }
   }
 }
 
+// You replied to the tab the handoff record was kept for: the record may go once it is past its day.
+function settleHandoff(ev) {
+  if (ev.settled || !ev.file) return;
+  try {
+    const { file, stale, ...rest } = ev;
+    fs.writeFileSync(file, JSON.stringify({ ...rest, settled: true }));
+    ev.settled = true;
+  } catch {}
+}
+
 const HANDOFF_TTL = 24 * 60 * 60 * 1000;
+const HOLD_MAX = 30 * HANDOFF_TTL;
 
 function handoffDir() {
   return path.join(process.env.AUTO_HANDOFF_HOME || path.join(os.homedir(), ".config", "claude-handoff"), "events");
 }
 
 // Records the auto-handoff Stop hook writes while a session hands over to a new tab; stale ones are dropped.
-export function handoffEvents() {
+// A record past its day is dropped, unless it still keeps a stop waiting for you that you have not answered (up to HOLD_MAX);
+// `pending` lists those too.
+export function handoffEvents({ pending = false } = {}) {
   let files;
   try {
     files = fs.readdirSync(handoffDir()).filter((f) => f.endsWith(".json"));
@@ -367,8 +385,11 @@ export function handoffEvents() {
     const file = path.join(handoffDir(), f);
     try {
       const ev = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (Date.now() - (ev.updatedAt ?? 0) > HANDOFF_TTL) fs.rmSync(file, { force: true });
-      else out.push({ ...ev, file });
+      const age = Date.now() - (ev.updatedAt ?? 0);
+      if (age <= HANDOFF_TTL) out.push({ ...ev, file });
+      else if (ev.reply && !ev.settled && ["failed", "done"].includes(ev.status) && age <= HOLD_MAX) {
+        if (pending) out.push({ ...ev, file, stale: true });
+      } else fs.rmSync(file, { force: true });
     } catch {}
   }
   return out;

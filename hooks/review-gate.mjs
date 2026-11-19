@@ -12,6 +12,7 @@ import {
   addFilesItem,
   append,
   changedSince,
+  childReviewProblem,
   classifyCommand,
   editAllowed,
   gated,
@@ -49,10 +50,10 @@ export function preToolUse(input, { consoleCheck = isConsoleSession } = {}) {
   const tool = input.tool_name;
   if (tool !== "Bash" && !EDITS.has(tool)) return null;
   const cmd = tool === "Bash" ? String(input.tool_input?.command ?? "") : null;
-  const cls = cmd !== null ? classifyCommand(cmd) : null;
+  const cls = cmd !== null ? classifyCommand(cmd, { cwd: input.cwd ?? process.cwd() }) : null;
   const file = EDITS.has(tool) ? fileOf(input) : null;
   const intoReviews = file && !path.relative(real(reviewsHome()), real(path.resolve(input.cwd ?? ".", file))).startsWith("..");
-  if ((cls && ((cls.review !== null && STATE_SUBCOMMANDS.has(cls.review)) || stateCommandIn(cmd) || (cls.review === null && touchesReviews(cmd)))) || intoReviews) {
+  if ((cls && ((cls.review !== null && STATE_SUBCOMMANDS.has(cls.review)) || stateCommandIn(cmd) || childReviewProblem(cmd, input.cwd ?? process.cwd()) || (cls.review === null && touchesReviews(cmd)))) || intoReviews) {
     if (!isConsole(input, consoleCheck)) return deny("審核狀態只能由中控台與焦點面板寫；子 session 只能用 console.mjs review add／correct 記下代回。");
   }
   if (cls?.review !== null && cls?.review !== undefined) return null;
@@ -91,7 +92,7 @@ export function postToolUse(input) {
   try {
     const wt = worktreeOf(input.cwd ?? process.cwd());
     if (!wt) return null;
-    const cls = tool === "Bash" ? classifyCommand(String(input.tool_input?.command ?? "")) : null;
+    const cls = tool === "Bash" ? classifyCommand(String(input.tool_input?.command ?? ""), { cwd: input.cwd ?? process.cwd() }) : null;
     let st = stateOf(wt);
     if (st.approved && cls?.reopen) {
       append(wt, { event: "cleared", reason: "dev-flow reopen", session: input.session_id ?? null });

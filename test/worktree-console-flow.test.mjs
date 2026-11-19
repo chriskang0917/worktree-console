@@ -414,11 +414,12 @@ test("結尾與狀態：中控台管的子 session 沒寫結尾行時 Stop hook 
   const loose = path.join(tmp, "loose-wt");
   for (const d of [managed, loose]) fs.mkdirSync(d, { recursive: true });
   fs.mkdirSync(path.join(process.env.WORKTREE_CONSOLE_LOG_DIR, ".state"), { recursive: true });
-  fs.writeFileSync(path.join(process.env.WORKTREE_CONSOLE_LOG_DIR, ".state", "managed.json"), JSON.stringify({ worktrees: [{ path: managed, repo: "app", ticket: "PROJ-7" }], repos: [], consoles: [], handles: {} }));
+  fs.writeFileSync(path.join(process.env.WORKTREE_CONSOLE_LOG_DIR, ".state", "managed.json"), JSON.stringify({ worktrees: [{ path: managed, repo: "app", ticket: "PROJ-7" }], repos: [], consoles: [], handles: { "child-term": { path: managed } } }));
   let n = 0;
-  const stop = (last, { cwd = managed, prompt = "做", active = false } = {}) => {
-    const transcript = path.join(tmp, `child-${++n}.jsonl`);
-    fs.writeFileSync(transcript, [{ type: "user", message: { content: prompt } }, { type: "assistant", message: { content: [{ type: "text", text: last }] } }].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const stop = (last, { cwd = managed, prompt = "做", active = false, same = false } = {}) => {
+    if (!same) n += 1;
+    const transcript = path.join(tmp, `child-${n}.jsonl`);
+    fs.writeFileSync(transcript, [{ type: "user", uuid: `u-${n}`, message: { content: prompt } }, { type: "assistant", message: { content: [{ type: "text", text: last }] } }].map((e) => JSON.stringify(e)).join("\n") + "\n");
     const input = JSON.stringify({ session_id: `child-${n}`, transcript_path: transcript, cwd, last_assistant_message: last, stop_hook_active: active });
     const r = spawnSync(process.execPath, [path.join(root, "hooks/auto-handoff.mjs"), "stop"], { input, encoding: "utf8", env: { ...process.env, ORCA_TERMINAL_HANDLE: "child-term" } });
     return r.stdout ? JSON.parse(r.stdout) : null;
@@ -431,7 +432,8 @@ test("結尾與狀態：中控台管的子 session 沒寫結尾行時 Stop hook 
   assert.equal(stop("改好了。", { cwd: loose }), null, "沒管的 worktree");
   assert.equal(stop("收到", { prompt: handoff.KEEPALIVE_TEXT }), null, "續命那一輪");
   assert.equal(stop("依交棒說明：…", { prompt: `${handoff.TAKEOVER_HEAD}先完整讀 x.md` }), null, "交棒那一輪");
-  assert.equal(stop("改好了，接著跑測試。", { active: true }), null, "第二次照樣放行");
+  assert.equal(stop("改好了，接著跑測試。")?.decision, "block", "第一次問");
+  assert.equal(stop("改好了，接著跑測試。", { active: true, same: true }), null, "問過了，第二次照樣放行");
   fs.mkdirSync(path.join(process.env.WORKTREE_CONSOLE_HOME, "summaries"), { recursive: true });
   fs.writeFileSync(path.join(process.env.WORKTREE_CONSOLE_HOME, "summaries", "child-term.json"), JSON.stringify({ text: "在做什麼：改按鈕\n下一步：跑測試", replyAt: 5 }));
   const s = { handle: "child-term", paneKey: "child-term", since: 5, status: { kind: "done", text: "改好了，接著跑測試。" }, agent: { stateStartedAt: 5 } };
@@ -633,7 +635,7 @@ test("「已跳過」改名「延後處理」：waiting-line 輸出是 …｜在
 test("補審核防線：console.mjs review 後面串接其他指令不算 review 指令；子 session 跑 review reviewed 與 review elsewhere 被拒", () => {
   assert.equal(review.classifyCommand("node console.mjs review sheet; sed -i '' x a.ts").review, null);
   for (const c of ["node console.mjs review sheet && rm a", "node console.mjs review sheet | sh", "node console.mjs review sheet\nrm a", "node console.mjs review add --plan \"$(rm a)\"", "(node console.mjs review sheet)"]) assert.equal(review.classifyCommand(c).review, null, c);
-  assert.equal(review.classifyCommand("node console.mjs review add --question \"a; b\" --plan x").review, "add", "引號裡的分號不算串接");
+  assert.equal(review.classifyCommand(`node "${CONSOLE_CLI}" review add --question "a; b" --plan x`).review, "add", "引號裡的分號不算串接");
   for (const sub of ["reviewed", "elsewhere"]) {
     const out = gate.preToolUse({ tool_name: "Bash", tool_input: { command: `node /x/console.mjs review ${sub} --path /w` }, cwd: tmp, session_id: "child" }, { consoleCheck: () => false });
     assert.equal(out?.hookSpecificOutput?.permissionDecision, "deny", sub);
@@ -657,9 +659,9 @@ test("補審核防線：被鎖住的 session 用 review sheet 串接 sed 也被�
   const wt = review.worktreeOf(dir);
   review.addItem(wt, item);
   review.append(wt, { event: "lock", session: "s1", files: ["a.ts"] });
-  const out = gate.preToolUse({ tool_name: "Bash", tool_input: { command: "node console.mjs review sheet; sed -i '' x a.ts" }, cwd: dir, session_id: "s1" }, { consoleCheck: () => false });
+  const out = gate.preToolUse({ tool_name: "Bash", tool_input: { command: `node "${CONSOLE_CLI}" review sheet; sed -i '' x a.ts` }, cwd: dir, session_id: "s1" }, { consoleCheck: () => false });
   assert.equal(out?.hookSpecificOutput?.permissionDecision, "deny");
-  assert.equal(gate.preToolUse({ tool_name: "Bash", tool_input: { command: "node console.mjs review sheet" }, cwd: dir, session_id: "s1" }, { consoleCheck: () => false }), null);
+  assert.equal(gate.preToolUse({ tool_name: "Bash", tool_input: { command: `node "${CONSOLE_CLI}" review sheet` }, cwd: dir, session_id: "s1" }, { consoleCheck: () => false }), null);
 });
 
 test("審核單不卡住：在別處回覆把待審的件標「在別處回覆」、記成審完並解鎖，不寫回 advisor 的猜中與否；只算使用者本人打的訊息", () => {
@@ -755,8 +757,8 @@ test("被鎖住的 session：review sheet 接 2>&1、| cat、| head 放行；導
   review.addItem(wt, item);
   review.append(wt, { event: "lock", session: "s1", files: ["a.ts"] });
   const run = (command) => gate.preToolUse({ tool_name: "Bash", tool_input: { command }, cwd: dir, session_id: "s1" }, { consoleCheck: () => false });
-  for (const c of ["node console.mjs review sheet 2>&1", "node console.mjs review sheet | cat", "node console.mjs review sheet 2>&1 | head -50", "node console.mjs review status | tail -n 5"]) assert.equal(run(c), null, c);
-  for (const c of ["node console.mjs review sheet > a.ts", "node console.mjs review sheet | tee a.ts", "node console.mjs review sheet 2>&1 >> a.ts"]) assert.equal(run(c)?.hookSpecificOutput?.permissionDecision, "deny", c);
+  for (const c of ["review sheet 2>&1", "review sheet | cat", "review sheet 2>&1 | head -50", "review status | tail -n 5"].map((t) => `node "${CONSOLE_CLI}" ${t}`)) assert.equal(run(c), null, c);
+  for (const c of ["review sheet > a.ts", "review sheet | tee a.ts", "review sheet 2>&1 >> a.ts", "review sheet"].map((t, i) => (i === 3 ? `node /tmp/evil/console.mjs ${t}` : `node "${CONSOLE_CLI}" ${t}`))) assert.equal(run(c)?.hookSpecificOutput?.permissionDecision, "deny", c);
 });
 
 test("貼出審核單：要包含每一件待審的題目與方案才算；只有攔截訊息那行「審核單：…」不算；斜線指令不算使用者回答", () => {
@@ -843,10 +845,134 @@ test("交棒前後的原題：交棒失敗的舊分頁、還沒貼回原題的�
   const goalOn = sess("w1:p2", "繼續做下一步。", 260, "/goal 完成 X");
   lib.applyHandoff(rows(goalOn), [{ ...done, goal: "完成 X" }]);
   assert.equal(goalOn.status.text, reply);
+  const goalDone = sess("w1:p2", "做完了，推上去了。\n\n已完成", 260, "/goal 完成 X");
+  lib.applyHandoff(rows(goalDone), [{ ...done, goal: "完成 X" }]);
+  assert.equal(goalDone.status.text, "做完了，推上去了。\n\n已完成", "自己寫了已完成就照它的，可以變成可關閉");
   const replied = sess("w1:p2", "好。", 270, "解鎖了");
   lib.applyHandoff(rows(replied), [done]);
   assert.equal(replied.status.text, "好。");
   const busy = { ...sess("w1:p2", "", 250, `${handoff.TAKEOVER_HEAD}x`), status: { kind: "busy", text: "" } };
   lib.applyHandoff(rows(busy), [done]);
   assert.equal(busy.status.kind, "busy");
+});
+
+// --- 第二輪檢核 ---
+
+const CONSOLE_CLI = path.join(root, "skills", "worktree-console", "scripts", "console.mjs");
+const childGate = (command, cwd = tmp) => gate.preToolUse({ tool_name: "Bash", tool_input: { command }, cwd, session_id: "child" }, { consoleCheck: () => false });
+const denied = (out) => out?.hookSpecificOutput?.permissionDecision === "deny";
+
+test("第二輪 1b：子 session 的 Bash 同時出現 console.mjs 與審核狀態字樣，不論旗標、變數、反斜線、命令替換都擋；只放行 review add／correct／sheet 的固定寫法", () => {
+  for (const c of [
+    'node /x/console.mjs review --session "" reviewed --path /w',
+    "env -u CLAUDE_CODE_SESSION_ID node /x/console.mjs review --by reply reviewed",
+    "S=reviewed; node /x/console.mjs review $S",
+    "node /x/console.mjs review rev\\iewed",
+    "node /x/console.mjs review $(echo reviewed)",
+    `node "${CONSOLE_CLI}" review add --question q --plan p --session con`,
+    `CLAUDE_CODE_SESSION_ID=con node "${CONSOLE_CLI}" review sheet`,
+  ]) assert.ok(denied(childGate(c)), c);
+  for (const c of [
+    `node "${CONSOLE_CLI}" review add --question "要不要 edit 按鈕？" --plan "先 done 再 pass" --basis "沒有前例" --impact "卡片" --by child --stop "規劃"`,
+    `node "${CONSOLE_CLI}" review correct --n 1 --plan "改成 undo"`,
+    `node "${CONSOLE_CLI}" review sheet 2>&1 | head -5`,
+  ]) assert.equal(childGate(c), null, c);
+});
+
+test("第二輪 1a：審核狀態子指令拿不到或對不上呼叫者身分一律拒絕；中控台的 session 與帶自己 session 的焦點面板照常能跑", () => {
+  const dir = reviewRepo("identity");
+  const wt = review.worktreeOf(dir);
+  review.addItem(wt, item);
+  const projects = fs.mkdtempSync(path.join(tmp, "projects-"));
+  fs.mkdirSync(path.join(projects, "-c"));
+  fs.writeFileSync(path.join(projects, "-c", "con-s.jsonl"), `${JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "Base directory for this skill: /x/skills/worktree-console\n\n# Worktree Console" }] } })}\n`);
+  const run = (args, env) => {
+    const e = { ...process.env, CLAUDE_PROJECTS_DIR: projects, ...env };
+    for (const [k, v] of Object.entries(e)) if (v === undefined) delete e[k];
+    return spawnSync(process.execPath, [CONSOLE_CLI, "review", ...args, "--path", dir], { encoding: "utf8", env: e });
+  };
+  for (const [args, env, why] of [
+    [["status"], { CLAUDE_CODE_SESSION_ID: undefined }, "沒有身分"],
+    [["--session", "", "status"], { CLAUDE_CODE_SESSION_ID: undefined }, "身分是空字串"],
+    [["--session", "con-s", "status"], { CLAUDE_CODE_SESSION_ID: "child-s" }, "子 session 冒用中控台的 session"],
+    [[], { CLAUDE_CODE_SESSION_ID: "child-s" }, "子 session"],
+  ]) {
+    const r = run(["undo", "--n", "1", ...args.filter((a) => a !== "status")], env);
+    assert.notEqual(r.status, 0, why);
+    assert.match(r.stderr + r.stdout, /只有中控台/, why);
+  }
+  assert.equal(run(["pass", "--n", "1"], { CLAUDE_CODE_SESSION_ID: "con-s" }).status, 0, "中控台");
+  assert.equal(run(["undo", "--n", "1", "--session", "con-s"], { CLAUDE_CODE_SESSION_ID: undefined }).status, 0, "焦點面板帶自己的 session");
+});
+
+test("第二輪 2：子 session 貼出審核單、被要求補結尾行後最後一則只剩「等你：…」，使用者在分頁回答照樣解鎖", async () => {
+  const dir = reviewRepo("tab-ending");
+  const wt = review.worktreeOf(dir);
+  review.addItem(wt, item);
+  const log = await import("../skills/worktree-console/scripts/log.mjs");
+  log.writeManaged({ worktrees: [{ path: dir, repo: "r", ticket: "tab-ending" }], consoles: [] });
+  const transcript = path.join(tmp, "tab-ending.jsonl");
+  const pasted = "被擋下。\n\n審核單：tab-ending\nfeat/demo\n\n1. 先做哪個畫面？\n   當前方案：先改畫面";
+  fs.writeFileSync(transcript, [
+    { type: "user", message: { content: "動工" } },
+    { type: "assistant", message: { content: [{ type: "text", text: pasted }] } },
+    { type: "user", isMeta: true, message: { content: `Stop hook feedback:\n${handoff.ENDING_ASK}` } },
+    { type: "assistant", message: { content: [{ type: "text", text: "等你：審核上面的審核單" }] } },
+  ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const r = spawnSync(process.execPath, [path.join(root, "hooks", "console-log.mjs"), "user-prompt"], { input: JSON.stringify({ cwd: dir, prompt: "全部通過", transcript_path: transcript, session_id: "tab-e" }), encoding: "utf8", env: { ...process.env, ORCA_TERMINAL_HANDLE: "tab-e-term" } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(review.stateOf(wt).approved);
+});
+
+test("第二輪 3：交棒失敗超過 24 小時，在你回覆前事件不刪、舊分頁照舊顯示原題；你回過之後才清掉", () => {
+  const events = path.join(process.env.AUTO_HANDOFF_HOME, "events");
+  fs.mkdirSync(events, { recursive: true });
+  const file = path.join(events, "old-fail.json");
+  const reply = "push 被擋。\n\n等你：解鎖 SSH 金鑰";
+  const old = Date.now() - 3 * 24 * 3600_000;
+  fs.writeFileSync(file, JSON.stringify({ status: "failed", oldHandle: "w9:p1", oldPaneKey: "w9:p1", reply, question: reply, updatedAt: old }));
+  const s = { handle: "w9:p1", paneKey: "w9:p1", status: { kind: "done", text: "交棒說明寫好了。" }, agent: { stateStartedAt: old - 1000, prompt: "做" } };
+  lib.applyHandoff([{ path: "/nope", sessions: [s] }], lib.handoffEvents({ pending: true }));
+  assert.ok(fs.existsSync(file), "還沒回覆，事件不刪");
+  assert.equal(s.status.text, reply);
+  const later = { ...s, status: { kind: "done", text: "推好了。" }, agent: { stateStartedAt: Date.now(), prompt: "解鎖了" } };
+  lib.applyHandoff([{ path: "/nope", sessions: [later] }], lib.handoffEvents({ pending: true }));
+  assert.equal(later.status.text, "推好了。");
+  lib.handoffEvents({ pending: true });
+  assert.ok(!fs.existsSync(file), "回過之後清掉");
+});
+
+test("第二輪 5：只擋中控台看板上、不是主 checkout 的分頁；主 checkout 與看板沒有的分頁不擋", () => {
+  const managed = { worktrees: [{ path: "/r/main", repo: "r", ticket: "main", main: true }, { path: "/r/wt", repo: "r", ticket: "wt", main: false }], repos: [{ name: "r", main: "/r/main" }], consoles: ["con"], handles: { "h-wt": { path: "/r/wt" }, "h-main": { path: "/r/main" } } };
+  assert.equal(handoff.boardChild("/r/wt", "h-wt", managed), true);
+  assert.equal(handoff.boardChild("/r/wt/sub", "h-wt", managed), true);
+  assert.equal(handoff.boardChild("/r/main", "h-main", managed), false, "主 checkout");
+  assert.equal(handoff.boardChild("/r/wt", "h-other", managed), false, "看板沒有的分頁");
+  assert.equal(handoff.boardChild("/r/wt", "con", managed), false, "中控台");
+});
+
+test("第二輪 6：「第二次」要真的問過；別的 Stop hook 擋過（stop_hook_active）但沒問過時照樣先問", () => {
+  const home = fs.mkdtempSync(path.join(tmp, "asked-"));
+  const entries = [{ type: "user", uuid: "u1", message: { content: "做" } }, { type: "assistant", message: { content: [{ type: "text", text: "改好了。" }] } }];
+  const input = (active) => ({ session_id: "s-ask", last_assistant_message: "改好了。", stop_hook_active: active });
+  assert.equal(handoff.endingMissing(input(true), entries, { managed: true, home }), "ask", "沒問過，別的 hook 擋過也先問");
+  assert.equal(handoff.endingMissing(input(true), entries, { managed: true, home }), "missed", "問過了");
+  const next = [...entries, { type: "user", uuid: "u2", message: { content: "繼續" } }, { type: "assistant", message: { content: [{ type: "text", text: "又改好了。" }] } }];
+  assert.equal(handoff.endingMissing({ ...input(false), last_assistant_message: "又改好了。" }, next, { managed: true, home }), "ask", "新的一輪重新問");
+});
+
+test("第二輪 7：反斜線引號不吃掉導向；別的 console.mjs 不算 review 指令；補不上的那則是空字串也列入；壓縮摘要不算最後一則指令", async () => {
+  assert.equal(review.classifyCommand(`node "${CONSOLE_CLI}" review sheet --path \\" > a.ts`).review, null);
+  assert.equal(review.classifyCommand(`node "${CONSOLE_CLI}" review sheet`).review, "sheet");
+  assert.equal(review.classifyCommand("node /tmp/evil/console.mjs review sheet").review, null, "不是這個 plugin 的 console.mjs");
+  const home = fs.mkdtempSync(path.join(tmp, "missed-"));
+  const ending = await import("../skills/worktree-console/scripts/ending.mjs");
+  ending.markMissed(home, "h-empty", "");
+  assert.equal(ending.missedEnding(home, "h-empty", ""), true);
+  const compacted = [
+    { type: "user", message: { content: handoff.KEEPALIVE_TEXT } },
+    { type: "assistant", message: { content: [{ type: "text", text: "收到" }] } },
+    { type: "user", isCompactSummary: true, message: { content: "This session is being continued from a previous conversation." } },
+  ];
+  assert.equal(handoff.endingMissing({ session_id: "s-c", last_assistant_message: "收到", stop_hook_active: false }, compacted, { managed: true, home }), null);
 });

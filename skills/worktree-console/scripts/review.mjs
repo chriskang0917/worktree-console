@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { displayWidth } from "./lib.mjs";
 
 export const FIELDS = { question: "題目", plan: "當前方案", basis: "依據", impact: "影響範圍" };
@@ -456,6 +457,14 @@ export function chained(cmd) {
 }
 
 const isConsoleScript = (w) => /(^|\/)console\.mjs$/.test(w);
+const OWN_CONSOLE = real(fileURLToPath(new URL("./console.mjs", import.meta.url)));
+const INSTALLED_CONSOLE = /\/plugins\/cache\/[^/]+\/worktree-console\/[^/]+\/skills\/worktree-console\/scripts\/console\.mjs$/;
+// This plugin's console.mjs, or another installed version of it (a session keeps the path its opening rules gave it); not any script named so.
+export function pluginConsole(w, cwd = process.cwd()) {
+  if (!isConsoleScript(w)) return false;
+  const p = real(path.resolve(cwd, w));
+  return p === OWN_CONSOLE || (INSTALLED_CONSOLE.test(p) && fs.existsSync(p));
+}
 export const STATE_SUBCOMMANDS = new Set(["pass", "edit", "undo", "pass-all", "done", "reviewed", "elsewhere", "approve", "clear", "unlock"]);
 const STATE_WORDS = [...STATE_SUBCOMMANDS].join("|");
 const STATE_TEXT = new RegExp(`console\\.mjs\\W+review\\W+(?:${STATE_WORDS})(?![\\w-])`);
@@ -477,9 +486,14 @@ function withoutSafeTail(cmd) {
 
 // An unquoted > (a redirect into a file) outside single and double quotes.
 function redirects(cmd) {
+  const text = String(cmd);
   let quote = null;
-  for (const ch of String(cmd)) {
-    if (quote) {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+    } else if (ch === "\\") i++;
+    else if (quote) {
       if (ch === quote) quote = null;
     } else if (ch === "'" || ch === '"') quote = ch;
     else if (ch === ">") return true;
@@ -487,13 +501,37 @@ function redirects(cmd) {
   return false;
 }
 
+const STATE_ANY = new RegExp(`(?:^|[^\\w-])(?:${STATE_WORDS})(?![\\w-])`);
+const REVIEW_SCRIPT = /console\.mjs|review-cli\.mjs/;
+const SPOOF = /--session|CLAUDE_CODE_SESSION_ID/;
+
+// The only review commands a child session runs: add, correct and sheet (sheet may carry a read-only tail), straight from this plugin's
+// console.mjs, nothing chained, redirected or substituted, and no caller identity of its own.
+function childReviewForm(cmd, cwd) {
+  const solo = withoutSafeTail(cmd);
+  const w = words(solo);
+  if (!(w[0] === "node" || /(^|\/)node$/.test(w[0] ?? "")) || !pluginConsole(w[1] ?? "", cwd) || w[2] !== "review") return false;
+  if (chained(solo) || redirects(solo)) return false;
+  if (w[3] === "sheet") return true;
+  return (w[3] === "add" || w[3] === "correct") && solo === String(cmd).trimEnd();
+}
+
+// Whether a child session's command may reach a review state subcommand or pass someone's identity: the review script and a state word
+// (or an identity) anywhere, read with quotes and backslashes taken out, outside the fixed forms above.
+export function childReviewProblem(cmd, cwd = process.cwd()) {
+  const flat = String(cmd).replace(/\\/g, "").replace(/["']/g, "");
+  if (!REVIEW_SCRIPT.test(flat)) return false;
+  if (SPOOF.test(flat)) return true;
+  return STATE_ANY.test(flat) && !childReviewForm(cmd, cwd);
+}
+
 // Which gate a command hits: `approve` / `confirm-spec` as the word after a flow script, `handoff-files.mjs` anywhere; `reopen` is noted for the marker.
 // `review` is set when the command is console.mjs review alone (or with a read-only tail), which the gate always lets through (its state
 // subcommands are the console's alone); one with another command chained on or a redirect is checked like any other.
-export function classifyCommand(cmd) {
+export function classifyCommand(cmd, { cwd = process.cwd() } = {}) {
   const solo = withoutSafeTail(cmd);
   const w = words(solo);
-  const lead = w.findIndex((x) => isConsoleScript(x));
+  const lead = w.findIndex((x) => pluginConsole(x, cwd));
   const start = w.slice(0, lead).every((x) => x === "node" || /(^|\/)node$/.test(x));
   if (lead >= 0 && start && w[lead + 1] === "review" && !chained(solo) && !redirects(solo)) return { gate: null, review: w[lead + 2] ?? "", reopen: false };
   let gate = null;

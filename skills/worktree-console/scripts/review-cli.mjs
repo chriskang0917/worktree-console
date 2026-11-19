@@ -263,11 +263,18 @@ export function closeElsewhere(where, { by = "reply" } = {}) {
   }
 }
 
+// Who runs a review command: the session Claude Code gave the shell; the focus band, which has none, passes its own with --session.
+// A --session that differs from the shell's, or none at all, is no one.
+function callerOf(values) {
+  const shell = process.env.CLAUDE_CODE_SESSION_ID || null;
+  if (shell) return values.session === undefined || values.session === shell ? shell : null;
+  return values.session || null;
+}
+
 export async function reviewCommand(values, positionals, { deliver }) {
   const [sub] = positionals;
   if (!sub) die(USAGE);
-  const caller = values.session ?? process.env.CLAUDE_CODE_SESSION_ID ?? null;
-  if (STATE_SUBCOMMANDS.has(sub) && caller && !isConsoleSession(caller)) die(`review ${sub} 只有中控台與焦點面板能跑；子 session 只能用 review add／correct 記下代回。`);
+  if (STATE_SUBCOMMANDS.has(sub) && !isConsoleSession(callerOf(values))) die(`review ${sub} 只有中控台與焦點面板能跑；子 session 只能用 review add／correct 記下代回。`);
   if (sub === "add") {
     const wt = worktree(values);
     const r = addItem(wt, {
