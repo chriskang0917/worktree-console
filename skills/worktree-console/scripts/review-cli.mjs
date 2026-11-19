@@ -24,6 +24,7 @@ import {
   sheetLines,
   sheetMarkdown,
   STATE_SUBCOMMANDS,
+  trustWrite,
   sheetProblems,
   stateOf,
   tagOf,
@@ -257,6 +258,7 @@ export function closeElsewhere(where, { by = "reply" } = {}) {
   try {
     const wt = worktreeOf(where);
     if (!wt || !stateOf(wt).open.some((x) => x.status === "pending")) return null;
+    trustWrite(wt.path);
     return finishRound(wt, { by, elsewhere: true });
   } catch {
     return null;
@@ -275,6 +277,10 @@ export async function reviewCommand(values, positionals, { deliver }) {
   const [sub] = positionals;
   if (!sub) die(USAGE);
   if (STATE_SUBCOMMANDS.has(sub) && !isConsoleSession(callerOf(values))) die(`review ${sub} 只有中控台與焦點面板能跑；子 session 只能用 review add／correct 記下代回。`);
+  if (STATE_SUBCOMMANDS.has(sub)) {
+    const at = worktreeOf(values.path ? real(values.path) : process.cwd());
+    if (at) trustWrite(at.path);
+  }
   if (sub === "add") {
     const wt = worktree(values);
     const r = addItem(wt, {

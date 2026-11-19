@@ -862,21 +862,71 @@ const CONSOLE_CLI = path.join(root, "skills", "worktree-console", "scripts", "co
 const childGate = (command, cwd = tmp) => gate.preToolUse({ tool_name: "Bash", tool_input: { command }, cwd, session_id: "child" }, { consoleCheck: () => false });
 const denied = (out) => out?.hookSpecificOutput?.permissionDecision === "deny";
 
-test("第二輪 1b：子 session 的 Bash 同時出現 console.mjs 與審核狀態字樣，不論旗標、變數、反斜線、命令替換都擋；只放行 review add／correct／sheet 的固定寫法", () => {
+test("第二輪 1b（A）：只擋真的會執行 console.mjs review <狀態子指令> 的指令；旗標、變數、反斜線、命令替換、sh -c、xargs 都認得出；只是提到字樣的讀檔、搜尋放行", () => {
   for (const c of [
     'node /x/console.mjs review --session "" reviewed --path /w',
     "env -u CLAUDE_CODE_SESSION_ID node /x/console.mjs review --by reply reviewed",
     "S=reviewed; node /x/console.mjs review $S",
     "node /x/console.mjs review rev\\iewed",
     "node /x/console.mjs review $(echo reviewed)",
-    `node "${CONSOLE_CLI}" review add --question q --plan p --session con`,
-    `CLAUDE_CODE_SESSION_ID=con node "${CONSOLE_CLI}" review sheet`,
+    `CLAUDE_CODE_SESSION_ID=con node "${CONSOLE_CLI}" review pass --n 1`,
+    "sh -c 'cd /w && node /x/console.mjs review done --path /w'",
+    "echo reviewed | xargs node /x/console.mjs review",
+    "X=/x/console.mjs; node $X review reviewed",
+    "true && nohup node /x/console.mjs review pass-all --path /w",
   ]) assert.ok(denied(childGate(c)), c);
   for (const c of [
+    `grep -n "done" ${CONSOLE_CLI}`,
+    `rg "review (pass|done|reviewed)" ${CONSOLE_CLI}`,
+    `cat ${CONSOLE_CLI} | head -5`,
+    `sed -n 1,20p ${CONSOLE_CLI} && grep -c edit ${CONSOLE_CLI}`,
     `node "${CONSOLE_CLI}" review add --question "要不要 edit 按鈕？" --plan "先 done 再 pass" --basis "沒有前例" --impact "卡片" --by child --stop "規劃"`,
     `node "${CONSOLE_CLI}" review correct --n 1 --plan "改成 undo"`,
     `node "${CONSOLE_CLI}" review sheet 2>&1 | head -5`,
+    "node --test test/review.test.mjs",
   ]) assert.equal(childGate(c), null, c);
+});
+
+test("第二輪 1b（A）：handoff-files.mjs 只有真的執行它才算交棒；改這支檔、搜尋、跑測試都不算", () => {
+  for (const c of ["node skills/define-goal/scripts/handoff-files.mjs --goal x", "cd /w && node ./scripts/handoff-files.mjs", "sh -c 'node handoff-files.mjs'"]) assert.equal(review.classifyCommand(c).gate, "handoff-files", c);
+  for (const c of ["grep -n spec skills/define-goal/scripts/handoff-files.mjs", "sed -i '' s/a/b/ handoff-files.mjs", "node --test skills/define-goal/scripts/handoff-files.test.mjs", "rg handoff-files.mjs", "cat handoff-files.mjs"]) assert.equal(review.classifyCommand(c).gate, null, c);
+});
+
+test("第二輪 1b（B）：子 session 的 Bash 前後比對審核狀態，不管指令怎麼寫，狀態被改就還原並鎖住；只新增代回照常保留", () => {
+  const dir = reviewRepo("snap-compare");
+  const wt = review.worktreeOf(dir);
+  review.addItem(wt, item);
+  const file = review.reviewFile(wt.repo, wt.branch);
+  const before = fs.readFileSync(file, "utf8");
+  const call = (id) => ({ tool_name: "Bash", tool_input: { command: "python3 x.py" }, cwd: dir, session_id: "child-snap", tool_use_id: id });
+  gate.beforeBash(call("t1"), { consoleCheck: () => false });
+  review.append(wt, { event: "pass", n: 1, by: "panel" });
+  review.append(wt, { event: "approved", by: "panel" });
+  const out = gate.postToolUse(call("t1"));
+  assert.equal(out?.decision, "block");
+  assert.match(out.reason, /審核紀錄/);
+  const st = review.stateOf(wt);
+  assert.equal(st.approved, null, "還原");
+  assert.equal(st.items[0].status, "pending");
+  assert.equal(st.lock?.session, "child-snap", "鎖住");
+  assert.ok(fs.readFileSync(file, "utf8").startsWith(before));
+
+  const dir2 = reviewRepo("snap-add");
+  const wt2 = review.worktreeOf(dir2);
+  review.addItem(wt2, item);
+  const call2 = { ...call("t2"), cwd: dir2 };
+  gate.beforeBash(call2, { consoleCheck: () => false });
+  review.addItem(wt2, { ...item, question: "第二件？" });
+  assert.equal(gate.postToolUse(call2), null, "只新增代回");
+  assert.equal(review.stateOf(wt2).items.length, 2);
+  gate.beforeBash({ ...call2, tool_use_id: "t4" }, { consoleCheck: () => false });
+  review.trustWrite(dir2);
+  review.append(wt2, { event: "pass", n: 1, by: "panel" });
+  assert.equal(gate.postToolUse({ ...call2, tool_use_id: "t4" }), null, "子 session 的 Bash 跑的同時，面板按了通過，不算子 session 改的");
+  assert.equal(review.stateOf(wt2).items[0].status, "passed");
+  gate.beforeBash({ ...call2, session_id: "con", tool_use_id: "t3" }, { consoleCheck: () => true });
+  review.append(wt2, { event: "pass", n: 1, by: "panel" });
+  assert.equal(gate.postToolUse({ ...call2, session_id: "con", tool_use_id: "t3" }), null, "中控台照常能改");
 });
 
 test("第二輪 1a：審核狀態子指令拿不到或對不上呼叫者身分一律拒絕；中控台的 session 與帶自己 session 的焦點面板照常能跑", () => {

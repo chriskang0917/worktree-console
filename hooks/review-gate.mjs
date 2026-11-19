@@ -12,17 +12,18 @@ import {
   addFilesItem,
   append,
   changedSince,
-  childReviewProblem,
   classifyCommand,
   editAllowed,
   gated,
   nonPlanning,
   real,
+  reviewFile,
   reviewsHome,
   snapshot,
   stateCommandIn,
   stateOf,
   touchesReviews,
+  trustedSince,
   worktreeOf,
 } from "../skills/worktree-console/scripts/review.mjs";
 import { isConsoleSession } from "../skills/worktree-console/scripts/log.mjs";
@@ -53,7 +54,7 @@ export function preToolUse(input, { consoleCheck = isConsoleSession } = {}) {
   const cls = cmd !== null ? classifyCommand(cmd, { cwd: input.cwd ?? process.cwd() }) : null;
   const file = EDITS.has(tool) ? fileOf(input) : null;
   const intoReviews = file && !path.relative(real(reviewsHome()), real(path.resolve(input.cwd ?? ".", file))).startsWith("..");
-  if ((cls && ((cls.review !== null && STATE_SUBCOMMANDS.has(cls.review)) || stateCommandIn(cmd) || childReviewProblem(cmd, input.cwd ?? process.cwd()) || (cls.review === null && touchesReviews(cmd)))) || intoReviews) {
+  if ((cls && ((cls.review !== null && STATE_SUBCOMMANDS.has(cls.review)) || stateCommandIn(cmd) || (cls.review === null && touchesReviews(cmd)))) || intoReviews) {
     if (!isConsole(input, consoleCheck)) return deny("審核狀態只能由中控台與焦點面板寫；子 session 只能用 console.mjs review add／correct 記下代回。");
   }
   if (cls?.review !== null && cls?.review !== undefined) return null;
@@ -86,9 +87,52 @@ export function preToolUse(input, { consoleCheck = isConsoleSession } = {}) {
   }
 }
 
+const reviewSnapFile = (session, id) => path.join(reviewsHome(), ".snap", `${session ?? "x"}-${id ?? "last"}.review.json`);
+// What a child's Bash may not change: whether the round is approved, and the status of every item already there (new items may come).
+const reviewMark = (st) => ({ approved: !!st.approved, items: Object.fromEntries(st.items.map((x) => [x.n, x.status])) });
+const sameMark = (before, now) => before.approved === now.approved && Object.entries(before.items).every(([n, status]) => now.items[n] === status);
+
+// Exported for tests: before a child session's Bash runs, the worktree's review record as it stands, to compare once it ran.
+// The console and the focus band change it on purpose, so theirs is not kept.
+export function beforeBash(input, { consoleCheck = isConsoleSession } = {}) {
+  if (input.tool_name !== "Bash" || isConsole(input, consoleCheck)) return;
+  try {
+    const wt = worktreeOf(input.cwd ?? process.cwd());
+    if (!wt) return;
+    const file = reviewFile(wt.repo, wt.branch);
+    const snap = reviewSnapFile(input.session_id, input.tool_use_id);
+    fs.mkdirSync(path.dirname(snap), { recursive: true });
+    fs.writeFileSync(snap, JSON.stringify({ at: Date.now(), file, content: fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null, mark: reviewMark(stateOf(wt)) }));
+  } catch {}
+}
+
+// The review state changed under a child's Bash, however the command was written: the record goes back to what it was and the session
+// is locked. A command that rewrites the snapshot as well is not caught.
+function reviewTampered(input) {
+  const snap = reviewSnapFile(input.session_id, input.tool_use_id);
+  if (!fs.existsSync(snap)) return null;
+  const before = JSON.parse(fs.readFileSync(snap, "utf8"));
+  fs.rmSync(snap, { force: true });
+  const wt = worktreeOf(input.cwd ?? process.cwd());
+  if (!wt || sameMark(before.mark, reviewMark(stateOf(wt))) || trustedSince(wt.path, before.at ?? 0)) return null;
+  if (before.content === null) fs.rmSync(before.file, { force: true });
+  else fs.writeFileSync(before.file, before.content);
+  append(wt, { event: "lock", session: input.session_id ?? null, files: ["審核紀錄"] });
+  append(wt, { event: "blocked", session: input.session_id ?? null, gate: "edit" });
+  return { decision: "block", reason: `這個 session 已鎖住：這個 Bash 指令改了審核紀錄（通過、改過或審完），已還原成指令前的樣子。審核狀態只能由中控台與焦點面板改。${BLOCK_MESSAGE}。` };
+}
+
 // Exported for tests: what PostToolUse says after a call, or null.
 export function postToolUse(input) {
   const tool = input.tool_name;
+  if (tool === "Bash") {
+    try {
+      const tampered = reviewTampered(input);
+      if (tampered) return tampered;
+    } catch (error) {
+      return { decision: "block", reason: `讀不到審核紀錄或檢查出錯：${error?.message ?? error}` };
+    }
+  }
   try {
     const wt = worktreeOf(input.cwd ?? process.cwd());
     if (!wt) return null;
@@ -168,7 +212,10 @@ const main = () => {
   const mode = process.argv[2];
   const input = readInput();
   let out = null;
-  if (mode === "pre-tool-use") out = preToolUse(input);
+  if (mode === "pre-tool-use") {
+    out = preToolUse(input);
+    if (!out) beforeBash(input);
+  }
   if (mode === "post-tool-use") out = postToolUse(input);
   if (mode === "session-start" && worktreeOf(input.cwd ?? process.cwd())) out = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: openingRules() } };
   if (out) process.stdout.write(JSON.stringify(out));

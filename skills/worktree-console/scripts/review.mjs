@@ -45,6 +45,25 @@ export function worktreeOf(dir) {
 }
 
 const safeBranch = (b) => String(b || "HEAD").split("/").filter((s) => s && s !== "." && s !== "..").join("/") || "HEAD";
+const trustFile = (where) => path.join(reviewsHome(), ".trusted", `${encodeURIComponent(real(where))}.json`);
+
+// The console, the focus band or an answer given elsewhere is about to change this worktree's review state on purpose; the gate does not
+// take a change made meanwhile for a child's own.
+export function trustWrite(where) {
+  try {
+    fs.mkdirSync(path.dirname(trustFile(where)), { recursive: true });
+    fs.writeFileSync(trustFile(where), JSON.stringify({ at: Date.now() }));
+  } catch {}
+}
+
+export function trustedSince(where, at) {
+  try {
+    return JSON.parse(fs.readFileSync(trustFile(where), "utf8")).at >= at;
+  } catch {
+    return false;
+  }
+}
+
 export const reviewFile = (repo, branch) => path.join(reviewsHome(), repo, safeBranch(branch), "review.jsonl");
 
 function jsonl(file) {
@@ -467,13 +486,169 @@ export function pluginConsole(w, cwd = process.cwd()) {
 }
 export const STATE_SUBCOMMANDS = new Set(["pass", "edit", "undo", "pass-all", "done", "reviewed", "elsewhere", "approve", "clear", "unlock"]);
 const STATE_WORDS = [...STATE_SUBCOMMANDS].join("|");
-const STATE_TEXT = new RegExp(`console\\.mjs\\W+review\\W+(?:${STATE_WORDS})(?![\\w-])`);
+// Shell words of a command, read the way the shell would: quotes and backslashes taken out, `$(…)` and backticks kept aside to be read
+// as commands too, and a word that holds `$…` marked dynamic (its value is unknown until it runs). Separators come back as their own words.
+function shellWords(cmd) {
+  const text = String(cmd);
+  const out = [];
+  const subs = [];
+  let cur = null;
+  const word = () => (cur ??= { t: "", dyn: false });
+  const end = () => {
+    if (cur) out.push(cur);
+    cur = null;
+  };
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else word().t += ch;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < text.length) {
+      if (text[i + 1] !== "\n") word().t += text[i + 1];
+      i++;
+      continue;
+    }
+    if (ch === "`" || (ch === "$" && text[i + 1] === "(")) {
+      const close = ch === "`" ? text.indexOf("`", i + 1) : matchParen(text, i + 1);
+      subs.push(text.slice(ch === "`" ? i + 1 : i + 2, close < 0 ? text.length : close));
+      word().dyn = true;
+      i = close < 0 ? text.length : close;
+      continue;
+    }
+    if (ch === "$" && /[\w{@*#?!-]/.test(text[i + 1] ?? "")) {
+      word().dyn = true;
+      word().t += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else word().t += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      word();
+      continue;
+    }
+    if (";|&()\n".includes(ch)) {
+      end();
+      out.push({ t: ch, sep: true });
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      end();
+      continue;
+    }
+    word().t += ch;
+  }
+  end();
+  return { words: out, subs };
+}
 
-// Whether any part of a command, chained, prefixed or quoted inside another shell, runs a review state subcommand.
+function matchParen(text, from) {
+  let depth = 1;
+  for (let i = from + 1; i < text.length; i++) {
+    if (text[i] === "(") depth++;
+    if (text[i] === ")" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+const WRAPPERS = new Set(["command", "exec", "nohup", "time", "builtin", "sudo"]);
+const SHELLS = /(^|\/)(sh|bash|zsh|dash|ksh)$/;
+
+// Every simple command a command line runs, `sh -c '…'`, `eval`, `$(…)` and backticks included, with environment assignments and
+// wrappers (env, nohup, xargs, …) taken off; `fed` marks a command xargs feeds more arguments to.
+export function simpleCommands(cmd, depth = 0) {
+  if (depth > 4) return [];
+  const { words: all, subs } = shellWords(cmd);
+  const out = subs.flatMap((x) => simpleCommands(x, depth + 1));
+  let group = [];
+  const flush = () => {
+    let argv = group;
+    let fed = false;
+    group = [];
+    for (;;) {
+      while (argv.length && /^[A-Za-z_]\w*=/.test(argv[0].t)) argv = argv.slice(1);
+      const head = argv[0]?.t;
+      if (head === "env") {
+        argv = argv.slice(1);
+        while (argv.length && (argv[0].t.startsWith("-") || /^[A-Za-z_]\w*=/.test(argv[0].t))) argv = argv.slice(["-u", "--unset", "-C", "--chdir", "-S"].includes(argv[0].t) ? 2 : 1);
+      } else if (WRAPPERS.has(head)) argv = argv.slice(1);
+      else if (head === "nice" || head === "timeout") {
+        argv = argv.slice(1);
+        while (argv.length && argv[0].t.startsWith("-")) argv = argv.slice(argv[0].t === "-n" ? 2 : 1);
+        if (head === "timeout") argv = argv.slice(1);
+      } else if (head === "xargs") {
+        fed = true;
+        argv = argv.slice(1);
+        while (argv.length && argv[0].t.startsWith("-")) argv = argv.slice(["-I", "-n", "-P", "-L", "-d", "-E", "-s"].includes(argv[0].t) ? 2 : 1);
+      } else break;
+    }
+    if (!argv.length) return;
+    if (SHELLS.test(argv[0].t)) {
+      const c = argv.findIndex((w) => /^-\w*c\w*$/.test(w.t));
+      if (c >= 0 && argv[c + 1]) out.push(...simpleCommands(argv[c + 1].t, depth + 1));
+      return;
+    }
+    if (argv[0].t === "eval") return void out.push(...simpleCommands(argv.slice(1).map((w) => w.t).join(" "), depth + 1));
+    out.push({ argv, fed });
+  };
+  for (const w of all) {
+    if (w.sep) flush();
+    else group.push(w);
+  }
+  flush();
+  return out;
+}
+
+const RUNTIME = /(^|\/)(node|bun|deno)$/;
+
+// The script word a simple command runs (the program itself, or the first argument of node, bun or deno), or -1.
+function scriptAt(argv) {
+  if (!argv.length) return -1;
+  if (!RUNTIME.test(argv[0].t)) return 0;
+  for (let i = 1; i < argv.length; i++) {
+    const t = argv[i].t;
+    if (argv[i].dyn || !t.startsWith("-")) return i;
+    if (["-r", "--require", "--import", "--loader", "--input-type"].includes(t)) i++;
+  }
+  return -1;
+}
+
+// Whether a command runs a script matching `test`; `node -e` code is read as a command line too.
+export function runsScript(cmd, test) {
+  return simpleCommands(cmd).some(({ argv }) => {
+    const i = scriptAt(argv);
+    return i >= 0 && !argv[i].dyn && test(argv[i].t);
+  });
+}
+
+// Whether any command it runs is `console.mjs review` with a state subcommand, or one whose subcommand cannot be known before it runs
+// (a variable, a substitution, arguments xargs adds). Only running it counts: reading, searching or editing console.mjs does not.
 export function stateCommandIn(cmd) {
-  const w = words(cmd);
-  if (w.some((x, i) => (isConsoleScript(x) || /^\$/.test(x)) && w[i + 1] === "review" && STATE_SUBCOMMANDS.has(w[i + 2]))) return true;
-  return STATE_TEXT.test(String(cmd));
+  return simpleCommands(cmd).some(({ argv, fed }) => {
+    if (RUNTIME.test(argv[0]?.t ?? "")) {
+      const e = argv.findIndex((w) => ["-e", "--eval", "-p", "--print"].includes(w.t));
+      if (e >= 0 && argv[e + 1] && stateCommandIn(argv[e + 1].t)) return true;
+    }
+    const i = scriptAt(argv);
+    if (i < 0 || !(argv[i].dyn || isConsoleScript(argv[i].t)) || argv[i + 1]?.t !== "review") return false;
+    for (let j = i + 2; j < argv.length; j++) {
+      const w = argv[j];
+      if (w.dyn) return true;
+      if (w.t.startsWith("--")) {
+        if (!w.t.includes("=")) j++;
+        continue;
+      }
+      if (w.t.startsWith("-")) continue;
+      return STATE_SUBCOMMANDS.has(w.t);
+    }
+    return fed;
+  });
 }
 
 // Read-only tails a review command may carry: stderr folded in and a pipe into cat, head or tail.
@@ -501,29 +676,6 @@ function redirects(cmd) {
   return false;
 }
 
-const STATE_ANY = new RegExp(`(?:^|[^\\w-])(?:${STATE_WORDS})(?![\\w-])`);
-const REVIEW_SCRIPT = /console\.mjs|review-cli\.mjs/;
-const SPOOF = /--session|CLAUDE_CODE_SESSION_ID/;
-
-// The only review commands a child session runs: add, correct and sheet (sheet may carry a read-only tail), straight from this plugin's
-// console.mjs, nothing chained, redirected or substituted, and no caller identity of its own.
-function childReviewForm(cmd, cwd) {
-  const solo = withoutSafeTail(cmd);
-  const w = words(solo);
-  if (!(w[0] === "node" || /(^|\/)node$/.test(w[0] ?? "")) || !pluginConsole(w[1] ?? "", cwd) || w[2] !== "review") return false;
-  if (chained(solo) || redirects(solo)) return false;
-  if (w[3] === "sheet") return true;
-  return (w[3] === "add" || w[3] === "correct") && solo === String(cmd).trimEnd();
-}
-
-// Whether a child session's command may reach a review state subcommand or pass someone's identity: the review script and a state word
-// (or an identity) anywhere, read with quotes and backslashes taken out, outside the fixed forms above.
-export function childReviewProblem(cmd, cwd = process.cwd()) {
-  const flat = String(cmd).replace(/\\/g, "").replace(/["']/g, "");
-  if (!REVIEW_SCRIPT.test(flat)) return false;
-  if (SPOOF.test(flat)) return true;
-  return STATE_ANY.test(flat) && !childReviewForm(cmd, cwd);
-}
 
 // Which gate a command hits: `approve` / `confirm-spec` as the word after a flow script, `handoff-files.mjs` anywhere; `reopen` is noted for the marker.
 // `review` is set when the command is console.mjs review alone (or with a read-only tail), which the gate always lets through (its state
@@ -542,8 +694,8 @@ export function classifyCommand(cmd, { cwd = process.cwd() } = {}) {
       if (w[i + 1] === "confirm-spec") gate = gate ?? "confirm-spec";
       if (w[i + 1] === "reopen") reopen = true;
     }
-    if (/(^|\/)handoff-files\.mjs$/.test(w[i])) gate = gate ?? "handoff-files";
   }
+  if (runsScript(cmd, (t) => /(^|\/)handoff-files\.mjs$/.test(t))) gate = gate ?? "handoff-files";
   return { gate, review: null, reopen };
 }
 
