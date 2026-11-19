@@ -256,8 +256,10 @@ function beforeKeepalive(entries, at) {
   return at;
 }
 
+// A stop that asks: a question mark, or the opening rules' 「等你：…」 last line.
 export function isQuestion(text) {
-  return proseLines(text).some((l) => /[?？]/.test(l));
+  const lines = proseLines(text);
+  return lines.some((l) => /[?？]/.test(l)) || /^[\s*_-]*等你[:：]/.test(lines.filter((l) => l.trim()).at(-1) ?? "");
 }
 
 export function lastAssistantText(entries) {
@@ -878,6 +880,8 @@ async function stop(input) {
         status: "writing",
         oldHandle: term.handle,
         oldPaneKey: term.paneKey,
+        reply: last,
+        question: st.pending.question,
         cwd: input.cwd,
         percent: st.pending.percent,
         cache,

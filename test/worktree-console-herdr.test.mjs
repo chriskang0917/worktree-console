@@ -529,6 +529,33 @@ test("auto-handoff hook 在 herdr：同工作區開新分頁接手、送 /goal�
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).panes.some((p) => p.pane_id === "w3:p1"), false, "舊分頁關掉");
 });
 
+test("auto-handoff hook：停在「等你：…」（沒有問號）時照樣算待答題，交棒事件記下原回覆，新 session 被要求先原樣重問", async () => {
+  const dir = fs.mkdtempSync(path.join(tmp, "ah-wait-"));
+  const projects = path.join(dir, "projects");
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ panes: [{ pane_id: "w3:p1", tab_id: "w3:t1", workspace_id: "w3", cwd: app() }], agents: [] }));
+  const home = path.join(dir, "handoff");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ enabled: true, ratio: 0.4 }));
+  const transcript = path.join(dir, "t.jsonl");
+  const reply = "push 被擋，沒有繞過。\n\n等你：解鎖 SSH 金鑰後跑 push 指令";
+  const entries = [
+    { type: "user", message: { role: "user", content: "做事" } },
+    { type: "assistant", message: { role: "assistant", model: "claude-haiku-4-5", stop_reason: "end_turn", usage: { input_tokens: 90000 }, content: [{ type: "text", text: reply }] } },
+  ];
+  fs.writeFileSync(transcript, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const env = { ...clean(), HERDR_ENV: "1", HERDR_PANE_ID: "w3:p1", HERDR_WORKSPACE_ID: "w3", HERDR_BIN: fakeHerdr, FAKE_HERDR_DIR: dir, FAKE_HERDR_TRANSCRIPTS: projects, CLAUDE_PROJECTS_DIR: projects, AUTO_HANDOFF_HOME: home, CLAUDE_CONFIG_DIR: path.join(dir, "claude"), WORKTREE_CONSOLE_HOME: path.join(dir, "console"), AUTO_HANDOFF_POLL_MS: "10", AUTO_HANDOFF_DELIVER_MS: "500", AUTO_HANDOFF_FIRST_TURN_MS: "500", AUTO_HANDOFF_GOAL_MS: "500" };
+  const stop = () => spawnSync(process.execPath, [autoHandoff, "stop"], { input: JSON.stringify({ session_id: "sess-w", transcript_path: transcript, cwd: app(), last_assistant_message: reply }), encoding: "utf8", env });
+  assert.match(JSON.parse(stop().stdout).reason, /原文附在交棒說明最後/);
+  const event = JSON.parse(fs.readFileSync(path.join(home, "events", "sess-w.json"), "utf8"));
+  assert.equal(event.reply, reply);
+  assert.equal(event.question, reply);
+  fs.mkdirSync(path.join(home, "notes"), { recursive: true });
+  fs.writeFileSync(path.join(home, "notes", "sess-w.md"), "# 交棒說明\n");
+  stop();
+  const sends = fs.readFileSync(path.join(dir, "sends.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  assert.match(sends[0].text, /待答問題（原文）/);
+});
+
 test("auto-handoff hook 在 Orca、herdr、Herdr app 以外：說明只支援這三種，並附交棒說明路徑", () => {
   const dir = fs.mkdtempSync(path.join(tmp, "ah-none-"));
   const home = path.join(dir, "handoff");

@@ -290,7 +290,9 @@ export function readKeepalive() {
 export function writeKeepalive(state) {
   try {
     fs.mkdirSync(consoleHome(), { recursive: true });
-    fs.writeFileSync(path.join(consoleHome(), KEEPALIVE), JSON.stringify(state, null, 2));
+    const file = path.join(consoleHome(), KEEPALIVE);
+    fs.writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(state, null, 2));
+    fs.renameSync(`${file}.${process.pid}.tmp`, file);
   } catch {}
 }
 
@@ -318,6 +320,27 @@ export function applyKeepalive(rows, state = readKeepalive()) {
       if (["busy", "done", "waiting"].includes(s.status.kind) && !s.status.menu && !menuOpen(s.agent) && rec.status) {
         s.realStatus = s.status;
         s.status = { ...rec.status };
+      }
+    }
+  }
+}
+
+// A handoff that started on a stop waiting for you keeps showing that stop: on the old tab when the handoff failed, until you reply there;
+// on the new tab until you reply to it, unless it is waiting on you with a stop of its own.
+export function applyHandoff(rows, events = handoffEvents()) {
+  for (const ev of events) {
+    if (!ev.reply || (ev.status !== "failed" && ev.status !== "done")) continue;
+    for (const row of rows) {
+      for (const s of row.sessions) {
+        if (!s.agent || s.archived || !["done", "waiting"].includes(s.status?.kind) || s.status.menu || menuOpen(s.agent)) continue;
+        const prompt = typedPrompt(String(s.agent.prompt ?? "")).trim();
+        const stopAt = s.agent.stateStartedAt;
+        const old = ev.status === "failed" && ev.oldPaneKey && s.paneKey === ev.oldPaneKey && typeof stopAt === "number" && stopAt <= (ev.updatedAt ?? 0);
+        const taken = ev.status === "done" && ev.question && ev.newPaneKey && s.paneKey === ev.newPaneKey
+          && (takeoverPrompt(prompt) || (!!ev.goal && prompt.startsWith("/goal ") && !endingOf(s.status.text)?.wait));
+        if (!old && !taken) continue;
+        s.realStatus ??= s.status;
+        s.status = { kind: ev.question ? "waiting" : "done", text: taken ? ev.question : ev.reply };
       }
     }
   }
@@ -1326,6 +1349,7 @@ export function collect(repoArg = null, { withStage = true, withTitles = false, 
   for (const r of rows) r.ticket = r.linkedId ?? ticketFromBranch(r.branch, keys)?.ticket ?? null;
   applyArchive(rows, manager.name);
   applyKeepalive(rows);
+  applyHandoff(rows);
   applyDisposable(rows);
 
   const data = { repo: launch, main: launch, launchRepo: launchRepo?.name ?? (launch ? path.basename(launch) : null), repos, rows, self, keys, terminals: terminalRows };

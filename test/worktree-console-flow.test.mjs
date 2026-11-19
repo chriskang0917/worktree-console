@@ -797,3 +797,37 @@ test("結尾行不含換行：建議裡有換行時 guide 印成一行，Stop ho
   assert.equal(handoff.endingProblem(input, [{ type: "user", message: { content: "回 a" } }], opts), null);
   focus.saveFocus(emptyFocus());
 });
+
+// --- 交棒前後的原題 ---
+
+test("交棒前後的原題：交棒失敗的舊分頁、還沒貼回原題的新分頁都照原題列入等待；使用者回過就不再蓋", () => {
+  const reply = "push 被擋。\n\n等你：解鎖 SSH 金鑰後跑 push 指令";
+  const sess = (paneKey, text, stopAt, prompt) => ({ handle: paneKey, paneKey, status: { kind: "done", text }, agent: { stateStartedAt: stopAt, prompt } });
+  const rows = (...sessions) => [{ path: "/nope", sessions }];
+  const failed = { status: "failed", oldHandle: "w1:p1", oldPaneKey: "w1:p1", reply, question: reply, updatedAt: 200 };
+  const old = sess("w1:p1", "交棒說明寫好了。", 150, "修 7 條");
+  lib.applyHandoff(rows(old), [failed]);
+  assert.equal(old.status.text, reply);
+  assert.equal(line.listedAs(old), "waiting");
+  const answered = sess("w1:p1", "推上去了。", 300, "推好了");
+  lib.applyHandoff(rows(answered), [failed]);
+  assert.equal(answered.status.text, "推上去了。", "失敗後使用者回過、又停下了");
+
+  const done = { status: "done", oldPaneKey: "w1:p1", newHandle: "w1:p2", newPaneKey: "w1:p2", reply, question: reply, updatedAt: 200 };
+  const fresh = sess("w1:p2", "依交棒說明：push 被擋，下一步是等你解鎖。", 250, `${handoff.TAKEOVER_HEAD}先完整讀 x.md`);
+  lib.applyHandoff(rows(fresh), [done]);
+  assert.equal(fresh.status.text, reply);
+  assert.equal(line.listedAs(fresh), "waiting");
+  const goalOwn = sess("w1:p2", "做了一半。\n\n等你：看畫面", 260, "/goal 完成 X");
+  lib.applyHandoff(rows(goalOwn), [{ ...done, goal: "完成 X" }]);
+  assert.equal(goalOwn.status.text, "做了一半。\n\n等你：看畫面", "自己在等使用者就照它的");
+  const goalOn = sess("w1:p2", "繼續做下一步。", 260, "/goal 完成 X");
+  lib.applyHandoff(rows(goalOn), [{ ...done, goal: "完成 X" }]);
+  assert.equal(goalOn.status.text, reply);
+  const replied = sess("w1:p2", "好。", 270, "解鎖了");
+  lib.applyHandoff(rows(replied), [done]);
+  assert.equal(replied.status.text, "好。");
+  const busy = { ...sess("w1:p2", "", 250, `${handoff.TAKEOVER_HEAD}x`), status: { kind: "busy", text: "" } };
+  lib.applyHandoff(rows(busy), [done]);
+  assert.equal(busy.status.kind, "busy");
+});
