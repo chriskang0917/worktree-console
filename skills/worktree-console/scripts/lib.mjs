@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clip, isConsoleSession, readEvents, transcriptFor, writeManaged } from "./log.mjs";
-import { CACHE_HANDOFF_TEXT, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../../../hooks/auto-handoff.mjs";
+import { CACHE_HANDOFF_TEXT, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "../../../hooks/keepalive-text.mjs";
 import { maybeTerminals, terminals } from "./terminals.mjs";
 import { stopDigest } from "./summary-read.mjs";
 import { endingOf, missedEnding } from "./ending.mjs";
@@ -277,7 +277,7 @@ function applyArchive(rows, source) {
   }
 }
 
-export { KEEPALIVE_REPLY, KEEPALIVE_TEXT } from "../../../hooks/auto-handoff.mjs";
+export { KEEPALIVE_REPLY, KEEPALIVE_TEXT } from "../../../hooks/keepalive-text.mjs";
 const KEEPALIVE = "keepalive.json";
 
 export function readKeepalive() {

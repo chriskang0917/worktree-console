@@ -1026,3 +1026,26 @@ test("第二輪 7：反斜線引號不吃掉導向；別的 console.mjs 不算 r
   ];
   assert.equal(handoff.endingMissing({ session_id: "s-c", last_assistant_message: "收到", stop_hook_active: false }, compacted, { managed: true, home }), null);
 });
+
+// --- /goal 不推被擋下等審核的 session ---
+
+test("/goal 進行中、這個 worktree 被攔截點擋下等審核、回覆以「等你：」結尾時，Stop hook 回 continue: false 停下，不讓 /goal 一直推它空轉；沒擋下或沒有 /goal 時照舊", () => {
+  const dir = reviewRepo("goal-spin");
+  const wt = review.worktreeOf(dir);
+  const goal = { type: "attachment", attachment: { type: "goal_status", met: false, condition: "完成 verify" } };
+  const stop = (name, { withGoal = true, last = "等你：審核那張審核單（建議第 1 件選「留著」）" } = {}) => {
+    const transcript = path.join(tmp, `${name}.jsonl`);
+    fs.writeFileSync(transcript, [{ type: "user", uuid: `u-${name}`, message: { content: "/goal 完成 verify" } }, ...(withGoal ? [goal] : []), { type: "assistant", message: { content: [{ type: "text", text: last }] } }].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const r = spawnSync(process.execPath, [path.join(root, "hooks/auto-handoff.mjs"), "stop"], { input: JSON.stringify({ session_id: `s-${name}`, transcript_path: transcript, cwd: dir, last_assistant_message: last, stop_hook_active: true }), encoding: "utf8", env: process.env });
+    return r.stdout ? JSON.parse(r.stdout) : null;
+  };
+  assert.equal(stop("free"), null, "沒有待審的件");
+  review.addFilesItem(wt, ["skills/define-goal/scripts/goal-text.mjs"], { session: "s-held", stop: "define-goal 的 handoff-files.mjs" });
+  assert.equal(review.gated(review.stateOf(wt)), true);
+  review.append(wt, { event: "blocked", session: "s-held", gate: "handoff-files" });
+  const held = stop("held");
+  assert.equal(held?.continue, false);
+  assert.match(held.stopReason, /審核/);
+  assert.equal(stop("nogoal", { withGoal: false }), null, "沒有 /goal");
+  assert.equal(stop("working", { last: "改好了，接著跑測試。" })?.continue, undefined, "沒在等你");
+});

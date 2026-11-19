@@ -8,7 +8,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readManaged } from "../skills/worktree-console/scripts/log.mjs";
 import { endingOf, markMissed } from "../skills/worktree-console/scripts/ending.mjs";
-import { KEEPALIVE_REPLY, KEEPALIVE_TEXT } from "./keepalive-text.mjs";
+import { CACHE_HANDOFF_TEXT, KEEPALIVE_REPLY, KEEPALIVE_TEXT, TAKEOVER_HEAD } from "./keepalive-text.mjs";
+
+export { CACHE_HANDOFF_TEXT, TAKEOVER_HEAD };
 
 const SMALL_WINDOW = 200_000;
 const LARGE_WINDOW = 1_000_000;
@@ -24,9 +26,7 @@ const ENDED = new Set(["end_turn", "stop_sequence", "max_tokens", "refusal"]);
 const BACKGROUND_LAUNCHED = /^(?:Workflow launched in background\.|Async agent launched successfully\.)/;
 const TASK_ENDED = new Set(["completed", "failed", "killed", "stopped"]);
 const SELF = fileURLToPath(import.meta.url);
-export const CACHE_HANDOFF_TEXT = "（中控台自動交棒，不是使用者的新指令）你的 prompt 快取快到期了，接下來會換新 session 接手：先不要做任何事，直接結束這一輪。";
 export { KEEPALIVE_REPLY, KEEPALIVE_TEXT };
-export const TAKEOVER_HEAD = "接手交棒：";
 export const CONSOLE_NAME = "console";
 
 export function handoffHome() {
@@ -431,6 +431,26 @@ let held = false;
 function block(reason) {
   held = true;
   process.stdout.write(JSON.stringify({ decision: "block", reason }));
+}
+
+// Ends the turn for good: a /goal evaluator that would push the session on again is overruled (Claude Code pauses the goal).
+function halt(reason) {
+  held = true;
+  process.stdout.write(JSON.stringify({ continue: false, stopReason: reason }));
+}
+
+export const REVIEW_HALT = "等使用者審核：這個 worktree 有還沒審的件，攔截點已擋下，/goal 先不推進；審完會收到「審核完成」的訊息再接著做。";
+
+// A /goal session that stopped waiting on you while its worktree has items nobody reviewed: pushing it on only repeats the question.
+export async function reviewHold(input, entries) {
+  if (!activeGoal(entries) || !endingOf(String(input.last_assistant_message ?? lastAssistantText(entries)))?.wait) return false;
+  try {
+    const { gated, stateOf, worktreeOf } = await import("../skills/worktree-console/scripts/review.mjs");
+    const wt = input.cwd ? worktreeOf(input.cwd) : null;
+    return !!wt && gated(stateOf(wt));
+  } catch {
+    return false;
+  }
 }
 
 function recordTurnEnd(input) {
@@ -891,6 +911,7 @@ async function stop(input) {
   let st = readJson(stateFile(session), {});
   const entries = readEntries(input.transcript_path, true);
   if (!interactive(entries)) return;
+  if (await reviewHold(input, entries)) return halt(REVIEW_HALT);
   const trigger = manualTrigger(entries);
   const cacheHit = cacheTrigger(entries);
   const cache = !!cacheHit && cacheHit.id !== st.consumed;
