@@ -955,6 +955,21 @@ test("第二輪 1a：審核狀態子指令拿不到或對不上呼叫者身分�
   assert.equal(run(["pass", "--n", "1"], { CLAUDE_CODE_SESSION_ID: "con-s" }).status, 0, "中控台");
 });
 
+// A function test, not a defence: a child that unsets its shell id and passes the console's --session gets the same result (PR #58 已知限制).
+test("焦點面板功能：面板沒有 shell 身分、帶自己的 --session 能跑審核狀態子指令", () => {
+  const dir = reviewRepo("panel-fn");
+  const wt = review.worktreeOf(dir);
+  review.addItem(wt, item);
+  const projects = fs.mkdtempSync(path.join(tmp, "projects-panel-"));
+  fs.mkdirSync(path.join(projects, "-c"));
+  fs.writeFileSync(path.join(projects, "-c", "con-p.jsonl"), `${JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "Base directory for this skill: /x/skills/worktree-console\n\n# Worktree Console" }] } })}\n`);
+  const env = { ...process.env, CLAUDE_PROJECTS_DIR: projects };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const r = spawnSync(process.execPath, [CONSOLE_CLI, "review", "pass", "--n", "1", "--session", "con-p", "--path", dir], { encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(review.stateOf(wt).items[0].status, "passed");
+});
+
 test("第二輪 2：子 session 貼出審核單、被要求補結尾行後最後一則只剩「等你：…」，使用者在分頁回答照樣解鎖", async () => {
   const dir = reviewRepo("tab-ending");
   const wt = review.worktreeOf(dir);
