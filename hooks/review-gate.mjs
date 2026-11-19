@@ -3,6 +3,7 @@
 // and edits inside the worktree while it has answers nobody reviewed; PostToolUse locks a session whose Bash changed the worktree meanwhile.
 // When it cannot read the records it denies and says why rather than letting the call through.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -26,6 +27,7 @@ import {
   trustedSince,
   worktreeOf,
 } from "../skills/worktree-console/scripts/review.mjs";
+import { isConsole as isConsoleHandle } from "../skills/worktree-console/scripts/lib.mjs";
 import { isConsoleSession } from "../skills/worktree-console/scripts/log.mjs";
 import { URGENT } from "../skills/worktree-console/scripts/urgency.mjs";
 
@@ -198,14 +200,45 @@ function findSpecs(root, depth = 0) {
   return out;
 }
 
-// The rules every child session starts with.
-export function openingRules() {
+// The tab this session runs in, the way console-log reads it.
+function handleOfTab() {
+  if (process.env.HERDR_ENV === "1") return process.env.HERDR_PANE_ID || null;
+  return process.env.HC_TERMINAL_ID || process.env.ORCA_TERMINAL_HANDLE || null;
+}
+
+// A console handing over: the new tab starts before swapConsole puts its handle in consoles.json, so the handoff event says so first.
+function takeoverTo(handle) {
+  const dir = path.join(process.env.AUTO_HANDOFF_HOME || path.join(os.homedir(), ".config", "claude-handoff"), "events");
+  try {
+    return fs.readdirSync(dir).some((f) => {
+      try {
+        const ev = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+        return ev.isConsole === true && ev.status === "switching" && ev.newHandle === handle;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+// Exported for tests: whether this SessionStart is a console's. Only input.session_id counts; with no handle, the two handle checks fail.
+export function consoleStart(input, { consoleCheck = isConsoleSession } = {}) {
+  const handle = handleOfTab();
+  if (handle && input.source !== "startup" && isConsoleHandle(handle)) return true;
+  if (handle && takeoverTo(handle)) return true;
+  return input.session_id ? consoleCheck(input.session_id) : false;
+}
+
+// The rules every child session starts with; a console gets all but the ending line, its ending is what `console.mjs guide` prints.
+export function openingRules({ console: forConsole = false } = {}) {
   return [
     "【中控台規則】",
     `1. 緊急名單：碰到下面 10 類一律停下問使用者，不自己決定：${URGENT.map((u, i) => `${i + 1}. ${u === "不可逆或對外動作" ? "不可逆或對外動作（推 main、force push、合併、刪資料或 branch、寫 Linear／Slack、改遠端設定）" : u === "代價高的決定" ? "代價高的決定（方向、範圍、資料寫入、權限）" : u}`).join("；")}。一則訊息只要有一題屬於這 10 類，整則都等使用者回。`,
     `2. 其他自己推測的決定照做，並用這個指令記下來，進入實作前會集中給使用者審：node "${CONSOLE}" review add --question "<題目>" --plan "<當前方案>" --basis "沒有前例" 或 --source "<前例出處>" --impact "<影響範圍>" --by child --stop "<對應停點>"。每欄一句白話、40 字內、不放程式碼；畫面有變的決定加 --before <改前截圖> --after <改後截圖>（本機 dev server 截的），截不到時加 --prototype <原型截圖>；寫錯了用 review correct --n <第幾件> 更正。`,
     `3. CLAUDE.md〈停點〉的五個條件都成立，就直接做，不在結尾停下等「開工」「OK」「繼續」。碰到第 1 條的任一類照舊先停；「送出並合併」一定等使用者本人說。`,
-    `4. 每次停下，回覆最後一行固定寫「等你：<要使用者做什麼>」或「已完成」，單獨一行、後面不接別的字；中控台靠這行判斷你在不在等使用者。`,
+    ...(forConsole ? [] : [`4. 每次停下，回覆最後一行固定寫「等你：<要使用者做什麼>」或「已完成」，單獨一行、後面不接別的字；中控台靠這行判斷你在不在等使用者。`]),
     `被攔截點擋下時，照擋下訊息跑 review sheet、把審核單原樣貼出，然後停下等使用者審核。`,
   ].join("\n");
 }
@@ -219,7 +252,7 @@ const main = () => {
     if (!out) beforeBash(input);
   }
   if (mode === "post-tool-use") out = postToolUse(input);
-  if (mode === "session-start" && worktreeOf(input.cwd ?? process.cwd())) out = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: openingRules() } };
+  if (mode === "session-start" && worktreeOf(input.cwd ?? process.cwd())) out = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: openingRules({ console: consoleStart(input) }) } };
   if (out) process.stdout.write(JSON.stringify(out));
 };
 
