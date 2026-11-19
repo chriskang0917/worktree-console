@@ -307,6 +307,56 @@ test("SessionStart 對每個子 session 加進四條規則：10 類緊急名單�
   assert.equal(outside.stdout, "", "不在 git 裡不加");
 });
 
+// A tab's own SessionStart: no console identity in the env, only the tab handle (HERDR_PANE_ID) and what is on disk.
+function startFrom(input, { handle = "pane-x", registry = null, events = [], withProject = false } = {}) {
+  const { dir } = repo();
+  const home = process.env.WORKTREE_CONSOLE_HOME;
+  const evDir = path.join(process.env.AUTO_HANDOFF_HOME, "events");
+  fs.rmSync(path.join(home, "consoles.json"), { force: true });
+  fs.rmSync(evDir, { recursive: true, force: true });
+  if (registry) {
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, "consoles.json"), JSON.stringify(registry));
+  }
+  fs.mkdirSync(evDir, { recursive: true });
+  events.forEach((e, i) => fs.writeFileSync(path.join(evDir, `e${i}.json`), JSON.stringify(e)));
+  const base = { ...process.env, ...(withProject ? asConsole : {}) };
+  if (handle) Object.assign(base, { HERDR_ENV: "1", HERDR_PANE_ID: handle });
+  const r = spawnSync(process.execPath, [HOOK, "session-start"], { input: JSON.stringify({ cwd: dir, session_id: "s", ...input }), encoding: "utf8", env: base });
+  return JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+}
+const ENDING = "每次停下，回覆最後一行固定寫";
+const consoleOk = (ctx) => {
+  assert.ok(!ctx.includes(ENDING));
+  assert.ok(ctx.includes("1. 緊急名單"));
+  assert.ok(ctx.includes("3. CLAUDE.md〈停點〉"));
+  assert.ok(ctx.includes("被攔截點擋下時"));
+};
+
+test("中控台的 SessionStart 不給第 4 條：不是 startup 且分頁在 consoles.json", () => {
+  consoleOk(startFrom({ source: "compact" }, { registry: ["pane-x"] }));
+  consoleOk(startFrom({}, { registry: ["pane-x"] }));
+});
+
+test("中控台的 SessionStart 不給第 4 條：交棒事件說這個分頁是接手的中控台（switching、newHandle 相符）", () => {
+  consoleOk(startFrom({ source: "startup" }, { events: [{ isConsole: true, status: "switching", newHandle: "pane-x" }] }));
+});
+
+test("中控台的 SessionStart 不給第 4 條：input.session_id 的對話紀錄已載入 worktree-console skill", () => {
+  consoleOk(startFrom({ source: "compact", session_id: "test-console-session" }, { handle: null, withProject: true }));
+});
+
+test("子 session 仍拿到第 4 條：交棒事件是 done 或 failed、沒有 handle 的無 newHandle 事件、startup 時 handle 在 consoles.json、只有環境變數的中控台身分", () => {
+  for (const status of ["done", "failed"]) {
+    assert.ok(startFrom({ source: "startup" }, { events: [{ isConsole: true, status, newHandle: "pane-x" }] }).includes(ENDING), status);
+  }
+  assert.ok(startFrom({}, { handle: null, events: [{ isConsole: true, status: "switching" }] }).includes(ENDING), "沒有 handle");
+  assert.ok(startFrom({}, { handle: null, registry: ["pane-x"] }).includes(ENDING), "沒有 handle 不看 consoles.json");
+  assert.ok(startFrom({ source: "startup" }, { registry: ["pane-x"] }).includes(ENDING), "startup 不看 consoles.json");
+  assert.ok(startFrom({ session_id: undefined }, { handle: null, withProject: true }).includes(ENDING), "沒有 session_id 不退回環境變數");
+  assert.ok(startFrom({ isConsole: false }, { events: [{ isConsole: false, status: "switching", newHandle: "pane-x" }] }).includes(ENDING), "非中控台的交棒");
+});
+
 const awaitImport = await import("../skills/worktree-console/scripts/review-cli.mjs");
 
 test("範例：前端畫面附改前改後截圖（截不到時附原型截圖並標「這是原型」）；複雜邏輯附 mermaid 流程圖；簡單行為寫一個「如果…，會…」情境", () => {
