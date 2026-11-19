@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.25.2
+
+- fix(focus): keep the review card until Enter sends the result, and send each discussion once
+
 ## 1.25.1
 
 - fix(hooks): drop the ending-line rule from a console's SessionStart rules
