@@ -729,7 +729,7 @@ function userTexts(entry) {
 }
 
 function instructionText(entry) {
-  if (entry.type !== "user" || entry.isMeta) return null;
+  if (entry.type !== "user" || entry.isMeta || entry.isCompactSummary) return null;
   const content = entry.message?.content;
   const text = typeof content === "string" ? content : Array.isArray(content) ? content.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n") : "";
   if (!text.trim() || /^<(task-notification|local-command-)/.test(text.trimStart())) return null;

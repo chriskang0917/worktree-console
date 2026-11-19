@@ -7,7 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeProjectDir, pendingItems, turnEntry } from "../skills/worktree-console/scripts/lib.mjs";
+import { KEEPALIVE_TEXT, claudeProjectDir, lastInstruction, pendingItems, turnEntry } from "../skills/worktree-console/scripts/lib.mjs";
 import { terminalKind } from "../skills/worktree-console/scripts/terminals.mjs";
 import { transcriptState } from "../skills/worktree-console/scripts/herdr.mjs";
 import { emptyFocus, focusStep } from "../skills/worktree-console/scripts/focus.mjs";
@@ -553,6 +553,24 @@ test("transcriptState：選單、工具結果、回完話、被中斷、還沒�
   assert.equal(transcriptState([user("a"), call("t", "Bash", {}), result("t"), user("[Request interrupted by user]", 3)]).phase, "replied");
   assert.equal(transcriptState([{ type: "attachment" }]).phase, "fresh");
   assert.equal(transcriptState([said("x")], { truncated: true }).phase, "replied");
+});
+
+test("transcriptState：閒置時被壓縮，摘要不算新指令，停下的回覆與續命訊息照舊", () => {
+  const compacted = (n) => [
+    { type: "system", subtype: "compact_boundary", timestamp: ts(n) },
+    { type: "user", isCompactSummary: true, timestamp: ts(n), message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context." } },
+    { type: "system", subtype: "informational", timestamp: ts(n) },
+  ];
+  const plain = transcriptState([user("修 7 條"), said("push 被擋。\n\n等你：解鎖 SSH 金鑰後跑 push 指令"), ...compacted(5)]);
+  assert.equal(plain.phase, "replied");
+  assert.equal(plain.final, "push 被擋。\n\n等你：解鎖 SSH 金鑰後跑 push 指令");
+  assert.equal(plain.prompt, "修 7 條");
+  assert.equal(plain.at, Date.parse(ts(1)));
+  const kept = [user("修 7 條"), said("等你：解鎖 SSH 金鑰", 1), user(KEEPALIVE_TEXT, 3), said("收到", 4), ...compacted(5)];
+  const st = transcriptState(kept);
+  assert.equal(st.final, "收到");
+  assert.equal(st.prompt, KEEPALIVE_TEXT, "續命訊息還是最後一則指令，畫面照舊顯示原題");
+  assert.equal(lastInstruction(kept), KEEPALIVE_TEXT);
 });
 
 test("待回覆與專注排隊：⚠️ 排在 🔐 前面", () => {
