@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.25.2
+
+- fix(focus): keep the review card until Enter sends the result, and send each discussion once
+
 ## 1.25.0
 
 - feat: scripted status band above the prompt, no auto-switching, scripted reply endings and review unlock elsewhere
