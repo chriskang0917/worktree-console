@@ -441,13 +441,15 @@ function halt(reason) {
 
 export const REVIEW_HALT = "等使用者審核：這個 worktree 有還沒審的件，攔截點已擋下，/goal 先不推進；審完會收到「審核完成」的訊息再接著做。";
 
-// A /goal session that stopped waiting on you while its worktree has items nobody reviewed: pushing it on only repeats the question.
+// A /goal session that stopped waiting on you after the gate held it back this round on items nobody reviewed: pushing it on only repeats the question.
 export async function reviewHold(input, entries) {
   if (!activeGoal(entries) || !endingOf(String(input.last_assistant_message ?? lastAssistantText(entries)))?.wait) return false;
   try {
     const { gated, stateOf, worktreeOf } = await import("../skills/worktree-console/scripts/review.mjs");
     const wt = input.cwd ? worktreeOf(input.cwd) : null;
-    return !!wt && gated(stateOf(wt));
+    if (!wt) return false;
+    const st = stateOf(wt);
+    return gated(st) && st.blocked.some((b) => b.round === st.round);
   } catch {
     return false;
   }
@@ -911,11 +913,11 @@ async function stop(input) {
   let st = readJson(stateFile(session), {});
   const entries = readEntries(input.transcript_path, true);
   if (!interactive(entries)) return;
-  if (await reviewHold(input, entries)) return halt(REVIEW_HALT);
   const trigger = manualTrigger(entries);
   const cacheHit = cacheTrigger(entries);
   const cache = !!cacheHit && cacheHit.id !== st.consumed;
   const manual = !cache && !!trigger && trigger !== st.consumed;
+  if (!st.pending && !manual && !cache && (await reviewHold(input, entries))) return halt(REVIEW_HALT);
   if (!st.pending && !manual && !cache) {
     const handle = terminalOf()?.handle;
     const problem = endingProblem(input, entries, { isConsole: !!handle && isRegisteredConsole(handle) });

@@ -80,7 +80,7 @@ export function preToolUse(input, { consoleCheck = isConsoleSession } = {}) {
       return deny(blockedText("edit"));
     }
     fs.mkdirSync(path.dirname(snapFile(input.session_id, input.tool_use_id)), { recursive: true });
-    fs.writeFileSync(snapFile(input.session_id, input.tool_use_id), JSON.stringify(snapshot(wt.path)));
+    fs.writeFileSync(snapFile(input.session_id, input.tool_use_id), JSON.stringify({ wt: wt.path, files: snapshot(wt.path) }));
     return null;
   } catch (error) {
     return deny(`讀不到審核紀錄或檢查出錯，先不放行：${error?.message ?? error}`);
@@ -102,18 +102,18 @@ export function beforeBash(input, { consoleCheck = isConsoleSession } = {}) {
     const file = reviewFile(wt.repo, wt.branch);
     const snap = reviewSnapFile(input.session_id, input.tool_use_id);
     fs.mkdirSync(path.dirname(snap), { recursive: true });
-    fs.writeFileSync(snap, JSON.stringify({ at: Date.now(), file, content: fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null, mark: reviewMark(stateOf(wt)) }));
+    fs.writeFileSync(snap, JSON.stringify({ at: Date.now(), wt: wt.path, file, content: fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null, mark: reviewMark(stateOf(wt)) }));
   } catch {}
 }
 
 // The review state changed under a child's Bash, however the command was written: the record goes back to what it was and the session
-// is locked. A command that rewrites the snapshot as well is not caught.
+// is locked. The worktree is the one the command started in. A command that rewrites the snapshot as well is not caught.
 function reviewTampered(input) {
   const snap = reviewSnapFile(input.session_id, input.tool_use_id);
   if (!fs.existsSync(snap)) return null;
   const before = JSON.parse(fs.readFileSync(snap, "utf8"));
   fs.rmSync(snap, { force: true });
-  const wt = worktreeOf(input.cwd ?? process.cwd());
+  const wt = worktreeOf(before.wt ?? input.cwd ?? process.cwd());
   if (!wt || sameMark(before.mark, reviewMark(stateOf(wt))) || trustedSince(wt.path, before.at ?? 0)) return null;
   if (before.content === null) fs.rmSync(before.file, { force: true });
   else fs.writeFileSync(before.file, before.content);
@@ -149,15 +149,17 @@ export function postToolUse(input) {
     if (tool !== "Bash" || cls?.review !== null) return null;
     const file = snapFile(input.session_id, input.tool_use_id);
     if (!fs.existsSync(file)) return null;
-    const before = JSON.parse(fs.readFileSync(file, "utf8"));
+    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
     fs.rmSync(file, { force: true });
-    st = stateOf(wt);
+    const at = saved.wt ? worktreeOf(saved.wt) : wt;
+    if (!at) return null;
+    st = stateOf(at);
     if (!gated(st)) return null;
-    const changed = changedSince(before, snapshot(wt.path));
+    const changed = changedSince(saved.files ?? saved, snapshot(at.path));
     if (changed.length === 0) return null;
-    addFilesItem(wt, changed, { session: input.session_id ?? null, stop: "規劃階段用 Bash 改檔" });
-    append(wt, { event: "lock", session: input.session_id ?? null, files: changed });
-    append(wt, { event: "blocked", session: input.session_id ?? null, gate: "edit" });
+    addFilesItem(at, changed, { session: input.session_id ?? null, stop: "規劃階段用 Bash 改檔" });
+    append(at, { event: "lock", session: input.session_id ?? null, files: changed });
+    append(at, { event: "blocked", session: input.session_id ?? null, gate: "edit" });
     return { decision: "block", reason: `這個 session 已鎖住：還沒審核就用 Bash 改了 ${changed.join("、")}（檔案沒有還原）。之後改檔與 Bash 都會被擋，只放行 console.mjs review 開頭的指令。${BLOCK_MESSAGE}。` };
   } catch (error) {
     return { decision: "block", reason: `讀不到審核紀錄或檢查出錯：${error?.message ?? error}` };

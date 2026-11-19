@@ -159,7 +159,7 @@ export function fold(lines) {
   const sessions = new Set();
   const blocked = [];
   for (const l of lines) {
-    if (l.event === "blocked") blocked.push({ session: l.session ?? null, gate: l.gate ?? null, at: l.at });
+    if (l.event === "blocked") blocked.push({ session: l.session ?? null, gate: l.gate ?? null, at: l.at, round });
     if (l.event === "add") {
       items.set(l.n, { ...l, round, phase: approved ? "implement" : "planning", status: "pending", edit: null, asks: [], unsent: null, corrected: false });
       if (l.session) sessions.add(l.session);
@@ -176,7 +176,7 @@ export function fold(lines) {
     if (l.event === "approved") approved = l.at;
     if (l.event === "cleared") approved = null;
     if (l.event === "lock") lock = { session: l.session, files: l.files ?? [], at: l.at };
-    if (l.event === "approved" || l.event === "cleared") lock = null;
+    if (l.event === "approved") lock = null;
   }
   const list = [...items.values()];
   const open = list.filter((x) => x.round === round);
@@ -701,7 +701,25 @@ export function classifyCommand(cmd, { cwd = process.cwd() } = {}) {
 
 // Whether a command writes into the reviews folder by hand (any way but console.mjs).
 export function touchesReviews(cmd) {
+  if (readsOnly(cmd)) return false;
   return /\.worktree-console\/reviews|\$\{?WORKTREE_CONSOLE_LOG_DIR\}?\/reviews/.test(String(cmd)) || String(cmd).includes(reviewsHome());
+}
+
+const READERS = new Set(["cat", "ls", "head", "grep"]);
+// Only cat, ls, head and grep, joined by pipes, `;` or `&&`: no redirect, substitution, variable, assignment or subshell.
+function readsOnly(cmd) {
+  if (redirects(cmd)) return false;
+  const { words: all, subs } = shellWords(cmd);
+  if (subs.length || all.some((w) => w.dyn || (w.sep && !";|&\n".includes(w.t)))) return false;
+  let head = true;
+  for (const w of all) {
+    if (w.sep) head = true;
+    else if (head) {
+      if (!READERS.has(w.t)) return false;
+      head = false;
+    }
+  }
+  return all.some((w) => !w.sep);
 }
 
 export const GATE_LABEL = { approve: "前端 dev-flow 的 approve", "confirm-spec": "後端的 confirm-spec", "handoff-files": "define-goal 的 handoff-files.mjs", edit: "第一次改檔" };

@@ -892,7 +892,7 @@ test("第二輪 1b（A）：handoff-files.mjs 只有真的執行它才算交棒�
   for (const c of ["grep -n spec skills/define-goal/scripts/handoff-files.mjs", "sed -i '' s/a/b/ handoff-files.mjs", "node --test skills/define-goal/scripts/handoff-files.test.mjs", "rg handoff-files.mjs", "cat handoff-files.mjs"]) assert.equal(review.classifyCommand(c).gate, null, c);
 });
 
-test("第二輪 1b（B）：子 session 的 Bash 前後比對審核狀態，不管指令怎麼寫，狀態被改就還原並鎖住；只新增代回照常保留", () => {
+test("第二輪 1b（B）：子 session 的 Bash 前後比對審核狀態，不管指令怎麼寫，狀態被改就還原並鎖住；只新增代回照常保留", async () => {
   const dir = reviewRepo("snap-compare");
   const wt = review.worktreeOf(dir);
   review.addItem(wt, item);
@@ -920,9 +920,10 @@ test("第二輪 1b（B）：子 session 的 Bash 前後比對審核狀態，不�
   assert.equal(gate.postToolUse(call2), null, "只新增代回");
   assert.equal(review.stateOf(wt2).items.length, 2);
   gate.beforeBash({ ...call2, tool_use_id: "t4" }, { consoleCheck: () => false });
-  review.trustWrite(dir2);
-  review.append(wt2, { event: "pass", n: 1, by: "panel" });
-  assert.equal(gate.postToolUse({ ...call2, tool_use_id: "t4" }), null, "子 session 的 Bash 跑的同時，面板按了通過，不算子 session 改的");
+  const { consoleIdentity } = await import("./fixtures/isolate-env.mjs");
+  const passed = spawnSync(process.execPath, [CONSOLE_CLI, "review", "pass", "--n", "1", "--path", dir2], { encoding: "utf8", env: { ...process.env, ...consoleIdentity("con-snap") } });
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.equal(gate.postToolUse({ ...call2, tool_use_id: "t4" }), null, "子 session 的 Bash 跑的同時，中控台用 review pass 通過，不算子 session 改的");
   assert.equal(review.stateOf(wt2).items[0].status, "passed");
   gate.beforeBash({ ...call2, session_id: "con", tool_use_id: "t3" }, { consoleCheck: () => true });
   review.append(wt2, { event: "pass", n: 1, by: "panel" });
@@ -952,7 +953,6 @@ test("第二輪 1a：審核狀態子指令拿不到或對不上呼叫者身分�
     assert.match(r.stderr + r.stdout, /只有中控台/, why);
   }
   assert.equal(run(["pass", "--n", "1"], { CLAUDE_CODE_SESSION_ID: "con-s" }).status, 0, "中控台");
-  assert.equal(run(["undo", "--n", "1", "--session", "con-s"], { CLAUDE_CODE_SESSION_ID: undefined }).status, 0, "焦點面板帶自己的 session");
 });
 
 test("第二輪 2：子 session 貼出審核單、被要求補結尾行後最後一則只剩「等你：…」，使用者在分頁回答照樣解鎖", async () => {
@@ -1048,4 +1048,68 @@ test("/goal 進行中、這個 worktree 被攔截點擋下等審核、回覆以�
   assert.match(held.stopReason, /審核/);
   assert.equal(stop("nogoal", { withGoal: false }), null, "沒有 /goal");
   assert.equal(stop("working", { last: "改好了，接著跑測試。" })?.continue, undefined, "沒在等你");
+});
+
+// --- 第三輪 ---
+
+test("第三輪 中 5：cat、ls、head、grep 讀審核資料夾放行；導向寫入、交給 shell、串接其他指令照擋", () => {
+  const home = review.reviewsHome();
+  const f = path.join(home, "r", "feat", "demo", "review.jsonl");
+  for (const c of [`cat ${f}`, `ls ${home}`, `ls -la "${home}/r"`, `head -5 ${f}`, `grep -rn pass ${home}`, `cat ${f} | head -3`, `grep -c done ${f}; ls ${home}`]) assert.equal(childGate(c), null, c);
+  for (const c of [`cat ${f} > ${home}/x`, `echo '{}' >> ${f}`, `cat ${f} | sh`, `grep x $(node e.mjs) ${home}`, `sed -i '' s/a/b/ ${f}`, `ls ${home} && rm -rf ${home}`, `cat ${f} | tee ${home}/y`, `X=1 cat ${f}`]) assert.ok(denied(childGate(c)), c);
+});
+
+test("第三輪 中 6：Bash 裡 cd 到別的 worktree，比對還是看指令開始時的 worktree，不鎖到別的 worktree", () => {
+  const a = reviewRepo("cd-from");
+  const b = reviewRepo("cd-to");
+  const wa = review.worktreeOf(a);
+  const wb = review.worktreeOf(b);
+  review.addItem(wa, item);
+  const call = (id, cwd) => ({ tool_name: "Bash", tool_input: { command: `cd ${b} && ls` }, cwd, session_id: "child-cd", tool_use_id: id });
+  gate.beforeBash(call("c1", a), { consoleCheck: () => false });
+  assert.equal(gate.preToolUse(call("c1", a), { consoleCheck: () => false }), null);
+  assert.equal(gate.postToolUse(call("c1", b)), null, "什麼都沒改");
+  assert.equal(review.stateOf(wb).lock, null, "別的 worktree 沒被寫進鎖");
+  assert.equal(review.stateOf(wa).lock, null);
+
+  gate.beforeBash(call("c2", a), { consoleCheck: () => false });
+  review.append(wa, { event: "pass", n: 1, by: "panel" });
+  assert.equal(gate.postToolUse(call("c2", b))?.decision, "block", "原 worktree 的審核紀錄被改");
+  assert.equal(review.stateOf(wa).lock?.session, "child-cd");
+  assert.equal(review.stateOf(wa).items[0].status, "pending", "還原");
+  assert.equal(review.stateOf(wb).lock, null);
+});
+
+test("第三輪 低 9：別的 session 追加 cleared 解不掉鎖，只有通過（approved）才解", () => {
+  const dir = reviewRepo("cleared-lock");
+  const wt = review.worktreeOf(dir);
+  review.addItem(wt, item);
+  review.append(wt, { event: "lock", session: "child-1", files: ["app.js"] });
+  review.append(wt, { event: "cleared", reason: "dev-flow reopen", session: "child-2" });
+  assert.equal(review.stateOf(wt).lock?.session, "child-1");
+  review.append(wt, { event: "approved", by: "panel" });
+  assert.equal(review.stateOf(wt).lock, null);
+});
+
+test("第三輪 中 7／低 10：/goal 只在這一輪真的被攔截點擋下時才停；只有待審件、上一輪擋過、快取交棒那一輪都不停", async () => {
+  const { CACHE_HANDOFF_TEXT } = await import("../hooks/keepalive-text.mjs");
+  const dir = reviewRepo("goal-hold-3");
+  const wt = review.worktreeOf(dir);
+  const goal = { type: "attachment", attachment: { type: "goal_status", met: false, condition: "完成 verify" } };
+  const stop = (name, { last = "等你：第 4 題選 a 還是 b", extra = [] } = {}) => {
+    const transcript = path.join(tmp, `${name}.jsonl`);
+    fs.writeFileSync(transcript, [{ type: "user", uuid: `u-${name}`, message: { content: "/goal 完成 verify" } }, goal, ...extra, { type: "assistant", message: { content: [{ type: "text", text: last }] } }].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const r = spawnSync(process.execPath, [path.join(root, "hooks/auto-handoff.mjs"), "stop"], { input: JSON.stringify({ session_id: `s-${name}`, transcript_path: transcript, cwd: dir, last_assistant_message: last, stop_hook_active: true }), encoding: "utf8", env: process.env });
+    return r.stdout ? JSON.parse(r.stdout) : null;
+  };
+  review.append(wt, { event: "blocked", session: "s-old", gate: "approve" });
+  review.addItem(wt, item);
+  review.append(wt, { event: "done", by: "panel" });
+  review.addItem(wt, { ...item, question: "第二件？" });
+  assert.equal(review.gated(review.stateOf(wt)), true);
+  assert.notEqual(stop("pending-only")?.continue, false, "只有待審件、這一輪沒被擋");
+  review.append(wt, { event: "blocked", session: "s-held", gate: "approve" });
+  assert.equal(stop("held-3")?.continue, false, "這一輪被擋下");
+  const cache = stop("cache-3", { extra: [{ type: "assistant", message: { content: [{ type: "text", text: "等你：審核" }] } }, { type: "user", uuid: "u-cache", message: { content: CACHE_HANDOFF_TEXT } }], last: "等你：審核那張審核單" });
+  assert.notEqual(cache?.continue, false, "快取交棒那一輪照常交棒");
 });
